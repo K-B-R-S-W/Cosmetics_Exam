@@ -119,9 +119,9 @@ begin
   end;
 
   -- 10. resolve_disconnects(): overlap, flip, guard, and positive case
-  declare v_disc uuid; v_disc2 uuid; v_disc3 uuid; v_vc_before int;
+  declare v_disc uuid; v_disc2 uuid; v_disc3 uuid; v_disc4 uuid; v_vc_before int;
   begin
-    update public.attempts set violation_count = 0 where id = v_att;
+    update public.attempts set status = 'in_progress', violation_count = 0 where id = v_att;
 
     insert into public.violation_events (attempt_id, type, counts, meta)
     values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '5 minutes')::timestamptz::text))
@@ -158,6 +158,8 @@ begin
 
     v_vc_before := (select violation_count from public.attempts where id = v_att);
 
+    delete from public.violation_events where attempt_id = v_att and type = 'FOCUS_LOST';
+
     insert into public.violation_events (attempt_id, type, counts, meta)
     values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '10 minutes')::timestamptz::text))
     returning id into v_disc3;
@@ -171,6 +173,75 @@ begin
       '10f: clean disconnect must get count_reason=long_gap';
     assert (select violation_count from public.attempts where id = v_att) = v_vc_before + 1,
       '10g: clean disconnect must increment violation_count by 1';
+
+    update public.attempts set status = 'submitted' where id = v_att;
+
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '15 minutes')::timestamptz::text))
+    returning id into v_disc4;
+
+    update public.attempts set last_seen_at = (now() - interval '15 minutes') where id = v_att;
+
+    perform public.resolve_disconnects();
+    assert (select counts from public.violation_events where id = v_disc4) = false,
+      '10h: submitted attempt disconnect must not flip';
+  end;
+
+  -- 11. One absence counts once (section 4, section 5)
+  declare v_d1 uuid; v_d2 uuid; v_f2 uuid; v_d3 uuid; v_f3 uuid;
+  begin
+    delete from public.violation_events where attempt_id = v_att;
+    update public.attempts
+      set status = 'in_progress', violation_count = 0,
+          last_seen_at = now() - interval '6 minutes'
+      where id = v_att;
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false,
+            jsonb_build_object('last_seen_at', (now() - interval '6 minutes')::timestamptz::text))
+    returning id into v_d1;
+    insert into public.violation_events (attempt_id, type, occurred_at, duration_ms, counts)
+    values (v_att, 'FOCUS_LOST', now() - interval '5 minutes', 30000, false);
+    perform public.resolve_disconnects();
+    assert (select meta->>'count_reason' from public.violation_events where id = v_d1) = 'overlap',
+      '11a: incident inside the gap must mark the disconnect overlap';
+
+    delete from public.violation_events where attempt_id = v_att;
+    update public.attempts
+      set violation_count = 0, last_seen_at = now() - interval '6 minutes'
+      where id = v_att;
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false,
+            jsonb_build_object('last_seen_at', (now() - interval '6 minutes')::timestamptz::text))
+    returning id into v_d2;
+    perform public.resolve_disconnects();
+    assert (select counts from public.violation_events where id = v_d2) = true, '11b-pre: flips to counted';
+    insert into public.violation_events (attempt_id, type, occurred_at, duration_ms, counts)
+    values (v_att, 'FOCUS_LOST', now() - interval '5 minutes', 30000, true)
+    returning id into v_f2;
+    assert public.reverse_disconnects_for_incident(v_f2) = 1, '11b: one disconnect reversed';
+    assert (select meta->>'count_reason' from public.violation_events where id = v_d2) = 'reversed_by_focus',
+      '11b: reason must be reversed_by_focus';
+    assert (select violation_count from public.attempts where id = v_att) = 1,
+      '11b: net count must be 1 (the tab switch), not 2';
+
+    delete from public.violation_events where attempt_id = v_att;
+    update public.attempts
+      set violation_count = 0, last_seen_at = now() - interval '6 minutes'
+      where id = v_att;
+    insert into public.violation_events (attempt_id, type, occurred_at, counts, meta)
+    values (v_att, 'DISCONNECTED', now() - interval '5 minutes', false,
+            jsonb_build_object('last_seen_at', (now() - interval '6 minutes')::timestamptz::text))
+    returning id into v_d3;
+    perform public.resolve_disconnects();
+    insert into public.violation_events (attempt_id, type, occurred_at, counts, duration_ms)
+    values (v_att, 'RECONNECTED', now() - interval '2 minutes', false, 240000);
+    insert into public.violation_events (attempt_id, type, occurred_at, duration_ms, counts)
+    values (v_att, 'FOCUS_LOST', now() - interval '1 minute', 10000, true)
+    returning id into v_f3;
+    assert public.reverse_disconnects_for_incident(v_f3) = 0,
+      '11c: incident after the reconnect must not reverse the disconnect';
+    assert (select counts from public.violation_events where id = v_d3) = true,
+      '11c: disconnect stays counted';
   end;
 
   raise notice 'SMOKE TEST PASSED';

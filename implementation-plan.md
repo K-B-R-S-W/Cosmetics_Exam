@@ -3,8 +3,8 @@
 Detailed task breakdown for each phase. Tasks are ordered by dependency within each phase.
 
 > [!IMPORTANT]
-> This plan incorporates all fixes from `Issues.md` (rounds 1–17). Changes are marked with 🔧 (fix) or ➕ (new task).
-> Round 2: 🔧². Round 3: 🔧³. Round 4: 🔧⁴. Round 5: 🔧⁵. Round 6: 🔧⁶. Round 7: 🔧⁷. Round 8: 🔧⁸. Round 9: 🔧⁹. Round 10: 🔧¹⁰. Round 11: 🔧¹¹. Round 12: 🔧¹². Round 13: 🔧¹³. Round 14: 🔧¹⁴. Round 15: 🔧¹⁵. Round 16: 🔧¹⁶. Round 17: 🔧¹⁷.
+> This plan incorporates all fixes from `Issues.md` (rounds 1–20). Changes are marked with 🔧 (fix) or ➕ (new task).
+> Round 2: 🔧². Round 3: 🔧³. Round 4: 🔧⁴. Round 5: 🔧⁵. Round 6: 🔧⁶. Round 7: 🔧⁷. Round 8: 🔧⁸. Round 9: 🔧⁹. Round 10: 🔧¹⁰. Round 11: 🔧¹¹. Round 12: 🔧¹². Round 13: 🔧¹³. Round 14: 🔧¹⁴. Round 15: 🔧¹⁵. Round 16: 🔧¹⁶. Round 17: 🔧¹⁷. Round 18: 🔧¹⁸. Round 19: 🔧¹⁹. Round 20: 🔧²⁰.
 
 ---
 
@@ -86,7 +86,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | # | Task | Files |
 |---|---|---|
 | 1D.1 | Exam list page | `app/(admin)/admin/exams/page.tsx` |
-| 1D.2 | Create/edit exam form | `app/(admin)/admin/exams/[id]/page.tsx` — includes `questions_per_paper`, `shuffle`, `flag_threshold`, schedule. 🔧 **Convert Colombo time input to UTC** before storing. 🔧³ **Add `navigation_mode` toggle** (sequential / free). Locked once exam is live — changing mode mid-exam would break candidates' progress |
+| 1D.2 | Create/edit exam form | `app/(admin)/admin/exams/[id]/page.tsx` — includes `questions_per_paper`, `shuffle`, `flag_threshold`, schedule. 🔧 **Convert Colombo time input to UTC** before storing. 🔧³ **Add `navigation_mode` toggle** (sequential / free). Locked once exam is live. 🔧¹⁹ `flag_threshold` defaults to **5**, range **1–100** (Section 4 §4.2) |
 | 1D.3 | Assign candidates to exam | Same page or sub-page. 🔧⁶ **Assigning a candidate auto-creates their attempt** (DB trigger on `exam_candidates`). Unassigning removes the attempt only if still `not_started`. The admin live grid shows "Not joined" for all assigned candidates before anyone logs in. 🔧⁹ **Add `app/api/admin/exams/[id]/candidates/route.ts`** (GET, POST, DELETE). 🔧¹⁰ Unassign returns `200 { removed: [...], blocked: [...] }` (not 409) — tells the admin which candidates couldn’t be removed because their attempt has started |
 | 1D.4 | Exam API routes | `app/api/admin/exams/route.ts` — 🔧⁷ **Enforce `navigation_mode` lock server-side**: the update route must reject changes to `navigation_mode` (and `questions_per_paper`, `shuffle`, `duration_min`, `scheduled_start_at`) once the exam status is `live` or later. Without this, the UI-only lock (1D.2) is cosmetic. 🔧⁹ **Add `app/api/admin/exams/[id]/route.ts`** (GET, PATCH, DELETE). `status` only changes `draft` ↔ `scheduled` here |
 
@@ -189,37 +189,41 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 
 | # | Task | Files |
 |---|---|---|
-| 3A.1 | Proctoring hook | `hooks/useProctoring.ts` — attaches all event listeners. 🔧 **Includes incident dedup logic**: merge events within ~3 seconds into one incident (e.g., FULLSCREEN_EXIT + FOCUS_LOST + VIEWPORT_CHANGED from one alt-tab = 1 incident, not 3 violations). 🔧⁶ **Send one `violation_events` row per incident**: `type` = the first/primary event, `merged_types` = array of any other event types merged into this incident. 🔧⁹ **Server decides `counts`** — the client does NOT send a `counts` flag. The server sets `counts = false` for informational types (e.g. `RECONNECTED`) and for events during the waiting room phase. **Waiting-room incidents do not count** toward the flag threshold (the fullscreen blocker handles that phase), but if the same fault persists into the exam without being fixed, the exam-phase incidents **do** count. 🔧¹⁶ **Send-on-end model**: an incident ends when focus, visibility, or fullscreen returns. The client sends it **once** with `duration_ms` (how long the incident lasted) and `occurred_ago_ms` (how long ago it started). If the page closes before the incident ends (exam submitted, tab killed), attempt a final send via `navigator.sendBeacon` or the `visibilitychange`/`pagehide` handler with the best-known duration. Section 4 will define the full rules; this note prevents the hook from being coded fire-on-start |
-| 3A.2 | Visibility change handler | `visibilitychange` → `TAB_HIDDEN` |
-| 3A.3 | Focus handler | `window blur` + 1s `document.hasFocus()` check → `FOCUS_LOST` |
-| 3A.4 | Fullscreen handler | `fullscreenchange` → `FULLSCREEN_EXIT` + blocking overlay. 🔧⁴🔧⁵ **Lock orientation** after entering fullscreen — lock to **the orientation the candidate is already in** (`screen.orientation.lock(screen.orientation.type)` on Android — only works in fullscreen). Do NOT hardcode `'portrait'` — tablets are often held in landscape and forcing portrait would cause an unwanted rotation. Unlock orientation when fullscreen ends |
-| 3A.5 | Viewport check | 🔧 **Only run while in fullscreen**. 1s interval: `innerWidth` vs `screen.width` → `VIEWPORT_CHANGED` (width-only on Android). 🔧⁴ **"Desktop site" mode** makes the viewport report a wider width — the pre-exam check (5B) should detect and warn about this |
-| 3A.6 | Multi-screen check | 🔧⁴ **Guard `screen.isExtended`** — it doesn't exist on Android, so check `'isExtended' in screen` before reading it. `MULTI_SCREEN` only on desktop |
-| 3A.7 | Camera/mic loss handler | MediaStreamTrack `ended`/`mute` → `CAMERA_LOST` / `MIC_LOST` |
-| 3A.8 | Copy/paste/context menu | Block and log `COPY`, `PASTE`, `CONTEXT_MENU` |
-| 3A.9 | Reload detection | On page load during in-progress attempt → `RELOAD` |
+| 3A.1 | Proctoring hook | `hooks/useProctoring.ts` — 🔧¹⁹ **Full incident lifecycle (Section 4 §3)**: Three event kinds: **attention incidents** (TAB_HIDDEN, FOCUS_LOST, FULLSCREEN_EXIT, VIEWPORT_CHANGED — one open at a time, later signals join via `merged_types`, closes when all signals clear), **episodes** (MULTI_SCREEN, CAMERA_LOST, MIC_LOST — one per type, sent on end), **instants** (COPY, PASTE, CONTEXT_MENU, RELOAD — sent immediately, same type within 3s = one event). **Client `id`**: each incident gets `crypto.randomUUID()` at open, sent as `id` for idempotent insert (§3.6). **Queue + retry**: closed incidents go to an in-memory queue mirrored to `sessionStorage` (max 50). Retry on network error/5xx with backoff (2s, 5s, 10s, then 30s). 400/403 drops the entry. `occurred_ago_ms` recalculated on each retry. **Exam-start split**: at the moment the exam starts (first `in_progress` state), close any open incident and send it, then open a new one if the fault persists — the new one counts. **Flush before submit**: close any open incident and await send for 2s before calling submit. **sendBeacon on page close**: `pagehide` sends any open incident via `navigator.sendBeacon` with best-known duration. A frozen/killed tab sends nothing (covered by DISCONNECTED + overlap rule). 🔧⁶ Send one `violation_events` row per incident. 🔧⁹ Server decides `counts` |
+| 3A.2 | Visibility change handler | `visibilitychange` → `TAB_HIDDEN`. 🔧¹⁹ No debounce, but the whole incident is dropped if it lasted < `MIN_INCIDENT_MS` (1000ms) and contains nothing else (Section 4 §3.3) |
+| 3A.3 | Focus handler | `window blur` + 1s `document.hasFocus()` check → `FOCUS_LOST`. 🔧¹⁹ Ignored if focus returns within `FOCUS_GRACE_MS` (1000ms) — removes Android notification shade / edge panel false events (Section 4 §3.3) |
+| 3A.4 | Fullscreen handler | `fullscreenchange` → `FULLSCREEN_EXIT` + blocking overlay. 🔧⁴🔧⁵ **Lock orientation** after entering fullscreen — lock to **the orientation the candidate is already in** (`screen.orientation.lock(screen.orientation.type)` on Android — only works in fullscreen). Do NOT hardcode `'portrait'` — tablets are often held in landscape and forcing portrait would cause an unwanted rotation. Unlock orientation when fullscreen ends. 🔧¹⁹ Never dropped — the overlay appears at once, so it is always logged (Section 4 §3.3) |
+| 3A.5 | Viewport check | 🔧 **Only run while in fullscreen**. 1s interval: `innerWidth` vs `screen.width` × `VIEWPORT_TOLERANCE` (0.98) → `VIEWPORT_CHANGED` (width-only on Android). 🔧⁴ "Desktop site" mode warning. 🔧¹⁹ Needs `VIEWPORT_CONFIRM_TICKS` (2) consecutive failed checks (Section 4 §3.3) |
+| 3A.6 | Multi-screen check | 🔧⁴ Guard `screen.isExtended`. `MULTI_SCREEN` only on desktop. 🔧¹⁹ Episode kind: one open episode, sent when it ends (Section 4 §3.1) |
+| 3A.7 | Camera/mic loss handler | MediaStreamTrack `ended`/`mute` → `CAMERA_LOST` / `MIC_LOST`. 🔧¹⁹ Episode kind. Set `meta.source = 'track'` for device loss (counts) or `meta.source = 'livekit'` for LiveKit-only loss (does not count). Grace period: `MEDIA_LOSS_GRACE_MS` (5000ms) — browsers briefly mute tracks (Section 4 §2, §3.3) |
+| 3A.8 | Copy/paste/context menu | Block and log `COPY`, `PASTE`, `CONTEXT_MENU`. 🔧¹⁹ Instant kind: logged but **do not count** (blocked anyway, tablet long-press triggers context menu). Same type within 3s = one event (Section 4 §2) |
+| 3A.9 | Reload detection | On page load during in-progress attempt → `RELOAD`. 🔧¹⁹ Instant kind, **counts** (Section 4 §2) |
 | 3A.10 | Fullscreen overlay | `components/exam/FullscreenOverlay.tsx` — blocking until restored |
-| ➕ 3A.11 | Snapshot rate-limiting | 🔧 Max 1 snapshot per incident (merged window). Frame captured while tab is hidden may be frozen/black — skip or mark as such |
+| ➕ 3A.11 | Snapshot rules | 🔧¹⁹ **Section 4 §6**: At most 1 per incident, max `MAX_SNAPSHOTS_PER_ATTEMPT` (60). 320×240 JPEG quality 0.6 (~15KB, server accepts up to 100KB). Capture at incident **open** if page is visible; for `TAB_HIDDEN` capture at **close** instead (`meta.snapshot_at = 'end'`). Black frame detection: average pixel brightness below `BLACK_LUMA` (12/255) → skip snapshot, set `meta.snapshot_skipped = 'black'`. Camera off = no snapshot. Failed upload keeps the event with `meta.snapshot_error = true`. Retention: `SNAPSHOT_RETENTION_DAYS` (14) |
+| ➕ 3A.12 | Proctoring config | 🔧¹⁹ `lib/proctoring-config.ts` (client tunables: grace periods, intervals, limits) and `lib/proctoring-rules.ts` (counting rules, `COUNTING_TYPES` set — imported by both the Next.js app and the worker). All thresholds from Section 4 §8 |
 
 ### 3B — Event Logging (0.5 day)
 
 | # | Task | Files |
 |---|---|---|
-| 3B.1 | Events API | `app/api/events/route.ts` — 🔧⁶🔧⁹ Accept one incident: `type`, `merged_types[]`, `duration_ms`, `meta`, optional base64 `snapshot`. **Server decides `counts`** based on event type and attempt status (waiting-room = `false`). **Server uploads the snapshot** to Supabase Storage with the service role (candidates have no Supabase access — anon key revoked, bucket private). Reject `DISCONNECTED` from clients (only the worker writes those). Include `occurred_ago_ms` for the client to send the approximate time offset. Body limit 200 KB. 🔧¹⁴ **`occurred_ago_ms` cap**: raise from 600000 (10 min) to at least `exam.duration_min * 60000`. Clamp to the cap instead of returning 400. 🔧¹⁴ **Late FOCUS_LOST reversal**: after inserting a focus-type incident (`TAB_HIDDEN`, `FOCUS_LOST`, `FULLSCREEN_EXIT`, `VIEWPORT_CHANGED`), find any `DISCONNECTED` rows on the same attempt where `counts = true` and `meta.last_seen_at` falls inside the incident’s interval (`occurred_at − 10s` to `occurred_at + coalesce(duration_ms, 0) + 10s`). 🔧¹⁷ Use `coalesce(duration_ms, 0)` — a null `duration_ms` (schema allows it) would make the interval computation return null and silently skip the event. Set those rows to `counts = false` and `meta.count_reason = 'reversed_by_focus'`. The trigger gives −1 for each |
+| 3B.1 | Events API | `app/api/events/route.ts` — 🔧⁶🔧⁹🔧¹⁹🔧²⁰ **Idempotent insert**: body requires `id` (client-generated UUID). If the `id` already exists, return `200 { "id": "...", "duplicate": true, "snapshot_saved": false }` with no insert, no upload, no reversal. Accept: `id`, `type`, `merged_types[]`, `duration_ms`, `meta`, optional base64 `snapshot`, `occurred_ago_ms`. Body limit 200 KB. 🔧²⁰ **Client type allowlist**: only accept `TAB_HIDDEN`, `FOCUS_LOST`, `FULLSCREEN_EXIT`, `VIEWPORT_CHANGED`, `MULTI_SCREEN`, `CAMERA_LOST`, `MIC_LOST`, `COPY`, `PASTE`, `CONTEXT_MENU`, `RELOAD`. Everything else (including `DISCONNECTED`, `RECONNECTED`, `MULTI_LOGIN`) returns `400`. 🔧²⁰ **Status guard**: allowed only for `acknowledged` and `in_progress` attempts. After submission return `200 { "ignored": true }`. 🔧¹⁴ **`occurred_ago_ms` cap**: clamp to `exam.duration_min * 60000`. **Counting order (Section 4 §4.1)**: `counts = true` only if: (1) type is in `COUNTING_TYPES`, (2) for CAMERA_LOST/MIC_LOST `meta.source` is `'track'`, (3) attempt is `in_progress`, (4) incident start (`now() - occurred_ago_ms`) is not before `attempts.joined_at`. Everything else is `false`. **Server uploads snapshot** to `snapshots` bucket with service role. 🔧¹⁹ **Reversal via RPC**: after inserting an attention incident, call `reverse_disconnects_for_incident(event_id)` (Section 4 §5). 🔧²⁰ **Retry once** on reversal failure (the function is idempotent). Only touches `long_gap` rows — admin-dismissed rows are never changed |
 | 3B.2 | Snapshot capture | `lib/snapshot.ts` — capture 320x240 JPEG from video element |
 | 3B.3 | Snapshot upload | 🔧⁹ **Removed as a separate step** — the snapshot travels inside `POST /api/events` as base64. The server uploads it to the `snapshots` bucket using the service-role client. **Do not** attempt a direct Storage upload from the browser (the anon key is revoked and the bucket is admin-only) |
-| 3B.4 | Heartbeat API | `app/api/heartbeat/route.ts` — update `last_seen_at`. 🔧⁹ **Also writes `RECONNECTED`** event with the gap duration when the attempt had a previous `DISCONNECTED` (written by the worker). 🔧¹¹ **Returns the same full state body as `GET /api/exam/state`** (server_time + exam + attempt — see 2B.5). Not `{ phase, remaining_s, broadcast }`. 🔧¹⁵ **Guarded `short_gap` write**: when writing `RECONNECTED`, also `UPDATE violation_events SET meta = jsonb_set(meta, '{count_reason}', '"short_gap"') WHERE attempt_id = X AND type = 'DISCONNECTED' AND counts = false AND meta->>'count_reason' IS NULL AND id = (most recent DISCONNECTED for this attempt)`. The `IS NULL` guard prevents overwriting a `long_gap` that Pass 2 set in the same instant (race). This must be documented here (not only in 3B.6) so someone coding the heartbeat route doesn’t skip it |
+| 3B.4 | Heartbeat API | `app/api/heartbeat/route.ts` — update `last_seen_at`. 🔧⁹ **Also writes `RECONNECTED`** event with the gap duration when the attempt had a previous `DISCONNECTED` (written by the worker). 🔧¹¹ **Returns the same full state body as `GET /api/exam/state`** (server_time + exam + attempt — see 2B.5). Not `{ phase, remaining_s, broadcast }`. 🔧¹⁵ **Guarded `short_gap` write**: when writing `RECONNECTED`, also `UPDATE violation_events SET meta = jsonb_set(coalesce(meta, '{}''::jsonb), '{count_reason}', '"short_gap"') WHERE attempt_id = X AND type = 'DISCONNECTED' AND counts = false AND meta->>'count_reason' IS NULL AND id = (most recent DISCONNECTED for this attempt)`. The `IS NULL` guard prevents overwriting a `long_gap` that Pass 2 set in the same instant (race). This must be documented here (not only in 3B.6) so someone coding the heartbeat route doesn’t skip it |
 | 3B.5 | Heartbeat hook | `hooks/useHeartbeat.ts` — POST every 10s |
-| 3B.6 | Worker DISCONNECTED events | **Two-pass rule**: **Pass 1 (30s)**: every 30s, for `in_progress` attempts with `last_seen_at` older than 30s, insert a `DISCONNECTED` row with **`counts = false`**, **`meta.last_seen_at`** = the attempt's current `last_seen_at` value **stored as the exact timestamptz string from the database**, and no `meta.count_reason`. Skip if the attempt's most recent `DISCONNECTED`/`RECONNECTED` is already a `DISCONNECTED`. **Pass 2**: every 30s, call **`resolve_disconnects()`** (RPC function in `001_initial.sql`, with `revoke execute from public, anon, authenticated; grant to service_role`). This function runs two guarded statements in order: **(1) Mark overlaps** -- rows where a focus-type event's recorded interval (using `coalesce(f.duration_ms, 0)`) overlaps `meta.last_seen_at +/- 10s` get `count_reason = 'overlap'`. **(2) Flip remaining** -- unmatched rows get `counts = true, count_reason = 'long_gap'`. Both statements include `a.status = 'in_progress'` -- a candidate who is offline when the exam auto-submits must not have their disconnect flipped afterwards. Both use `coalesce(f.duration_ms, 0)` -- a null `duration_ms` (schema allows it) would make the interval null and silently skip overlap detection. Both use `count_reason IS NULL` guard and `timestamptz` casts. The `bump_violation_count` trigger handles +1/-1. If a late focus event arrives after a flip, 3B.1 reverses it. **Design decision**: send-on-end model. **Overlap window scope**: +/-10s covers the disconnect start only; deferred to Section 4 |
+| ➕ 3B.6 | Worker DISCONNECTED events | 🔧⁹🔧¹¹🔧¹²🔧¹³🔧¹⁴🔧¹⁵🔧¹⁶🔧¹⁷🔧¹⁸🔧¹⁹🔧²⁰ **Two-pass rule**: **Pass 1 (30s)**: for `in_progress` attempts with `last_seen_at` older than 30s, insert `DISCONNECTED` with `counts = false` and `meta.last_seen_at` (exact timestamptz string). 🔧²⁰ **Skip if the attempt's most recent `DISCONNECTED`/`RECONNECTED` is already a `DISCONNECTED`** (otherwise the worker adds a new row every 30s while the candidate is offline). **Pass 2**: call `resolve_disconnects()` (RPC). 🔧¹⁹ **Overlap uses full interval rule (Section 4 §5)**: an incident that starts anywhere inside the gap marks the disconnect as `overlap`. Both statements include `a.status = 'in_progress'` and `coalesce(f.duration_ms, 0)`. The `bump_violation_count` trigger handles +1/−1. 🔧²⁰ **Worker reversal safety net**: after Pass 2, also call `reverse_disconnects_for_incident()` for any attention incidents inserted in the last 5 minutes whose reversal may have been missed (the function is idempotent, so running it again is harmless) |
+| ➕ 3B.7 | Dismiss/restore route | 🔧¹⁹🔧²⁰ `app/api/admin/events/[id]/route.ts` — `PATCH` (Section 4 §7.4). Body: `{ "dismissed": true|false, "note": "..." }` (note required, 1–300 chars). 🔧²⁰ **Use `coalesce(meta, '{}'::jsonb)`** before merging `dismissed` into meta — a null `meta` (common for client events) would silently lose the note. **Dismiss** (`dismissed: true`): allowed when `counts = true`. Sets `counts = false`, `meta.dismissed = { by, at, note }`, and for DISCONNECTED also `count_reason = 'dismissed'`. Trigger subtracts 1. **Restore** (`dismissed: false`): allowed when `meta.dismissed` exists. Sets `counts = true`, removes `meta.dismissed`, and for DISCONNECTED `count_reason = 'restored'`. Trigger adds 1. Errors: 404, 409 not_dismissable/not_restorable, 400 note_required. Writes `admin_actions` row (`event_dismiss` or `event_restore`). Realtime updates the badge |
+
 
 ### 3C — Admin Violation View (0.5 day)
 
 | # | Task | Files |
 |---|---|---|
-| 3C.1 | Violation timeline | `components/admin/ViolationTimeline.tsx` — per candidate, all events with snapshots |
-| 3C.2 | Violation count badges | `components/admin/CandidateBadge.tsx` — 🔧🔧⁶ Read `attempts.violation_count` directly (DB trigger keeps it updated). Red threshold from `exams.flag_threshold`. Subscribe to `attempts` Realtime for live updates |
+| 3C.1 | Violation timeline | `components/admin/ViolationTimeline.tsx` — per candidate, all events with snapshots. 🔧¹⁹ Show dismiss/restore action per incident (Section 4 §7.4) |
+| 3C.2 | Violation count badges | `components/admin/CandidateBadge.tsx` — 🔧🔧⁶ Read `attempts.violation_count` directly (DB trigger keeps it updated). 🔧¹⁹ **Red**: `violation_count >= flag_threshold`. **Amber**: `violation_count >= ceil(flag_threshold / 2)` and below red (Section 4 §7.1). Subscribe to `attempts` Realtime for live updates. **Toast**: when a tile turns red, show a short toast with the candidate's MER code |
 | 3C.3 | Realtime violation updates | Subscribe to `violation_events` Realtime changes |
-| ➕ 3C.4 | DISCONNECTED/RECONNECTED pairing | 🔧¹²🔧¹⁴ In the violation timeline, pair each `DISCONNECTED` row with its matching `RECONNECTED` row to show the gap duration. The duration is only on the `RECONNECTED` row, so the UI must look up the next `RECONNECTED` for the same attempt after each `DISCONNECTED`. Show the reason from `meta.count_reason`: `long_gap` (counted, violation badge), `overlap` (skipped — a focus event already counted this), `short_gap` (candidate returned quickly), `reversed_by_focus` (was counted, then reversed by a late focus event). **Group throttled pairs**: if multiple DISCONNECTED/RECONNECTED pairs occur within a short window (e.g., Chrome throttling), collapse them into one timeline entry showing the count |
+| ➕ 3C.4 | DISCONNECTED/RECONNECTED pairing | 🔧¹²🔧¹⁴🔧¹⁹ In the violation timeline, pair each `DISCONNECTED` row with its matching `RECONNECTED` row. Show `count_reason` meaning: `long_gap` (counted), `short_gap` (returned quickly), `overlap` (tab-switch already covers this), `reversed_by_focus` (was counted, then reversed), `dismissed`/`restored` (admin action with note). Group throttled pairs |
+| ➕ 3C.5 | Threshold control | 🔧¹⁹ A number field (1–100) on the live grid header that saves through the existing exam update route. Default for new exams: 5. The exam form (1D.2) keeps the same field. Changes are written to `admin_actions` with old and new value (Section 4 §7.1) |
 
 **Done when:** every event type in §8.1 appears in the admin log with a snapshot, including split view and side panel cases. Alt-tabbing counts as 1 incident, not 3.
 
@@ -244,7 +248,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 4B.1 | Camera/mic hook | `hooks/useLiveKit.ts` — connect, publish camera at 320x240 + mic. 🔧⁴🔧⁵ **Cap Android camera**: `frameRate: { ideal: 15, max: 15 }` (4 GB tablets struggle at higher rates). Detect Android via UA. **Laptops stay at 30 fps**. Tune the Android value in the tablet rehearsal (8.27) |
 | 🔧 4B.2 | LiveKit layout provider | `app/(candidate)/layout.tsx` | 🔧 **Put LiveKit connection in a layout-level provider** inside the `(candidate)` route group. This keeps the camera alive across waiting room → exam → done without reconnecting. Route groups with separate root layouts trigger full page reload, which kills fullscreen |
 | 4B.3 | Integrate into waiting room + exam | Both pages consume the layout-level LiveKit context |
-| 4B.4 | Degradation banner | `components/exam/CameraBanner.tsx` — 🔧 **"Camera disconnected. Please reconnect. Your exam continues and this is logged."** (not "marks may be reduced" — if EC2 goes down, candidates shouldn't panic over something that isn't their fault). State any penalty policy on the rules screen instead |
+| 4B.4 | Degradation banner | `components/exam/CameraBanner.tsx` — 🔧 **"Camera disconnected. Please reconnect. Your exam continues and this is logged."** (not "marks may be reduced" — if EC2 goes down, candidates shouldn't panic over something that isn't their fault). State any penalty policy on the rules screen instead. 🔧¹⁹ A LiveKit-only loss is logged as `CAMERA_LOST` / `MIC_LOST` with `meta.source = 'livekit'` and **does not count** (Section 4 §2, §4.1) |
 
 ### 4C — Admin Grid (1 day)
 
@@ -389,7 +393,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 7.1 | Results summary page | `app/(admin)/admin/results/summary/page.tsx` — all 23 candidates, total scores |
 | 7.2 | ~~Per-candidate detail page~~ | 🔧 **Removed** — duplicate of 6D.4 (`results/[attempt]/page.tsx`) |
 | 7.3 | Print/PDF page | `app/(admin)/admin/results/[attempt]/print/page.tsx` — print-styled, Noto Sans Sinhala, optional examiner answers. 🔧🔧⁷ **Reads from `current_scores`** (not raw `question_scores` — the raw table would show regraded or overridden marks incorrectly) |
-| 7.4 | Summary CSV export | `app/api/admin/results/export/route.ts` — all scores + which questions each candidate received. 🔧⁹🔧¹⁰ **Formula-injection guard**: prefix cell values starting with `=`, `+`, `-`, `@` with `'` (single quote, matches contract). Include Sinhala names with UTF-8 BOM for Excel compatibility |
+| 7.4 | Summary CSV export | `app/api/admin/results/export/route.ts` — all scores + which questions each candidate received. 🔧⁹🔧¹⁰ **Formula-injection guard**: prefix cell values starting with `=`, `+`, `-`, `@` with `'`. Include Sinhala names with UTF-8 BOM for Excel compatibility. 🔧¹⁹ **Add two columns** (Section 4 §7.3): `violations_counted` (`violation_count`) and `violations_logged` (count of all `violation_events` rows for the attempt) |
 | 7.5 | Question subset indicator | Show which questions each candidate got (if pool used) |
 | ➕ 7.6 | Post-exam backup export | 🔧 Export results and PDFs. Copy to Google Drive immediately after the exam (free Supabase projects don't have reliable backups) |
 | ➕ 7.7 | Snapshot deletion | 🔧²🔧⁹ **Dual purge**: (1) `POST /api/admin/snapshots/purge` (super-admin route, `maxDuration = 30`), and (2) worker daily cron job calling the same shared function. Retention default = `SNAPSHOT_RETENTION_DAYS` = **14 days**. Deletes Storage objects and nulls the `snapshot_path` on `violation_events` rows. The rules screen promises this retention to staff |
@@ -454,7 +458,23 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | ➕ 8.46 | Test grading guard | 🔧⁹ `grade` before finalization returns `409`; with a missing answer key returns `missing_answer_keys`; a blank written answer is scored 0 with no Gemini job |
 | ➕ 8.47 | Test override then regrade | 🔧⁹ Override then regrade the same question: the override stays current and `override_present` is `true` |
 | ➕ 8.48 | Test CSV export | 🔧⁹ The CSV opens in Excel with Sinhala names intact and no cell starts with an unescaped `=` |
-| ➕ 8.49 | Test DISCONNECTED events | 🔧⁹🔧¹²🔧¹³🔧¹⁴🔧¹⁵🔧¹⁶ **Three E2E cases + smoke-test SQL**: (a) 40-second Wi-Fi blip — `DISCONNECTED` appears with `counts = false`, candidate returns, heartbeat writes `RECONNECTED` and sets `meta.count_reason = 'short_gap'`, `violation_count` unchanged. (b) 3-minute network drop — `DISCONNECTED` starts at `counts = false`, `resolve_disconnects()` flips to `counts = true` with `meta.count_reason = 'long_gap'`, `violation_count` increments by 1. (c) **Frozen tab** (block heartbeat requests via DevTools, or lock tablet > 3 min) — heartbeat stops, worker inserts `DISCONNECTED`. No focus event exists yet (sent on end). `resolve_disconnects()` sees no recorded overlap and flips to `counts = true`. Candidate returns, `FOCUS_LOST` arrives with `duration_ms` and `occurred_ago_ms`. Events route (3B.1) reverses the DISCONNECTED to `counts = false, meta.count_reason = 'reversed_by_focus'`. Final `violation_count` = 1, not 2. (d) **Race guard** — 🔧¹⁶ tested in `001_smoke_test.sql` as SQL: run the `short_gap` UPDATE then call `resolve_disconnects()`, verify the second changes zero rows. Also test that `resolve_disconnects()` marks overlapping rows as `overlap` before flipping remaining ones |
+| ➕ 8.50 | Test merged incident | 🔧¹⁹ Alt-tab, then viewport change 10s later, then return: **one** incident with `merged_types` containing both, `duration_ms` ≥ 10s |
+| ➕ 8.51 | Test debounce rules | 🔧¹⁹ Blur under 1s: nothing logged. Fullscreen exit under 1s: logged. TAB_HIDDEN under 1s with no other signal: dropped |
+| ➕ 8.52 | Test idempotent retry | 🔧¹⁹ First `POST /api/events` succeeds but response is dropped. Retry returns `duplicate: true` and `violation_count` goes up by 1 (not 2) |
+| ➕ 8.53 | Test submit flush | 🔧¹⁹ Submit with an open incident: it is sent before the submit and appears in the log |
+| ➕ 8.54 | Test sendBeacon | 🔧¹⁹ Close the tab during an incident: the beacon arrives with a sensible duration *(Android test)* |
+| ➕ 8.55 | Test exam-start split | 🔧¹⁹ Fault active when exam starts: waiting-room incident does not count, new exam-phase incident does |
+| ➕ 8.56 | Test black frame | 🔧¹⁹ Cover camera then switch tab: event saved with `snapshot_skipped = 'black'` |
+| ➕ 8.57 | Test non-counting events | 🔧¹⁹ `COPY`, `PASTE`, `CONTEXT_MENU`: logged with `counts = false`. Same type within 3s = one event |
+| ➕ 8.58 | Test camera source | 🔧¹⁹ Unplug camera (`meta.source = 'track'`): counts. Kill LiveKit (`meta.source = 'livekit'`): does not count |
+| ➕ 8.59 | Test reload | 🔧¹⁹ Reload during exam: `RELOAD` logged and counted. Fresh login after kick is not a `RELOAD` |
+| ➕ 8.60 | Test threshold change | 🔧¹⁹ Change `flag_threshold` from 5 to 3 while live: tiles at 3 or 4 recolour immediately |
+| ➕ 8.61 | Test dismiss/restore | 🔧¹⁹ Dismiss an incident with a note: `violation_count` drops by 1. Restore it: goes back up. Both appear in the audit log |
+| ➕ 8.62 | Test one-absence rule | 🔧¹⁹ Wi-Fi drop of 3 min with a tab switch 60s in, **both orders** (event before flip and after flip): net `violation_count` = 1 each time |
+| ➕ 8.63 | Test smoke 11a–11c | 🔧¹⁹ Smoke-test additions 11a–11c (one-absence SQL tests) pass |
+| ➕ 8.64 | Test plain Wi-Fi blip | 🔧²⁰ 40-second Wi-Fi blip: `DISCONNECTED` appears with `counts = false`, candidate returns, heartbeat writes `RECONNECTED` and sets `meta.count_reason = 'short_gap'`, `violation_count` unchanged |
+| ➕ 8.65 | Test clean 3-minute drop | 🔧²⁰ 3-minute network drop with no tab switch: `DISCONNECTED` starts at `counts = false`, `resolve_disconnects()` flips to `counts = true` with `count_reason = 'long_gap'`, `violation_count` increments by exactly 1 |
+
 
 **Done when:** full rehearsal passes with no blocking issues; runbook is finalized.
 
@@ -502,7 +522,7 @@ flowchart TD
 
 ## Issues Cross-Reference
 
-All issues from `Issues.md` (rounds 1–17) are addressed in this plan:
+All issues from `Issues.md` (rounds 1–20) are addressed in this plan:
 
 ### Round 1 Issues
 
@@ -644,7 +664,6 @@ All issues from `Issues.md` (rounds 1–17) are addressed in this plan:
 | Submit from waiting room allowed | 2F.1 (require `in_progress`), 8.38 |
 | Last question answer lost on Next | 2F.6 (save answer on `last_question`), 8.36 |
 | Shuffled option labels read wrong | 2C.1 (no labels), 2D.2 (UI letters by position) |
-| Nothing writes DISCONNECTED events | 3B.6 (worker), 3B.4 (heartbeat writes RECONNECTED), 8.49 |
 | Gemini keys on Vercel | 5C.2 (reads `api_key_state` only), 6A.9 (worker key check) |
 | Progress views not in Realtime | 4C.2 (poll every 10s) |
 | Unassign started candidate leaves orphan | 1D.3 (🔧¹¹ returns `200 { removed, blocked }`), 8.45 |
@@ -657,7 +676,7 @@ All issues from `Issues.md` (rounds 1–17) are addressed in this plan:
 | Waiting-room incidents counting | 3A.1, 3B.1 (waiting-room = `counts: false`; exam-phase = `counts: true`) |
 | New routes needed | 1C.5, 1D.3, 1D.4, 1E.6, 1E.7, 2A.7, 2A.8, 6D.6 (files added) |
 | Section 3 reference | [`SECTIONS/section-3-api-contracts.md`](file:///e:/1.%20Projects/Cosmetics.lk/Projects/Cosmetics_Exam/SECTIONS/section-3-api-contracts.md) |
-| Phase 8 API tests | 8.31–8.49 |
+| Phase 8 API tests | 8.31–8.65 |
 
 ### Round 10 Issues (Plan vs Contract Conflicts)
 
@@ -759,6 +778,56 @@ All issues from `Issues.md` (rounds 1–17) are addressed in this plan:
 | `resolve_disconnects()` callable by any user | `001_initial.sql` (added `revoke`/`grant` lines) |
 | Encoding damage in contract §7 (â€" for em dashes) | `section-3-api-contracts.md` §7 (rewritten with clean UTF-8) |
 | Disconnects can count after submission | `resolve_disconnects()` both statements include `a.status = 'in_progress'` |
+
+### Round 18 Issues (Status vs Smoke Test)
+
+| Issue | Where Addressed |
+|---|---|
+| Smoke test 10 fails: attempt is `submitted` by step 5, so `resolve_disconnects()` matches nothing | `001_smoke_test.sql` (added `set status = 'in_progress'` at top of test 10) |
+| 10c/10d pass for wrong reason (guard never exercised if nothing matches) | `001_smoke_test.sql` (status reset fixes all tests) |
+| No test confirming submitted attempts are excluded | `001_smoke_test.sql` test 10h (submitted disconnect must not flip) |
+| 3B.6 lost ➕ marker and 🔧 superscripts | `implementation-plan.md` 3B.6 (restored ➕ and 🔧⁹ through 🔧¹⁸) |
+
+### Round 19 Issues (Section 4 Integration)
+
+| Issue | Where Addressed |
+|---|---|
+| One absence could count twice (tab-switch + disconnect) | `001_initial.sql` `resolve_disconnects()` overlap uses full interval rule; `reverse_disconnects_for_incident()` added |
+| Retry could double-count an incident | 3B.1 and contract §3.13: client-generated `id`, idempotent insert |
+| Counting was too loose (everything counted) | 3B.1: counting order per Section 4 §4.1 (`COUNTING_TYPES`, `meta.source`, status, `joined_at`) |
+| No incident lifecycle defined | 3A.1: full lifecycle (attention/episode/instant, join-while-open, client id, queue+retry, exam-start split, flush, sendBeacon) |
+| No debounce rules | 3A.2-3A.9: per-signal debounce and grace periods from Section 4 §3.3 |
+| Snapshot rules incomplete | 3A.11: Section 4 §6 (1 per incident, 60 max, black frame, TAB_HIDDEN at close) |
+| No central config for tunables | 3A.12: `lib/proctoring-config.ts` + `lib/proctoring-rules.ts` |
+| LiveKit loss counted as candidate fault | 3A.7 and 4B.4: `meta.source = 'livekit'` does not count |
+| COPY/PASTE/CONTEXT_MENU counted | 3A.8: logged but `counts = false` |
+| No threshold control on live grid | 3C.5: number field (1-100), amber rule in 3C.2 |
+| No dismiss/restore for false positives | 3B.7 and contract §4.15: `PATCH /api/admin/events/[id]` |
+| CSV missing violation columns | 7.4: `violations_counted` + `violations_logged` |
+| 1D.2 missing threshold range | 1D.2: default 5, range 1-100 |
+| Smoke test 10e fails with broader overlap | `001_smoke_test.sql`: delete FOCUS_LOST before 10e |
+| No SQL test for one-absence rule | `001_smoke_test.sql` test block 11 (11a-11c) |
+| Tests 8.50-8.63 missing | Implementation plan: 14 new tests for Section 4 |
+
+### Round 20 Issues (Post-Integration Cleanup)
+
+| Issue | Where Addressed |
+|---|---|
+| Old DISCONNECTED E2E tests (8.49) gone | Tests 8.64 and 8.65 restore the plain Wi-Fi blip and clean 3-minute drop cases |
+| History range "8.31–8.49" stale | Round 9 table updated to "8.31–8.65" |
+| 3B.6 lost the Pass 1 skip rule | 3B.6: restored "skip if most recent is already a DISCONNECTED" |
+| 3A.4 lost the orientation lock warning | 3A.4: restored full orientation lock text (lock to current, don't hardcode portrait, unlock on end) |
+| Contract §7 old overlap wording | Contract §7: rewritten with full interval rule |
+| `admin_actions` list missing dismiss/restore | Contract §1.6: added `event_dismiss`, `event_restore` |
+| Route table missing dismiss route | Contract route table: added row 40 |
+| §3.13 lost status guard | 3B.1 and contract §3.13: restored "allowed only for acknowledged and in_progress" |
+| No client type allowlist | 3B.1 and contract §3.13: explicit 11-type allowlist, everything else returns 400 |
+| Dismiss can lose note (null meta) | 3B.7 and contract §4.15: `coalesce(meta, '{}'::jsonb)` |
+| `short_gap` write can lose reason (null meta) | 3B.4: same coalesce fix |
+| Reversal failure is silent | 3B.1: retry once; 3B.6: worker safety net runs reversal for recent incidents |
+| Section 4 missing type allowlist | `section-4-proctoring.md` §4.1 |
+| Section 4 missing coalesce note | `section-4-proctoring.md` §7.4 |
+| Section 4 missing reversal retry | `section-4-proctoring.md` §5 |
 
 > [!WARNING]
 > **Docs out of sync**: The main plan (`exam-platform-plan.md`) SQL schema and worker sections are still v3. The authoritative schema is now `SECTIONS/001_initial.sql`, the API contracts in `SECTIONS/section-3-api-contracts.md`, and the task edits in `SECTIONS/section-1-migration.md`. **Do not copy SQL from the main plan** — use the Section files. The main plan should be updated separately once implementation begins.

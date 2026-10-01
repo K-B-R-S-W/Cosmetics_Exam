@@ -83,7 +83,7 @@ All handlers use the **service-role** Supabase client after the auth check. The 
 Safe to retry with the same body: `/api/answers` (revision rule), `/api/exam/next` (`expected_position`), `/api/exam/submit`, `/api/auth/acknowledge`, `/api/heartbeat`, all `GET`s, `start`, `force-end`, `force-submit`, `resolve`. Not idempotent (each call does something new): `broadcast`, `extend`, `override`, `regrade`, `grade`.
 
 ### 1.6 Admin audit log
-Every admin route that changes something writes one `admin_actions` row (`admin_id`, `action`, `target`, `detail`). Action names: `candidate_create`, `candidate_update`, `candidate_delete`, `candidate_import`, `candidate_unlock`, `exam_create`, `exam_update`, `exam_delete`, `exam_assign`, `exam_unassign`, `question_save`, `question_delete`, `question_reorder`, `answer_key_save`, `start`, `extend`, `force_end`, `force_submit`, `kick`, `broadcast`, `grade_start`, `grade_resume`, `override`, `regrade`, `alert_resolve`, `snapshot_purge`.
+Every admin route that changes something writes one `admin_actions` row (`admin_id`, `action`, `target`, `detail`). Action names: `candidate_create`, `candidate_update`, `candidate_delete`, `candidate_import`, `candidate_unlock`, `exam_create`, `exam_update`, `exam_delete`, `exam_assign`, `exam_unassign`, `question_save`, `question_delete`, `question_reorder`, `answer_key_save`, `start`, `extend`, `force_end`, `force_submit`, `kick`, `broadcast`, `grade_start`, `grade_resume`, `override`, `regrade`, `alert_resolve`, `snapshot_purge`, `event_dismiss`, `event_restore`.
 
 ---
 
@@ -132,6 +132,7 @@ New or changed files compared with the plan are marked **NEW**.
 | 37 | `POST /api/admin/results/[attempt]/override` | admin | 6D.5 | `question_scores` insert |
 | 38 | `POST /api/admin/results/[attempt]/regrade` **NEW path (6D.6)** | admin | 6D.6 | tables |
 | 39 | `GET /api/admin/results/export` | admin | 7.4 | tables |
+| 40 | `PATCH /api/admin/events/[id]` **NEW (3B.7)** | admin | 3B.7 | `violation_events` update |
 
 Candidate page flow and which routes each page uses:
 
@@ -396,9 +397,10 @@ Request body: `{}` (empty is fine). Sent every 10 s from the waiting room and th
 - Response: the same `StateBody` as `GET /api/exam/state`. So the heartbeat is also the 5 to 10 s state poll that the waiting room needs as a backup for a missed Broadcast (2B.3), and the way a kicked client finds out (`401 session_revoked`, within 10 s).
 
 ### 3.13 `POST /api/events` — candidate
-One call per incident (the client merges events within about 3 seconds, 3A.1). This route also carries the snapshot.
+One call per incident (Section 4 §3). This route also carries the snapshot.
 ```json
 {
+  "id": "a1b2c3d4-...",
   "type": "FULLSCREEN_EXIT",
   "merged_types": ["FOCUS_LOST", "VIEWPORT_CHANGED"],
   "occurred_ago_ms": 1200,
@@ -407,17 +409,18 @@ One call per incident (the client merges events within about 3 seconds, 3A.1). T
   "snapshot_jpeg_base64": "/9j/4AAQ..."
 }
 ```
-- `type` and `merged_types` use the event list in the schema. The client may **not** send `DISCONNECTED` or `MULTI_LOGIN` (server and worker write those): `400`.
-- `occurred_ago_ms` (0 to `exam.duration_min * 60000`, clamped to cap if over): how long ago the incident started. The server stores `now() - occurred_ago_ms`, so a queued event keeps a sensible time without trusting the device clock. Clamping (instead of rejecting with `400`) ensures a long-frozen tab's late event still gets a usable timestamp.
+- **`id`** (required, UUID v4): client-generated at incident open. The server uses it as the primary key. **Idempotency**: if the id already exists, return `200 { "id": "...", "duplicate": true, "snapshot_saved": false }` — no insert, no snapshot upload, no reversal. This prevents retry double-counting.
+- **Client type allowlist**: `type` must be one of `TAB_HIDDEN`, `FOCUS_LOST`, `FULLSCREEN_EXIT`, `VIEWPORT_CHANGED`, `MULTI_SCREEN`, `CAMERA_LOST`, `MIC_LOST`, `COPY`, `PASTE`, `CONTEXT_MENU`, `RELOAD`. Everything else (including `DISCONNECTED`, `RECONNECTED`, `MULTI_LOGIN`) returns `400`. `merged_types` may only contain types from this list.
+- `occurred_ago_ms` (0 to `exam.duration_min * 60000`, clamped to cap if over): how long ago the incident started. The server stores `now() - occurred_ago_ms`.
 - `meta`: JSON object, at most 2 KB.
-- **`counts` is decided by the server**: `false` for `RECONNECTED`, `false` for any event while the attempt is still `acknowledged` (waiting room, the exam has not started), and `false` for `DISCONNECTED` (the worker handles disconnect counting via the two-pass rule in section 7). Otherwise `true`. The client does not send a `counts` field.
-- Allowed only for `acknowledged` and `in_progress` attempts. After submission it returns `200 { "ignored": true }` rather than an error, so late events from a closing page cause no noise.
-- Rate limit: more than 30 incidents in the last 60 s for one attempt returns `429 rate_limited`. The client drops the event.
-- **Snapshot** (optional): decoded size at most 100 KB, and the first bytes must be a JPEG signature (`FF D8 FF`). The server generates the event id, uploads to `snapshots/{exam_id}/{attempt_id}/{event_id}.jpg` (content type `image/jpeg`, no upsert), then inserts the event with that id and `snapshot_path`. If the upload fails the event is still inserted, with `meta.snapshot_error = true`: the log entry matters more than the picture.
+- **Counting order (Section 4 §4.1)**: `counts = true` only if ALL of: (1) type is in `COUNTING_TYPES` (TAB_HIDDEN, FOCUS_LOST, FULLSCREEN_EXIT, VIEWPORT_CHANGED, MULTI_SCREEN, CAMERA_LOST, MIC_LOST, RELOAD), (2) for CAMERA_LOST/MIC_LOST `meta.source` must be `'track'`, (3) attempt is `in_progress`, (4) incident start (`now() - occurred_ago_ms`) is not before `attempts.joined_at`. Everything else is `false`.
+- **Status guard**: allowed only for `acknowledged` and `in_progress` attempts. After submission return `200 { "ignored": true }` rather than an error, so late events from a closing page cause no noise.
+- Rate limit: 30 per 60s per attempt → `429 rate_limited`.
+- **Snapshot** (optional): decoded ≤ 100 KB, JPEG signature required. Path: `snapshots/{exam_id}/{attempt_id}/{event_id}.jpg`. A Storage "already exists" error on retry counts as success. Failed upload → `meta.snapshot_error = true`.
 
 Response: `200 { "id": "<event id>", "snapshot_saved": true }`. The `bump_violation_count` trigger updates `attempts.violation_count`.
 
-**Late FOCUS_LOST reversal:** after inserting a focus-type incident (`TAB_HIDDEN`, `FOCUS_LOST`, `FULLSCREEN_EXIT`, `VIEWPORT_CHANGED`), the route finds any `DISCONNECTED` rows on the same attempt where `counts = true` and `meta.last_seen_at` falls inside the incident's interval (`occurred_at - 10s` to `occurred_at + coalesce(duration_ms, 0) + 10s`). Use `coalesce` because a null `duration_ms` would make the interval null and silently skip the event. It sets those rows to `counts = false` and `meta.count_reason = 'reversed_by_focus'`. The trigger gives -1 for each. This handles the frozen-tab case where the FOCUS_LOST arrives after the worker has already flipped the DISCONNECTED to counted.
+**Disconnect reversal (Section 4 §5):** after inserting an attention incident (TAB_HIDDEN, FOCUS_LOST, FULLSCREEN_EXIT, VIEWPORT_CHANGED), the route calls `reverse_disconnects_for_incident(event_id)`. This RPC reverses any `DISCONNECTED` rows with `count_reason = 'long_gap'` whose gap overlaps the incident's interval. It only touches `long_gap` rows — admin-dismissed rows are never changed by the system.
 
 ### 3.14 `POST /api/livekit/token` — candidate or admin
 Request: `{ "as": "candidate" }` or `{ "as": "admin", "exam_id": "<uuid>" }`. The explicit `as` avoids guessing when one browser holds both a candidate cookie and an admin login (which happens during testing).
@@ -680,10 +683,27 @@ There is no "undo override": override again with the value you want. A regrade n
 
 **`GET /api/admin/results/export?exam_id=`**
 Returns `text/csv; charset=utf-8` with a UTF-8 BOM (so Excel opens Sinhala names correctly) and `Content-Disposition: attachment; filename="results-<exam-slug>-<yyyy-mm-dd>.csv"`.
-Columns: `mer_code, full_name, outlet, attempt_status, submit_reason, violation_count, questions_received, mcq_marks, written_marks, total_marks, total_percent, needs_review_count`.
+Columns: `mer_code, full_name, outlet, attempt_status, submit_reason, violation_count, violations_logged, questions_received, mcq_marks, written_marks, total_marks, total_percent, needs_review_count`.
 - `questions_received`: the admin-order question numbers (position + 1) of the questions on that candidate's paper, joined with `;`.
 - Every assigned candidate is a row, including people who did not join (empty marks).
 - Any cell that starts with `=`, `+`, `-` or `@` gets a leading `'` so Excel cannot run it as a formula.
+
+### 4.15 `PATCH /api/admin/events/[id]` — any admin (NEW, Section 4 §7.4)
+
+Dismiss or restore a wrongly counted incident.
+
+```json
+{ "dismissed": true, "note": "Notification shade, not a real tab switch" }
+```
+
+- `note` is required (1 to 300 chars): `400 note_required`.
+- **Dismiss** (`dismissed: true`): allowed when `counts = true`. Use `coalesce(meta, '{}'::jsonb)` before merging — a null `meta` (common for client events) would silently lose the dismiss note. Sets `counts = false`, `meta.dismissed = { by, at, note }`, and for a `DISCONNECTED` row also `meta.count_reason = 'dismissed'`. The trigger subtracts 1 from `violation_count`.
+- **Restore** (`dismissed: false`): allowed when `meta.dismissed` exists. Sets `counts = true`, removes `meta.dismissed`, and for a `DISCONNECTED` row sets `count_reason = 'restored'`. The trigger adds 1.
+- `404 not_found`, `409 not_dismissable` (already not counted and not dismissed), `409 not_restorable` (no `meta.dismissed`).
+- Writes an `admin_actions` row (`event_dismiss` or `event_restore`) with the event id and the note.
+- Realtime: the badge updates because the trigger changes `attempts.violation_count`.
+
+`200 { "id", "counts", "violation_count" }`.
 
 ---
 
@@ -733,7 +753,7 @@ These are worker-side behaviours the contracts above depend on. The proctoring s
 |---|---|
 | Scheduled start | Every 30 s: for exams `scheduled` with `scheduled_start_at <= now()`, run the **same conditional update as the Start route** |
 | Exam end and finalize | As 2F.5: force-submit each attempt after its own `grace_deadline` (`'forced'`), mark `ended` after the last one, then `finalized` (attempts `submitted` → `finalized`) |
-| `DISCONNECTED` events | **Two-pass rule (send-on-end model).** **Pass 1 (30s):** every 30 s, for `in_progress` attempts with `last_seen_at` older than 30 s, insert `DISCONNECTED` with `counts = false`, `meta.last_seen_at` = the attempt's current `last_seen_at` (exact timestamptz string from the DB), and no `meta.count_reason`. Skip if the attempt's most recent `DISCONNECTED`/`RECONNECTED` is already a `DISCONNECTED`. **Pass 2:** every 30 s, call `resolve_disconnects()` (RPC, `revoke execute from public, anon, authenticated; grant to service_role`). This function runs two guarded statements: **(1) Mark overlaps** - rows where a focus-type event's recorded interval (using `coalesce(f.duration_ms, 0)`) overlaps `meta.last_seen_at +/- 10s` get `count_reason = 'overlap'`. **(2) Flip remaining** - unmatched rows get `counts = true, count_reason = 'long_gap'`. Both include `a.status = 'in_progress'` (disconnects must not count after submission), `coalesce(f.duration_ms, 0)` (null duration_ms would skip overlap), `count_reason IS NULL` guard, and `timestamptz` casts. The trigger handles +1/-1. If a late focus event arrives after a flip, the events route (3B.1) reverses it to `reversed_by_focus`. The heartbeat route sets `count_reason = 'short_gap'` (same IS NULL guard). Overlap window: +/-10s covers disconnect start only (Section 4 scope) |
+| `DISCONNECTED` events | **Two-pass rule (send-on-end model).** **Pass 1 (30s):** every 30 s, for `in_progress` attempts with `last_seen_at` older than 30 s, insert `DISCONNECTED` with `counts = false`, `meta.last_seen_at` = the attempt's current `last_seen_at` (exact timestamptz string from the DB), and no `meta.count_reason`. Skip if the attempt's most recent `DISCONNECTED`/`RECONNECTED` is already a `DISCONNECTED`. **Pass 2:** every 30 s, call `resolve_disconnects()` (RPC, `revoke execute from public, anon, authenticated; grant to service_role`). This function runs two guarded statements: **(1) Mark overlaps** — rows where a focus-type event's interval (using `coalesce(f.duration_ms, 0)`) starts inside the gap get `count_reason = 'overlap'`. The interval rule (Section 4 §5): only the lower bound matters (`incident_end >= gap_start - 10s`); the old upper-bound check on `f.occurred_at` is removed, so an incident starting anywhere inside the gap counts as overlap. **(2) Flip remaining** — unmatched rows get `counts = true, count_reason = 'long_gap'`. Both include `a.status = 'in_progress'`, `coalesce(f.duration_ms, 0)`, `count_reason IS NULL` guard, and `timestamptz` casts. The trigger handles +1/-1. If a late focus event arrives after a flip, the events route calls `reverse_disconnects_for_incident(event_id)` — only touches `long_gap` rows. The heartbeat route sets `count_reason = 'short_gap'` (uses `coalesce(meta, '{}'::jsonb)` and `IS NULL` guard). **Worker reversal safety net:** after Pass 2, call `reverse_disconnects_for_incident()` for any attention incidents inserted in the last 5 minutes (idempotent) |
 | Key check | Every 5 minutes, per key: call the model-listing endpoint, then write `api_key_state` (`active`, or `disabled` with `last_error` on 400/403). This is the only place Gemini keys are used outside grading |
 | Grading jobs | As 6A and 6B. When the last job of an attempt finishes, call `recomputeResults(attemptId)` |
 | Snapshot purge | Once a day, the same shared function as `POST /api/admin/snapshots/purge` with the default retention |

@@ -340,18 +340,18 @@ begin
   set meta = jsonb_set(ve.meta, '{count_reason}', '"overlap"')
   from public.attempts a
   where a.id = ve.attempt_id
-    and a.status = 'in_progress'
     and ve.type = 'DISCONNECTED'
     and ve.counts = false
     and ve.meta->>'count_reason' is null
     and (ve.meta->>'last_seen_at')::timestamptz < now() - interval '2 minutes'
     and a.last_seen_at = (ve.meta->>'last_seen_at')::timestamptz
+    and a.status = 'in_progress'
     and exists (
       select 1 from public.violation_events f
       where f.attempt_id = ve.attempt_id
         and f.type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED')
-        and f.occurred_at <= (ve.meta->>'last_seen_at')::timestamptz + interval '10 seconds'
-        and f.occurred_at + (coalesce(f.duration_ms, 0) * interval '1 millisecond') >= (ve.meta->>'last_seen_at')::timestamptz - interval '10 seconds'
+        and f.occurred_at + (coalesce(f.duration_ms, 0) * interval '1 millisecond')
+            >= (ve.meta->>'last_seen_at')::timestamptz - interval '10 seconds'
     );
 
   update public.violation_events ve
@@ -369,6 +369,44 @@ end $$;
 
 revoke execute on function public.resolve_disconnects() from public, anon, authenticated;
 grant  execute on function public.resolve_disconnects() to service_role;
+
+create or replace function public.reverse_disconnects_for_incident(p_event_id uuid)
+returns int language plpgsql as $$
+declare
+  v_n int;
+begin
+  with inc as (
+    select attempt_id,
+           occurred_at,
+           occurred_at + (coalesce(duration_ms, 0) * interval '1 millisecond') as ends_at
+    from public.violation_events
+    where id = p_event_id
+      and type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED')
+  ), upd as (
+    update public.violation_events d
+    set counts = false,
+        meta = jsonb_set(d.meta, '{count_reason}', '"reversed_by_focus"')
+    from inc
+    where d.attempt_id = inc.attempt_id
+      and d.type = 'DISCONNECTED'
+      and d.counts = true
+      and d.meta->>'count_reason' = 'long_gap'
+      and inc.ends_at >= (d.meta->>'last_seen_at')::timestamptz - interval '10 seconds'
+      and inc.occurred_at <= coalesce(
+            (select min(r.occurred_at) from public.violation_events r
+              where r.attempt_id = d.attempt_id
+                and r.type = 'RECONNECTED'
+                and r.occurred_at > d.occurred_at),
+            now())
+    returning 1
+  )
+  select count(*) into v_n from upd;
+  return v_n;
+end $$;
+
+revoke execute on function public.reverse_disconnects_for_incident(uuid) from public, anon, authenticated;
+grant  execute on function public.reverse_disconnects_for_incident(uuid) to service_role;
+
 
 -- 3.3 Assigning a candidate to an exam creates their (not_started) attempt, so the admin grid
 --     can show "Not joined" for everyone. Unassigning removes it only if they never started.
