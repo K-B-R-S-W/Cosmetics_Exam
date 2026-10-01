@@ -1,24 +1,28 @@
-The current plan is OK, and Section 1 (the migration SQL) is written.
+Confirmed fixed
+Heartbeat state shape: 3B.4 now returns the full state body.
+Retention: the contract says 14 in all four places.
+Per-IP limit: both files say 50.
+Unassign response: the Round 9 table now says 200 { removed, blocked }.
+New issue: the 2-minute disconnect rule can't work as written
 
-these sections still need to be written in:
+3B.6 says DISCONNECTED should count only when the gap exceeds 2 minutes. But the worker inserts the row after 30 seconds of silence, so the gap length isn't known yet. In 001_initial.sql, the trigger bump_violation_count runs only AFTER INSERT, and it adds 1 only if counts is true at that moment. Nothing re-evaluates the row later. As written, the worker has to choose counts blind. If it picks true, every blip counts. If it picks false, nothing ever counts.
 
-1. Complete migration SQL: all tables, constraints, indexes, RLS, generate_paper() and the current_scores view. It goes into Phase 1A, so a coding session can paste it in and run it.
-2. Design system and screen specs: colours, type, layout rules for laptop and tablet, every candidate and admin screen, the states it can show, and the exact text on the rules, check and error screens.
-3. API contracts: request, response and error shapes for every route.
-4. Proctoring spec: the event list, thresholds, incident merging and snapshot rules.
-5. Grading spec: the final prompt, response schema and worker rules.
-6. Infra and ops: env variables, EC2 and LiveKit setup, repo layout and the runbook.
+The "overlaps FOCUS_LOST" rule has a second problem. A backgrounded tablet tab may send its FOCUS_LOST incident only when the candidate returns, so the event may not exist yet when the worker decides.
 
+Suggested fix:
 
-Check of the current plan: all five round-5 edits are in. I found four more things while writing the schema. Three are fixed in the SQL, and one needs an edit in the plan:
+The worker inserts DISCONNECTED at 30 seconds with counts = false.
+A second worker pass, when the same attempt is still silent after 2 minutes, flips it to counts = true. If the candidate returns before that, the row stays informational.
+Before flipping, the worker checks for any TAB_HIDDEN, FOCUS_LOST, FULLSCREEN_EXIT or VIEWPORT_CHANGED event within about 10 seconds of the gap. If there is one, the row stays false.
+The trigger also fires on an update of counts: +1 when it goes false→true, −1 for the reverse.
 
-Task 5B.10 would block touchscreen laptops. The check "touch-capable and no Android in the user agent" also matches Windows, Mac and ChromeOS laptops with touchscreens. Exclude those too (Windows|Macintosh|CrOS).
-Grading jobs collided. Jobs were keyed by (run_id, attempt_id), but a full run needs 2–3 chunk jobs per candidate. I added chunk_index, and a single-question regrade is its own run.
-Merged violation incidents had nowhere to be stored. Each row is now one incident, with merged_types and a counts flag, and a trigger updates violation_count.
-Nothing created attempts. The live grid needs "Not joined" for all 23 people, so assigning a candidate now creates their attempt automatically.
+A candidate who comes back late with a queued FOCUS_LOST could still end up double counted. That is rare, and the admin timeline shows both events, so staff can judge it.
 
-Files for Section 1:
-
-section-1-migration.md holds the SQL and the exact edits for each Phase 1 and 2 task, plus a cleanup script for test data.
-001_initial.sql is the migration to run. It makes the database enforce the rules itself: the revision check, the deadline with the 15-second grace, force-end, the sequential position guard, and Next being safe to retry.
-001_smoke_test.sql covers the main rules and rolls itself back.
+Smaller gaps
+The contract doesn't have the new rule. Line 734 still says counts = true and "for the proctoring spec to decide". Line 413 (the server's counts rules) doesn't mention DISCONNECTED at all. The plan and contract now disagree.
+Test 8.49 doesn't cover the rule. It only checks that the events appear. It needs two cases: a 40-second blip (logged, not counted) and a 3-minute drop (counted, with violation_count +1).
+Admin timeline: the plan says staff see the gap length, but 3C doesn't list a task that shows a DISCONNECTED row with its duration. The duration only exists on the RECONNECTED row, so the UI has to pair the two.
+Files I'd edit, and what changes
+SECTIONS/001_initial.sql: change the trigger to also fire AFTER UPDATE OF counts, with +1 / −1 logic. The SQL has never been run, so editing it in place is safe.
+implementation-plan.md: rewrite 3B.6 as the two-pass rule above, extend 8.49, and add one line to 3C for pairing DISCONNECTED with RECONNECTED.
+SECTIONS/section-3-api-contracts.md: update line 734 and the counts rules at line 413.
