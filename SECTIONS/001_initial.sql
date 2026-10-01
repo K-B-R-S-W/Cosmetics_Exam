@@ -315,15 +315,60 @@ create trigger trg_results_updated_at
 create or replace function public.bump_violation_count()
 returns trigger language plpgsql as $$
 begin
-  if new.counts then
-    update public.attempts set violation_count = violation_count + 1 where id = new.attempt_id;
+  if tg_op = 'INSERT' then
+    if new.counts then
+      update public.attempts set violation_count = violation_count + 1 where id = new.attempt_id;
+    end if;
+  elsif tg_op = 'UPDATE' then
+    if old.counts = false and new.counts = true then
+      update public.attempts set violation_count = violation_count + 1 where id = new.attempt_id;
+    elsif old.counts = true and new.counts = false then
+      update public.attempts set violation_count = greatest(violation_count - 1, 0) where id = new.attempt_id;
+    end if;
   end if;
   return new;
 end $$;
 
 create trigger trg_violation_events_count
-  after insert on public.violation_events
+  after insert or update of counts on public.violation_events
   for each row execute function public.bump_violation_count();
+
+create or replace function public.resolve_disconnects()
+returns void language plpgsql as $$
+begin
+  update public.violation_events ve
+  set meta = jsonb_set(ve.meta, '{count_reason}', '"overlap"')
+  from public.attempts a
+  where a.id = ve.attempt_id
+    and a.status = 'in_progress'
+    and ve.type = 'DISCONNECTED'
+    and ve.counts = false
+    and ve.meta->>'count_reason' is null
+    and (ve.meta->>'last_seen_at')::timestamptz < now() - interval '2 minutes'
+    and a.last_seen_at = (ve.meta->>'last_seen_at')::timestamptz
+    and exists (
+      select 1 from public.violation_events f
+      where f.attempt_id = ve.attempt_id
+        and f.type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED')
+        and f.occurred_at <= (ve.meta->>'last_seen_at')::timestamptz + interval '10 seconds'
+        and f.occurred_at + (coalesce(f.duration_ms, 0) * interval '1 millisecond') >= (ve.meta->>'last_seen_at')::timestamptz - interval '10 seconds'
+    );
+
+  update public.violation_events ve
+  set counts = true,
+      meta = jsonb_set(ve.meta, '{count_reason}', '"long_gap"')
+  from public.attempts a
+  where a.id = ve.attempt_id
+    and a.status = 'in_progress'
+    and ve.type = 'DISCONNECTED'
+    and ve.counts = false
+    and ve.meta->>'count_reason' is null
+    and (ve.meta->>'last_seen_at')::timestamptz < now() - interval '2 minutes'
+    and a.last_seen_at = (ve.meta->>'last_seen_at')::timestamptz;
+end $$;
+
+revoke execute on function public.resolve_disconnects() from public, anon, authenticated;
+grant  execute on function public.resolve_disconnects() to service_role;
 
 -- 3.3 Assigning a candidate to an exam creates their (not_started) attempt, so the admin grid
 --     can show "Not joined" for everyone. Unassigning removes it only if they never started.

@@ -87,7 +87,20 @@ begin
   -- 7. Violation incidents: only counting rows bump the badge number
   insert into public.violation_events (attempt_id, type, merged_types) values (v_att, 'FULLSCREEN_EXIT', array['FOCUS_LOST', 'VIEWPORT_CHANGED']);
   insert into public.violation_events (attempt_id, type, counts)       values (v_att, 'RECONNECTED', false);
-  assert (select violation_count from public.attempts where id = v_att) = 1, '7: only counting incidents are counted';
+  assert (select violation_count from public.attempts where id = v_att) = 1, '7a: only counting incidents are counted';
+
+  -- 7b-d. Trigger UPDATE OF counts path (two-pass DISCONNECTED rule)
+  declare v_evt uuid;
+  begin
+    insert into public.violation_events (attempt_id, type, counts) values (v_att, 'DISCONNECTED', false) returning id into v_evt;
+    assert (select violation_count from public.attempts where id = v_att) = 1, '7b: insert with counts=false must not increment';
+
+    update public.violation_events set counts = true where id = v_evt;
+    assert (select violation_count from public.attempts where id = v_att) = 2, '7c: flip false->true must increment (+1)';
+
+    update public.violation_events set counts = false where id = v_evt;
+    assert (select violation_count from public.attempts where id = v_att) = 1, '7d: flip true->false must decrement (-1)';
+  end;
 
   -- 8. Alert dedup: one ACTIVE alert per key
   insert into public.alerts (type, message, unique_key) values ('keys', 'all keys exhausted', 'keys-exhausted');
@@ -103,6 +116,61 @@ begin
   begin
     insert into public.grading_runs (id, exam_id) values (v_run, v_exam);
     insert into public.grading_jobs (run_id, attempt_id, chunk_index, question_ids) values (v_run, v_att, 0, '[]'::jsonb), (v_run, v_att, 1, '[]'::jsonb);
+  end;
+
+  -- 10. resolve_disconnects(): overlap, flip, guard, and positive case
+  declare v_disc uuid; v_disc2 uuid; v_disc3 uuid; v_vc_before int;
+  begin
+    update public.attempts set violation_count = 0 where id = v_att;
+
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '5 minutes')::timestamptz::text))
+    returning id into v_disc;
+
+    update public.attempts set last_seen_at = (now() - interval '5 minutes') where id = v_att;
+
+    insert into public.violation_events (attempt_id, type, occurred_at, duration_ms, counts)
+    values (v_att, 'FOCUS_LOST', now() - interval '5 minutes' - interval '5 seconds', 30000, false);
+
+    perform public.resolve_disconnects();
+    assert (select meta->>'count_reason' from public.violation_events where id = v_disc) = 'overlap',
+      '10a: overlapping DISCONNECTED must get count_reason=overlap';
+    assert (select violation_count from public.attempts where id = v_att) = 0,
+      '10b: overlapping row must not increment violation_count';
+
+    update public.violation_events set meta = jsonb_set(meta, '{count_reason}', 'null'::jsonb) where id = v_disc;
+
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '4 minutes')::timestamptz::text))
+    returning id into v_disc2;
+
+    update public.attempts set last_seen_at = (now() - interval '4 minutes') where id = v_att;
+
+    update public.violation_events
+    set meta = jsonb_set(meta, '{count_reason}', '"short_gap"')
+    where id = v_disc2 and counts = false and meta->>'count_reason' is null;
+
+    perform public.resolve_disconnects();
+    assert (select counts from public.violation_events where id = v_disc2) = false,
+      '10c: short_gap guard must prevent flip';
+    assert (select meta->>'count_reason' from public.violation_events where id = v_disc2) = 'short_gap',
+      '10d: short_gap must not be overwritten by long_gap';
+
+    v_vc_before := (select violation_count from public.attempts where id = v_att);
+
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '10 minutes')::timestamptz::text))
+    returning id into v_disc3;
+
+    update public.attempts set last_seen_at = (now() - interval '10 minutes') where id = v_att;
+
+    perform public.resolve_disconnects();
+    assert (select counts from public.violation_events where id = v_disc3) = true,
+      '10e: clean disconnect must flip to counts=true';
+    assert (select meta->>'count_reason' from public.violation_events where id = v_disc3) = 'long_gap',
+      '10f: clean disconnect must get count_reason=long_gap';
+    assert (select violation_count from public.attempts where id = v_att) = v_vc_before + 1,
+      '10g: clean disconnect must increment violation_count by 1';
   end;
 
   raise notice 'SMOKE TEST PASSED';
