@@ -244,6 +244,30 @@ begin
       '11c: disconnect stays counted';
   end;
 
+  -- 12. Idempotent AI writes: one job can score a question only once (needs 002_grading.sql)
+  declare v_run2 uuid := gen_random_uuid(); v_job uuid := gen_random_uuid();
+  begin
+    insert into public.grading_runs (id, exam_id) values (v_run2, v_exam);
+    insert into public.grading_jobs (id, run_id, attempt_id, chunk_index, question_ids)
+    values (v_job, v_run2, v_att, 0, '[]'::jsonb);
+
+    insert into public.question_scores (attempt_id, question_id, source, marks, max_marks, job_id)
+    values (v_att, v_first, 'ai', 1, 2, v_job);
+    insert into public.question_scores (attempt_id, question_id, source, marks, max_marks, job_id)
+    values (v_att, v_first, 'ai', 1, 2, v_job)
+    on conflict do nothing;                      -- how the worker writes
+    assert (select count(*) from public.question_scores where job_id = v_job) = 1,
+      '12a: a duplicate score for the same job and question must be ignored';
+
+    begin
+      insert into public.question_scores (attempt_id, question_id, source, marks, max_marks, job_id)
+      values (v_att, v_first, 'ai', 2, 2, v_job);
+      assert false, '12b: a plain duplicate insert must violate the unique index';
+    exception when unique_violation then
+      null;                                      -- expected
+    end;
+  end;
+
   raise notice 'SMOKE TEST PASSED';
 end $$;
 

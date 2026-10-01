@@ -83,7 +83,7 @@ All handlers use the **service-role** Supabase client after the auth check. The 
 Safe to retry with the same body: `/api/answers` (revision rule), `/api/exam/next` (`expected_position`), `/api/exam/submit`, `/api/auth/acknowledge`, `/api/heartbeat`, all `GET`s, `start`, `force-end`, `force-submit`, `resolve`. Not idempotent (each call does something new): `broadcast`, `extend`, `override`, `regrade`, `grade`.
 
 ### 1.6 Admin audit log
-Every admin route that changes something writes one `admin_actions` row (`admin_id`, `action`, `target`, `detail`). Action names: `candidate_create`, `candidate_update`, `candidate_delete`, `candidate_import`, `candidate_unlock`, `exam_create`, `exam_update`, `exam_delete`, `exam_assign`, `exam_unassign`, `question_save`, `question_delete`, `question_reorder`, `answer_key_save`, `start`, `extend`, `force_end`, `force_submit`, `kick`, `broadcast`, `grade_start`, `grade_resume`, `override`, `regrade`, `alert_resolve`, `snapshot_purge`, `event_dismiss`, `event_restore`.
+Every admin route that changes something writes one `admin_actions` row (`admin_id`, `action`, `target`, `detail`). Action names: `candidate_create`, `candidate_update`, `candidate_delete`, `candidate_import`, `candidate_unlock`, `exam_create`, `exam_update`, `exam_delete`, `exam_assign`, `exam_unassign`, `question_save`, `question_delete`, `question_reorder`, `answer_key_save`, `start`, `extend`, `force_end`, `force_submit`, `kick`, `broadcast`, `grade_start`, `grade_resume`, `override`, `regrade`, `regrade_question`, `alert_resolve`, `snapshot_purge`, `event_dismiss`, `event_restore`.
 
 ---
 
@@ -133,6 +133,7 @@ New or changed files compared with the plan are marked **NEW**.
 | 38 | `POST /api/admin/results/[attempt]/regrade` **NEW path (6D.6)** | admin | 6D.6 | tables |
 | 39 | `GET /api/admin/results/export` | admin | 7.4 | tables |
 | 40 | `PATCH /api/admin/events/[id]` **NEW (3B.7)** | admin | 3B.7 | `violation_events` update |
+| 41 | `POST /api/admin/exams/[id]/regrade-question` **NEW (6D.8)** | admin | 6D.8 | `grading_runs`, `grading_jobs` insert |
 
 Candidate page flow and which routes each page uses:
 
@@ -650,11 +651,11 @@ Steps:
 2. For each attempt that has a paper (people who never joined have no `attempt_questions` and get no scores; they show as "absent" with a null percent):
    - **MCQ, in code:** insert `question_scores (source='mcq')`, full marks when `selected_option_id = correct_option_id`, otherwise 0 (`reason: 'No answer'` when blank). `max_marks` = the question's marks.
    - **Written and blank:** insert `question_scores (source='ai', marks=0, reason='No answer submitted', details={auto_zero:true})`. No Gemini call.
-   - **Written and not blank:** group into chunks of at most 10 per attempt and insert `grading_jobs` (`chunk_index` 0, 1, …; `question_ids` = that chunk).
+   - **Written and not blank:** group into chunks of chunk size from worker config (default 10, `GRADING_CHUNK_SIZE`) per attempt and insert `grading_jobs` (`chunk_index` 0, 1, …; `question_ids` = that chunk).
 3. Recompute `results` for each attempt (formula in 4.6.1).
 4. If no jobs were created (for example an all-MCQ exam), set the run to `done` right away.
 
-`202 { "run_id": "<uuid>", "attempts": 23, "jobs": 46, "mcq_scored": 160, "auto_zero": 12 }`.
+`202 { "run_id": "<uuid>", "attempts": 23, "jobs": 46, "estimated_calls": 46, "mcq_scored": 160, "auto_zero": 12 }`.
 Running grading again after a finished run is allowed. It adds new MCQ and zero rows, and the `current_scores` view keeps overrides on top.
 
 **4.6.1 Results formula** (shared function `recomputeResults(attemptId)`, used by this route, the override route, and the worker when a candidate's last job finishes):
@@ -677,13 +678,20 @@ Inserts `question_scores (source='override', created_by = admin)`, then recomput
 `200 { "current": { "question_id", "marks", "max_marks", "source": "override" }, "results": { "mcq_marks", "written_marks", "total_marks", "total_percent" } }`.
 There is no "undo override": override again with the value you want. A regrade never replaces an override (the view guarantees it).
 
-**`POST /api/admin/results/[attempt]/regrade`** (NEW path for 6D.6)
-`{ "question_id": "<uuid>" }`. Written questions only, with a non-blank answer (`409 nothing_to_grade` otherwise), attempt finalized. Creates a `grading_runs` row (`kind='regrade'`) and one `grading_jobs` row (`chunk_index 0`, `question_ids: [id]`).
-`202 { "run_id", "job_id", "override_present": true }`. When `override_present` is `true`, the new AI score is stored but the override stays current, and the review screen should say so.
+**`POST /api/admin/results/[attempt]/regrade`** — Single-candidate regrade (6D.6)
+`{ "question_id": "<uuid>" }`. Regrades one question for a single candidate's attempt. Preconditions: attempt must be `finalized` (`409 not_finalized`); question must be written and in paper with a non-blank answer (`409 nothing_to_grade` otherwise). Creates a `grading_runs` row (`kind='regrade'`) and exactly one `grading_jobs` row for this attempt (`chunk_index 0`, `question_ids: [id]`). Overrides stay current (`current_scores` view). Writes `admin_actions` (`regrade`). Response: `202 { "run_id": "<uuid>", "job_id": "<uuid>", "override_present": true }`. When `override_present` is `true`, the new AI score is stored but the override stays current, and the review screen should say so.
+
+**`POST /api/admin/exams/[id]/regrade-question`** — Bulk regrade one question for all candidates (NEW route 41 for 6D.8, Section 5 §8.4)
+`{ "question_id": "<uuid>" }`. Regrades one question across all candidates who answered it.
+- Preconditions (each its own `409`): `exam_not_finalized` (exam status must be `finalized`); `grading_in_progress` (no run `running` or `paused`); question is written and has a non-empty `model_answer` (`400 not_written` / `409 missing_answer_key`).
+- Creates a `grading_runs` row (`kind = 'regrade'`) and one `grading_jobs` row per attempt that received this question with a non-blank answer (`chunk_index 0`, `question_ids = [id]`).
+- Overrides stay current (the `current_scores` view guarantees this).
+- Writes an `admin_actions` row (`regrade_question`).
+- Response: `202 { "run_id": "<uuid>", "jobs": 21, "overrides_kept": 2 }`.
 
 **`GET /api/admin/results/export?exam_id=`**
 Returns `text/csv; charset=utf-8` with a UTF-8 BOM (so Excel opens Sinhala names correctly) and `Content-Disposition: attachment; filename="results-<exam-slug>-<yyyy-mm-dd>.csv"`.
-Columns: `mer_code, full_name, outlet, attempt_status, submit_reason, violation_count, violations_logged, questions_received, mcq_marks, written_marks, total_marks, total_percent, needs_review_count`.
+Columns: `mer_code, full_name, outlet, attempt_status, submit_reason, violation_count, violations_logged, questions_received, mcq_marks, written_marks, total_marks, total_percent, needs_review_count, unscored_count`.
 - `questions_received`: the admin-order question numbers (position + 1) of the questions on that candidate's paper, joined with `;`.
 - Every assigned candidate is a row, including people who did not join (empty marks).
 - Any cell that starts with `=`, `+`, `-` or `@` gets a leading `'` so Excel cannot run it as a formula.
@@ -755,7 +763,7 @@ These are worker-side behaviours the contracts above depend on. The proctoring s
 | Exam end and finalize | As 2F.5: force-submit each attempt after its own `grace_deadline` (`'forced'`), mark `ended` after the last one, then `finalized` (attempts `submitted` → `finalized`) |
 | `DISCONNECTED` events | **Two-pass rule (send-on-end model).** **Pass 1 (30s):** every 30 s, for `in_progress` attempts with `last_seen_at` older than 30 s, insert `DISCONNECTED` with `counts = false`, `meta.last_seen_at` = the attempt's current `last_seen_at` (exact timestamptz string from the DB), and no `meta.count_reason`. Skip if the attempt's most recent `DISCONNECTED`/`RECONNECTED` is already a `DISCONNECTED`. **Pass 2:** every 30 s, call `resolve_disconnects()` (RPC, `revoke execute from public, anon, authenticated; grant to service_role`). This function runs two guarded statements: **(1) Mark overlaps** — rows where a focus-type event's interval (using `coalesce(f.duration_ms, 0)`) starts inside the gap get `count_reason = 'overlap'`. The interval rule (Section 4 §5): only the lower bound matters (`incident_end >= gap_start - 10s`); the old upper-bound check on `f.occurred_at` is removed, so an incident starting anywhere inside the gap counts as overlap. **(2) Flip remaining** — unmatched rows get `counts = true, count_reason = 'long_gap'`. Both include `a.status = 'in_progress'`, `coalesce(f.duration_ms, 0)`, `count_reason IS NULL` guard, and `timestamptz` casts. The trigger handles +1/-1. If a late focus event arrives after a flip, the events route calls `reverse_disconnects_for_incident(event_id)` — only touches `long_gap` rows. The heartbeat route sets `count_reason = 'short_gap'` (uses `coalesce(meta, '{}'::jsonb)` and `IS NULL` guard). **Worker reversal safety net:** after Pass 2, call `reverse_disconnects_for_incident()` for any attention incidents inserted in the last 5 minutes (idempotent) |
 | Key check | Every 5 minutes, per key: call the model-listing endpoint, then write `api_key_state` (`active`, or `disabled` with `last_error` on 400/403). This is the only place Gemini keys are used outside grading |
-| Grading jobs | As 6A and 6B. When the last job of an attempt finishes, call `recomputeResults(attemptId)` |
+| Grading jobs | See Section 5 §7. When the last job of an attempt finishes, call `recomputeResults(attemptId)`. The worker auto-resumes pauses it caused itself (`keys_exhausted`) |
 | Snapshot purge | Once a day, the same shared function as `POST /api/admin/snapshots/purge` with the default retention |
 | Worker heartbeat | `system_health` row every 30 s (6A.6) |
 | Shared code | `recomputeResults`, the conditional start update, and the snapshot purge are written once and imported by both the Next.js app and the worker |
@@ -795,7 +803,8 @@ New environment variables: `SNAPSHOT_RETENTION_DAYS` (default `14`), `NEXT_PUBLI
 | 6D.1 | Add `missing_answer_keys`, MCQ scoring and auto-zero in the route, and the results formula (4.6.1) |
 | 6D.2, 6D.5 | Bodies and errors from 4.6 |
 | 6D.6 | Path is `app/api/admin/results/[attempt]/regrade/route.ts` |
-| 7.4 | CSV columns and formula-injection guard from 4.6 |
+| ➕ 6D.8 | Add route `app/api/admin/exams/[id]/regrade-question/route.ts` (Section 5 §8.4) |
+| 7.4 | CSV columns (including `unscored_count` after `needs_review_count`) and formula-injection guard from 4.6 |
 | 7.7 | Both: daily worker job and `POST /api/admin/snapshots/purge` |
 | 0.4 / §14.1 | Add `SNAPSHOT_RETENTION_DAYS`, `NEXT_PUBLIC_LIVEKIT_URL` |
 | Phase 8 | Add the tests in section 9 |
