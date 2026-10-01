@@ -1,0 +1,31 @@
+# infra/livekit/livekit.yaml  -- copy from livekit.yaml.example, fill in the key, chmod 600, NEVER commit
+# Docs: https://docs.livekit.io/transport/self-hosting/deployment.md
+port: 7880
+bind_addresses:
+  - "127.0.0.1"          # signalling is reached only through Caddy (443); not exposed directly
+log_level: info
+
+rtc:
+  tcp_port: 7881         # ICE/TCP fallback (open in the security group)
+  port_range_start: 50000
+  port_range_end: 60000  # UDP media (open in the security group)
+  use_external_ip: true  # EC2: the instance only sees its private IP, so LiveKit finds the public one via STUN
+  # If startup hangs or the advertised IP is wrong, set use_external_ip: false and pin the Elastic IP instead:
+  # node_ip: 203.0.113.10
+
+redis:
+  address: 127.0.0.1:6379
+
+keys:
+  # Generate with:  docker run --rm livekit/livekit-server generate-keys
+  REPLACE_API_KEY: REPLACE_API_SECRET
+
+turn:
+  enabled: true
+  udp_port: 3478         # TURN/UDP (open in the security group). TURN/TLS is NOT enabled (see Section 6 §4.3)
+
+room:
+  empty_timeout: 300     # seconds before an empty room is closed
+  max_participants: 40   # 23 candidates + admins + headroom
+
+# prometheus_port: 6789  # leave off unless you scrape it

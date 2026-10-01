@@ -3,8 +3,8 @@
 Detailed task breakdown for each phase. Tasks are ordered by dependency within each phase.
 
 > [!IMPORTANT]
-> This plan incorporates all fixes from `Issues.md` (rounds 1–21). Changes are marked with 🔧 (fix) or ➕ (new task).
-> Round 2: 🔧². Round 3: 🔧³. Round 4: 🔧⁴. Round 5: 🔧⁵. Round 6: 🔧⁶. Round 7: 🔧⁷. Round 8: 🔧⁸. Round 9: 🔧⁹. Round 10: 🔧¹⁰. Round 11: 🔧¹¹. Round 12: 🔧¹². Round 13: 🔧¹³. Round 14: 🔧¹⁴. Round 15: 🔧¹⁵. Round 16: 🔧¹⁶. Round 17: 🔧¹⁷. Round 18: 🔧¹⁸. Round 19: 🔧¹⁹. Round 20: 🔧²⁰. Round 21: 🔧²¹.
+> This plan incorporates all fixes from `Issues.md` (rounds 1–22). Changes are marked with 🔧 (fix) or ➕ (new task).
+> Round 2: 🔧². Round 3: 🔧³. Round 4: 🔧⁴. Round 5: 🔧⁵. Round 6: 🔧⁶. Round 7: 🔧⁷. Round 8: 🔧⁸. Round 9: 🔧⁹. Round 10: 🔧¹⁰. Round 11: 🔧¹¹. Round 12: 🔧¹². Round 13: 🔧¹³. Round 14: 🔧¹⁴. Round 15: 🔧¹⁵. Round 16: 🔧¹⁶. Round 17: 🔧¹⁷. Round 18: 🔧¹⁸. Round 19: 🔧¹⁹. Round 20: 🔧²⁰. Round 21: 🔧²¹. Round 22: 🔧²².
 
 ---
 
@@ -19,11 +19,11 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 0.1 | Initialize Next.js + TypeScript | `apps/web/` | `npx create-next-app@latest` with App Router, TypeScript, ESLint |
 | 0.2 | Install core dependencies | `package.json` | `@supabase/supabase-js`, `@supabase/ssr`, `iron-session`, 🔧 `sanitize-html` (replaces `dompurify` — needs browser DOM on server), `@node-rs/argon2` |
 | 0.3 | Supabase project setup | Supabase dashboard | Create project, note URL + anon key + service role key |
-| 0.4 | Environment config | `.env.local`, `.env.example` | All variables from §14.1; `.env.example` with placeholder values for team reference. 🔧² **Include `ALERT_WEBHOOK_URL`** (Telegram/Discord). 🔧⁹ **Add `SNAPSHOT_RETENTION_DAYS`** (default `14`), **`NEXT_PUBLIC_LIVEKIT_URL`**. 🔧²¹ **Add worker-only variables** (never on Vercel): `GEMINI_KEY_1`..`GEMINI_KEY_3`, `GEMINI_MODELS`, `GRADING_CHUNK_SIZE` (10), `GRADING_SLOT_MIN_INTERVAL_MS` (12000), `GRADING_RESERVE` (1), `GRADING_REQUEST_TIMEOUT_MS` (90000), `GRADING_MAX_TRIES` (4), `GRADING_PAUSE_AFTER_MIN` (15), `GRADING_MARK_STEP` (0.5), `REVIEW_CONFIDENCE` (0.6), `REVIEW_CONFIDENCE_SINGLISH` (0.75), `GRADING_MAX_ANSWER_CHARS` (6000), `GRADING_PROMPT_VERSION` (`g1`), `GEMINI_THINKING` |
+| 0.4 | Environment config | `.env.local`, `.env.example`, `infra/env/` | All variables from §14.1; template files in `infra/env/web.env.example` and `infra/env/worker.env.example` (Section 6 §1). 🔧² **Include `ALERT_WEBHOOK_URL`** (Telegram/Discord). 🔧⁹ **Add `SNAPSHOT_RETENTION_DAYS`** (default `14`), **`NEXT_PUBLIC_LIVEKIT_URL`**. 🔧²¹ **Add worker-only variables** (never on Vercel): `GEMINI_KEY_1`..`GEMINI_KEY_3`, `GEMINI_MODELS`, `GRADING_CHUNK_SIZE` (10), `GRADING_SLOT_MIN_INTERVAL_MS` (12000), `GRADING_RESERVE` (1), `GRADING_REQUEST_TIMEOUT_MS` (90000), `GRADING_MAX_TRIES` (4), `GRADING_PAUSE_AFTER_MIN` (15), `GRADING_MARK_STEP` (0.5), `REVIEW_CONFIDENCE` (0.6), `REVIEW_CONFIDENCE_SINGLISH` (0.75), `GRADING_MAX_ANSWER_CHARS` (6000), `GRADING_PROMPT_VERSION` (`g1`), `GEMINI_THINKING`. 🔧²² **Credentials persistence**: `SESSION_SECRET` and `NIC_PEPPER` must be stored in a password manager and must never change once candidates are imported (Section 6 §7) |
 | 0.5 | Supabase client helpers | `lib/supabase/server.ts`, `lib/supabase/client.ts` | Server client (service role), browser client (anon key for admin Realtime only) |
 | 0.6 | iron-session config | `lib/session.ts` | Session options with `secure: process.env.NODE_ENV === 'production'`, cookie name, TTL = exam duration + 2 hours |
 | 0.7 | Vercel project | Vercel dashboard | Connect repo, set env vars, confirm auto-deploy |
-| 0.8 | Git repo + structure | root | Create folder structure from §14.6; initial commit |
+| 0.8 | Git repo + structure | root | Create folder structure from §14.6; initial commit. 🔧²² Add `infra/livekit`, `infra/ec2`, and `infra/env` directories (Section 6 §1) |
 | ➕ 0.9 | Logger config | `lib/logger.ts` | 🔧 Configure logger to **never log request bodies** — NIC/ID data must not appear in logs |
 | ➕ 0.10 | Public health endpoint | `app/api/health/route.ts` | 🔧🔧⁹ Simple public endpoint for UptimeRobot. Response: `{ ok: true, time }` on success; `503 { ok: false }` on Supabase failure. No detail |
 
@@ -118,7 +118,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 |---|---|---|
 | 2A.1 | Login page | `app/(candidate)/login/page.tsx` — MER code + NIC input. 🔧 **Show which exam** the candidate is joining if multiple exist |
 | 2A.2 | Login API | `app/api/auth/login/route.ts` — 🔧 Normalize NIC → hash → verify; check `login_attempts` rate limit (**failed only**); 🔧 **check candidate is assigned to the exam**; create iron-session; revoke older sessions. 🔧⁹ **Exam selection**: if the candidate is assigned to exactly one live/scheduled exam, use it. If multiple, require `exam_id` in the request or return `409 multiple_exams`. Log a `MULTI_LOGIN` event when revoking a session that was in-progress; log `RECONNECTED` when the previous session was not in-progress |
-| 2A.3 | Rate limit check | Query `login_attempts` for count of 🔧 **`success = false`** in last 10 min per MER and per IP. 🔧¹⁰ **All 23 candidates share one office IP** — set the per-IP threshold high enough (e.g. 50+ per 10 min) so legitimate logins are never blocked. The per-MER limit (5 failures) is the real protection |
+| 2A.3 | Rate limit check | Query `login_attempts` for count of 🔧 **`success = false`** in last 10 min per MER and per IP. 🔧¹⁰ **All 23 candidates share one office IP** — set the per-IP threshold high enough so legitimate logins are never blocked. The per-MER limit (5 failures) is the real protection. 🔧²² Set per-IP threshold at ~200 failed attempts per 10 min and per-MER limit at 5 (Section 6 §7) |
 | 2A.4 | Session middleware | `lib/session.ts` — `getSession()` helper for candidate routes. 🔧 **Check session ID against `sessions.revoked_at`** on every candidate API call (not just at login) — makes session revocation actually enforced |
 | 2A.5 | Confirmation page | `app/(candidate)/confirm/page.tsx` — 🔧⁵ show name and outlet **(no photo)**, acknowledge button. 🔧⁹ **This page only navigates** — no API call. The actual acknowledge call happens from the rules screen |
 | 2A.6 | Acknowledge API | `app/api/auth/acknowledge/route.ts` — 🔧⁹ **Called once from the rules screen** with both `identity_confirmed` and `rules_accepted` flags. `acknowledged` means identity confirmed **and** rules accepted. Idempotent |
@@ -239,7 +239,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | # | Task | Files |
 |---|---|---|
 | 4A.1 | Install LiveKit SDK | `package.json` — `livekit-client`, `@livekit/components-react` |
-| 4A.2 | LiveKit Cloud account | Create free account, get API key + secret |
+| 4A.2 | LiveKit Cloud account | Create free account, get API key + secret. 🔧²² Stays for local development only (production uses self-hosted EC2 per Section 6 §2–§4) |
 | 4A.3 | Token generation | `app/api/livekit/token/route.ts` — 🔧⁹🔧¹⁰ candidate token: identity = **`c_{attempt_id}`** (not `cand_{candidateId}` — the kick route needs attempt_id to match), name = `{mer_code} {full_name}`, publish video+audio, subscribe none. Admin token: identity = `admin_{adminId}`, name = `Admin`, publish none, subscribe all, hidden. Use `as: 'candidate' | 'admin'` in the request to select the grant. Admin tokens set `autoSubscribe: false` (grid subscribes selectively) |
 
 ### 4B — Candidate Publishing (0.5 day)
@@ -263,18 +263,18 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 
 ### 4D — Self-hosted LiveKit on EC2 (1 day)
 
-| # | Task | Files |
-|---|---|---|
-| 4D.1 | EC2 setup | Ubuntu, Docker, Elastic IP |
-| 4D.2 | DuckDNS setup | Free subdomain pointing to Elastic IP. 🔧² **LiveKit's config generator may ask for a second hostname for TURN** (Caddy on 443). Check whether DuckDNS supports sub-subdomains (e.g. `turn.examlk.duckdns.org`) — if not, register a second DuckDNS subdomain (e.g. `examlk-turn.duckdns.org`) |
-| 4D.3 | LiveKit Docker Compose | `infra/livekit/docker-compose.yml` — LiveKit server, Caddy, Redis |
-| 4D.4 | Caddy config | `infra/livekit/Caddyfile` — HTTPS with DuckDNS + Let's Encrypt. 🔧² Include the TURN hostname if a second one is needed |
-| 4D.5 | Security group | 🔧 **TCP 80** (for Let's Encrypt cert issuance), TCP 443, 7881; UDP 3478, 50000–60000; SSH restricted. Follow LiveKit's generated port list |
-| 4D.6 | Swap file | 2 GB swap |
-| 4D.7 | Switch `LIVEKIT_URL` | Point to self-hosted instance |
-| 4D.8 | Load test | Test with 🔧 **23 simulated publishers** using LiveKit's load-test tool; monitor CPU and bandwidth |
+| # | Task | Files | Details |
+|---|---|---|---|
+| 4D.1 | EC2 setup | `infra/ec2/setup-ec2.sh`, `check-stack.sh` | Ubuntu Server 24.04 LTS, `t3.small`, 20 GB gp3 disk, Elastic IP (Section 6 §2). Run `setup-ec2.sh` to install Docker, Node 22, Chrony, postgresql-client, rclone, unattended security updates without auto-reboot, swap, and `exam` user (Section 6 §3). Run `check-stack.sh` to verify |
+| 4D.2 | DuckDNS setup | AWS / DuckDNS | 🔧²² Register DuckDNS subdomain, set update URL with Elastic IP once (Section 6 §2.5). 🔧² Second TURN hostname not required if single domain used with Caddy |
+| 4D.3 | LiveKit Docker Compose | `infra/livekit/docker-compose.yml`, `livekit.yaml.example`, `livekit.env.example` | 🔧²² Pinned LiveKit `v1.13.7`, Caddy, Redis with host networking in `/opt/exam-livekit` (Section 6 §4.1, §4.4). Generate keys via `docker run --rm livekit/livekit-server generate-keys` |
+| 4D.4 | Caddy config | `infra/livekit/Caddyfile` | 🔧²² Automated HTTPS reverse proxy for DuckDNS domain to LiveKit signaling on 127.0.0.1:7880 via Let's Encrypt (Section 6 §4.1) |
+| 4D.5 | Security group | AWS Console | 🔧²² Inbound rules (Section 6 §2.3): TCP 22 (SSH from admin IP only), TCP 80 (HTTP / Let's Encrypt), TCP 443 (HTTPS / signaling), TCP 7881 (ICE/TCP fallback), UDP 3478 (TURN/UDP), UDP 50000–60000 (media). Ports 7880 and 6379 strictly closed to internet |
+| 4D.6 | Swap file | EC2 system | 🔧²² 2 GB swap file created by `setup-ec2.sh` to prevent OOM on 2 GB RAM `t3.small` (Section 6 §3, §9) |
+| 4D.7 | Switch `LIVEKIT_URL` | Vercel dashboard | Point `LIVEKIT_URL` to self-hosted DuckDNS instance (`wss://<your DuckDNS name>`) |
+| 4D.8 | Load test | LiveKit CLI / test scripts | Test with 🔧 **23 simulated publishers** using LiveKit's load-test tool; monitor CPU and bandwidth |
 
-**Done when:** grid stays smooth with test tiles; any candidate can be heard on demand; LiveKit disconnect shows the warning without blocking the exam.
+**Done when:** grid stays smooth with test tiles; any candidate can be heard on demand; LiveKit disconnect shows the warning without blocking the exam; 🔧²² video from one candidate on mobile data reaches the admin grid (Section 6 §4.3).
 
 ---
 
@@ -314,7 +314,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | # | Task | Files |
 |---|---|---|
 | 5C.1 | Health check page | `app/(admin)/admin/health/page.tsx` |
-| 5C.2 | Health API | `app/api/admin/health/route.ts` — check Supabase, LiveKit. 🔧⁹ **Gemini key status is read from `api_key_state` table only** (the worker writes it). The health route does NOT hold or check Gemini keys directly. Worker heartbeat from `system_health` table |
+| 5C.2 | Health API | `app/api/admin/health/route.ts` — check Supabase, LiveKit. 🔧⁹ **Gemini key status is read from `api_key_state` table only** (the worker writes it). The health route does NOT hold or check Gemini keys directly. Worker heartbeat from `system_health` table. 🔧²² Return non-200 status when worker heartbeat is over 90s old so an external uptime monitor (UptimeRobot) catches a dead worker (Section 6 §6 item 3) |
 | 5C.3 | Alerts display | Show active alerts from `alerts` table via Realtime |
 | 5C.4 | Resolve alert API | `app/api/admin/alerts/[id]/resolve/route.ts` |
 | ➕ 5C.5 | UptimeRobot setup | 🔧 Configure free UptimeRobot monitor pinging the public health endpoint (0.10). Prevents Supabase free-tier pausing |
@@ -331,13 +331,13 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 
 | # | Task | Files | Details |
 |---|---|---|---|
-| 6A.1 | Worker entry point | `worker/src/index.ts` | Main loop. 🔧²¹ Startup sequence (§7.1): validate config, **single-instance guard** (checks `system_health('worker')`, exits if active instance with different ID has heartbeat <60s), initialize slots and rebuild `used_today` from `grading_log`, reset stuck jobs (>2 min), start 30s heartbeat, 5-min key check, and timers |
+| 6A.1 | Worker entry point | `worker/src/index.ts` | Main loop. 🔧²¹ Startup sequence: validate config, initialize slots and rebuild `used_today` from `grading_log`, reset stuck jobs (>2 min), start 30s heartbeat, 5-min key check, and timers. 🔧²² **Single-instance guard rule (Section 6 §5.4)**: read `system_health('worker')`; if row missing, `status = 'down'`, or heartbeat ≥ 60s: continue; if fresh heartbeat from different instance: poll every 5s for up to 65s; if `last_heartbeat_at` does not advance (previous worker crashed), take over and continue; if it advances, exit code 3. On SIGTERM/SIGINT: write `status = 'down'` and exit 0 for instant planned restarts |
 | 6A.2 | Slot manager | `worker/src/slots.ts` | 🔧²¹ Replaces key manager. Tracks per (key, model) slot (§2.3, §7.3): `cooldown_until`, `disabled`, `last_call_at`, `used_today` (rebuilt from `grading_log` since Pacific midnight), `limit`. Enforces `GRADING_SLOT_MIN_INTERVAL_MS` (12s) and skips slots where `used_today >= limit - GRADING_RESERVE` |
 | 6A.3 | Key state table init | Database / seed | Seed `api_key_state` with key1, key2, key3 |
 | 6A.4 | Job picker | `worker/src/grader.ts` | 🔧²¹ Pick oldest pending job from running runs. Claim with atomic conditional update (`WHERE id = job.id AND status = 'pending' AND tries = <read_tries> RETURNING *`) per §7.2 |
 | 6A.5 | Stuck job reset | `worker/src/grader.ts` | Reset jobs stuck in 'running' for >2 min back to 'pending' |
 | 6A.6 | Health heartbeat | `worker/src/heartbeat.ts` | 🔧 Write to `system_health('worker')` every 30s (not `alerts`). 🔧²¹ Include JSON `detail` (§7.8) with instance UUID, queue counts (pending, running, failed), and per-slot status/usage |
-| ➕ 6A.7 | Alert webhook | `worker/src/alerts.ts` | 🔧 Send critical alerts via **Telegram or Discord webhook**. 🔧²¹ Use dedup keys (§7.10): `key_disabled:{label}`, `keys_exhausted:{run}`, `model_not_found`, `jobs_failed:{run}`, `blocked:{run}`, `run_done:{run}` |
+| ➕ 6A.7 | Alert webhook | `worker/src/alerts.ts` | 🔧 Send critical alerts via **Telegram or Discord webhook**. 🔧²¹ Dedup keys (§7.10): `key_disabled:{label}`, `keys_exhausted:{run}`, `model_not_found`, `jobs_failed:{run}`, `blocked:{run}`, `run_done:{run}`. 🔧²² Format payload by hostname: Discord (`{ "content": text }`) vs Telegram (`{ "text": text }`) with 5s timeout and 1 retry (Section 6 §6). Worker-level alert dedup keys: `worker_started` (INFO, once per start), `guard_exit` (CRITICAL, exit code 3), `supabase_unreachable` (CRITICAL, 5 min failed DB calls) |
 | ➕ 6A.8 | Quota pre-check | `worker/src/dry-run.ts` | 🔧🔧² Dry-run generation call to verify key works. 🔧²¹ Counts toward daily budget: run once per key, not on every start. Live quotas must be checked in AI Studio |
 | ➕ 6A.9 | Worker key check | `worker/src/key-check.ts` | 🔧⁹ Every 5 minutes, per key: call Gemini model-listing endpoint, write `api_key_state` (`active`, or `disabled` on 400/403). Only place keys are used outside grading |
 | ➕ 6A.10 | Pacific day calculator | `lib/grading/quota-day.ts` | 🔧²¹ Start of current Pacific day and next Pacific midnight using `Intl.DateTimeFormat` with `America/Los_Angeles`. Unit-tested across November DST clock change (§7.7) |
@@ -371,7 +371,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 6D.3 | Grading progress page | `app/(admin)/admin/results/page.tsx` | Progress bar, key states, log. 🔧²¹ Shows per-slot usage from `system_health.detail` (`used_today / limit`, cooldowns), queue counts by status, live log tail, and "N not graded" count (§6D.3, §7.8, §8.1) |
 | 6D.4 | Review screen | `app/(admin)/admin/results/[attempt]/page.tsx` | Per-question candidate answer, model answer, AI marks, reason, matched/missing points, confidence, 🔧³ `candidate_meaning_english`. 🔧 Reads from `current_scores` view. 🔧²¹ Display model name and prompt version (`details.model`, `details.prompt_version`). Filter for "needs review" items. Display "N questions not graded" banner (§8.1) |
 | 6D.5 | Override API | `app/api/admin/results/[attempt]/override/route.ts` | 🔧 **Writes to `question_scores`** with source = `override`. 🔧² Override rows are never replaced by regrading (the view guarantees this). 🔧¹⁰ **Rules**: `note` is required (the admin must explain the override), and the attempt must be `finalized`. Returns `override_present: true` so the review screen can show the indicator |
-| 6D.6 | Regrade API | `app/api/admin/results/[attempt]/regrade/route.ts` | 🔧⁹ Regrade single question for one candidate → new grading job with 🔧³ `question_ids = [that_id]`. 🔧² Override always wins; latest `created_at` wins if no override (`current_scores` view). Recalculate totals |
+| 6D.6 | Regrade API | `app/api/admin/results/[attempt]/regrade/route.ts` | 🔧⁹ Regrade single question for one candidate → new grading job with 🔧³ `question_ids = [that_id]`. Preconditions: attempt must be `finalized` (`409 not_finalized`); question must be written with a non-blank answer (`409 nothing_to_grade`). 🔧² Override always wins; latest `created_at` wins if no override (`current_scores` view). Recalculate totals |
 | ➕ 6D.7 | Shared `recomputeResults()` | `lib/grading/recompute.ts` | 🔧¹⁰ Written once and imported by grade route (6D.1), override route (6D.5), and worker. Reads `current_scores` view (never raw `question_scores`), sums totals, upserts `results` |
 | ➕ 6D.8 | Bulk regrade question API | `app/api/admin/exams/[id]/regrade-question/route.ts` | 🔧²¹ Section 5 §8.4: `POST` with `{ question_id }`. Preconditions: exam must be finalized, else `409 exam_not_finalized`; no grading run active (`409 grading_in_progress`); question is written with model answer (`400 not_written` / `409 missing_answer_key`). Creates run (`kind = 'regrade'`) and one job per attempt that has this question with a non-blank answer. Existing overrides preserved. Writes `admin_actions` (`regrade_question`). Response: `202 { run_id, jobs, overrides_kept }` |
 
@@ -427,7 +427,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 8.9 | Test auto-submit | Deadline reached → auto-submit |
 | 8.10 | Test grading | Full grading run with sample answers |
 | 8.11 | Tune thresholds | Adjust `flag_threshold`, viewport % tolerance, focus delay |
-| 8.12 | Finalize runbook | Update §18 based on rehearsal findings. 🔧⁴ **Add runbook step**: tablet users run the pre-exam check the day before the exam (first-time OS camera permission prompts happen then, not during the exam). 🔧⁷ **Add runbook step**: clean test data before the real exam (see 8.30) |
+| 8.12 | Finalize runbook | 🔧²² Exam-day runbook points to Section 6 §10 (replaces §18 of old plan) and 12-scenario failure playbook (Section 6 §11). 🔧⁴ Tablet users run pre-exam check day before. 🔧⁷ Clean rehearsal test data before real exam (see 8.30). Manual backups taken before and after exam |
 | 8.13 | Fix issues | Address any bugs found during rehearsal |
 | ➕ 8.14 | Test browser zoom + OS display scaling | 🔧 In pre-exam check (rehearsal), verify zoom levels and display scaling don't trigger false viewport violations |
 | ➕ 8.15 | Test incident dedup | 🔧 Alt-tab during exam → verify it logs as 1 incident, not 3 separate violations |
@@ -501,9 +501,19 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | ➕ 8.84 | Test regrade question route | 🔧²¹ POST /exams/[id]/regrade-question creates one job per candidate with non-blank answer and keeps overrides |
 | ➕ 8.85 | Test recomputeResults with unscored | 🔧²¹ recomputeResults equals hand-calculated total for paper with MCQ, AI, override, unscored; unscored_count is 1 |
 | ➕ 8.86 | Test Pacific midnight DST | 🔧²¹ nextPacificMidnight is correct on both sides of the November 2026 clock change |
+| ➕ 8.87 | Test guard after crash | 🔧²² Kill worker with `kill -9`; systemd restarts it; new instance polls up to 65s, sees heartbeat not advancing, takes over; grading/scheduler continue, exit code is not 3 |
+| ➕ 8.88 | Test guard after graceful restart | 🔧²² `systemctl restart exam-worker` starts without waiting (previous instance wrote `status = 'down'`) |
+| ➕ 8.89 | Test guard against live second worker | 🔧²² Start second worker manually while service runs; second one exits with code 3 after wait; service keeps running |
+| ➕ 8.90 | Test alert delivery | 🔧²² `curl` webhook manually, then trigger real alert (break one key); message reaches phone with no keys or candidate names |
+| ➕ 8.91 | Test dead worker visibility | 🔧²² Stop worker; within 90s health page shows it stale and health route returns non-200 |
+| ➕ 8.92 | Test reboot recovery | 🔧²² `sudo reboot` EC2; LiveKit, Caddy, Redis (`restart: unless-stopped`) and worker (systemd enabled) recover automatically; TLS cert valid |
+| ➕ 8.93 | Test restore drill | 🔧²² Section 6 §8 item 6: restore latest DB dump into scratch Supabase project with `pg_restore --no-owner --dbname=<url>`; verify app connects and lists exams and candidates |
+| ➕ 8.94 | Test capacity | 🔧²² Section 6 §9: 23 candidates connected for 30 min, 3 admins subscribed; monitor every 15 min (`free -m`, `docker stats`, CloudWatch CPU credits); verify no swap thrash; resize to `t3.medium` if needed |
+| ➕ 8.95 | Test mobile-data publisher | 🔧²² One candidate on mobile data publishes video; admin sees tile on live grid |
+| ➕ 8.96 | Test shared-IP login | 🔧²² 23 logins from one IP within 2 min all succeed; 6 wrong attempts on one MER limited by per-MER threshold |
 
 
-**Done when:** full rehearsal passes with no blocking issues; runbook is finalized.
+**Done when:** full rehearsal passes with no blocking issues; runbook is finalized; 🔧²² restore drill passed; capacity numbers recorded; alert test message received (Section 6 §12).
 
 ---
 
@@ -549,7 +559,7 @@ flowchart TD
 
 ## Issues Cross-Reference
 
-All issues from `Issues.md` (rounds 1–21) are addressed in this plan:
+All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 
 ### Round 1 Issues
 
@@ -887,6 +897,26 @@ All issues from `Issues.md` (rounds 1–21) are addressed in this plan:
 | Chunk size configurable from worker env | Contract §4.6 and plan 6B.1/6D.1 specify chunk size from worker config (default 10, `GRADING_CHUNK_SIZE`) |
 | Regrade single vs bulk wording distinction | 6D.6 (single-candidate) and 6D.8 (bulk for all candidates) clearly distinguished in plan and contracts |
 | Phase 8 tests 8.66–8.86 | Phase 8 (21 new tests covering quota, errors, partial accepts, prompt injection, and DST) |
+
+
+### Round 22 Issues (Section 6 Infra & Ops Integration)
+
+| Issue | Where Addressed |
+|---|---|
+| Single-instance guard crash/deploy trap | 6A.1 (replaces exit on fresh heartbeat with 65s polling check, takes over if heartbeat stalled, exit code 3 if advancing; graceful SIGTERM marks row `down`) |
+| pg_dump server version mismatch | 8.12, 8.93 (check Supabase PG version, install matching postgresql-client-17 from PGDG) |
+| Missing infra templates & scripts | 0.8, 4D.1, 4D.3 (`setup-ec2.sh`, `deploy-worker.sh`, `check-stack.sh`, `backup-db.sh`, `exam-worker.service`, `livekit.env.example`, `web.env.example`, `worker.env.example`) |
+| Tight memory on t3.small (2 GB) | 4D.6 (2 GB swap), 8.94 (capacity check, watch `free -m` and docker stats, resize to t3.medium if needed) |
+| Dead worker unmonitored | 5C.2 (health route returns non-200 if worker heartbeat > 90s stale so UptimeRobot alerts) |
+| Telegram/Discord webhook formats | 6A.7 (detects format from webhook hostname, 5s timeout, 1 retry) |
+| Worker-level alerts & dedup keys | 6A.7 (`worker_started`, `guard_exit`, `supabase_unreachable`) |
+| Credentials persistence in password manager | 0.4 (`SESSION_SECRET` and `NIC_PEPPER` saved in password manager, never changed once candidates imported) |
+| LiveKit Cloud local dev only | 4A.2 (cloud for local dev only, production on self-hosted EC2) |
+| EC2 security group rules | 4D.5 (port 22 restricted to admin IP, 80, 443, 7881, 3478/udp, 50000-60000/udp; 7880 and 6379 internal only) |
+| Exam-day runbook & failure playbook | 8.12 (points to Section 6 §10 runbook replacing §18, plus 12-scenario failure playbook from §11) |
+| Phase 4 mobile data check | Phase 4 Done-when (candidate on mobile data publishes to admin grid) |
+| Phase 8 verification criteria | Phase 8 Done-when (restore drill passed, capacity numbers recorded, alert test received) |
+| Phase 8 tests 8.87–8.96 | Phase 8 (10 new tests for worker takeover, alerts, reboot, restore drill, capacity check, and shared-IP login) |
 
 > [!WARNING]
 > **Docs out of sync**: The main plan (`exam-platform-plan.md`) SQL schema and worker sections are still v3. The authoritative schema is now `SECTIONS/001_initial.sql`, the API contracts in `SECTIONS/section-3-api-contracts.md`, and the task edits in `SECTIONS/section-1-migration.md`. **Do not copy SQL from the main plan** — use the Section files. The main plan should be updated separately once implementation begins.

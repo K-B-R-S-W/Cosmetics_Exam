@@ -274,7 +274,7 @@ Rows are written with `ON CONFLICT DO NOTHING` (Appendix A index), then the job 
 ### 7.1 Startup
 
 1. Load and validate config. At least one key and one model are required; log labels only.
-2. **Single-instance guard.** Read `system_health('worker')`. If `last_heartbeat_at` is under 60 s old and its `detail.instance` is a different id, **exit**. This matters because development and production share one database: a worker running on a laptop must not take real jobs.
+2. **Single-instance guard** (Section 6 §5.4). Read `system_health('worker')`. If the row is missing, `status = 'down'`, or `last_heartbeat_at` is 60 s old or more: continue. Otherwise (a different `detail.instance` with a fresh heartbeat): re-read the row every 5 s for up to 65 s. If `last_heartbeat_at` never changes, the other worker is dead: take over. If it advances, **exit with code 3**. On SIGTERM or SIGINT write `status = 'down'` and exit 0. This still keeps a laptop worker off the shared database, because its heartbeat keeps advancing.
 3. Build the slots, rebuild `used_today` from `grading_log` since the last Pacific midnight (section 7.7).
 4. Reset stuck jobs (`running` with `locked_at` older than 2 minutes back to `pending`), then start the timers: heartbeat (30 s), key check (5 min, task 6A.9), scheduler and purge (Section 6 spec).
 
@@ -354,7 +354,7 @@ Events: `worker_start`, `call` (HTTP 200 reached the model; counts toward the da
 
 ### 7.10 Alerts
 
-Dedup keys (so a 2-second loop cannot flood the webhook): `key_disabled:{label}`, `keys_exhausted:{run}`, `model_not_found`, `jobs_failed:{run}`, `blocked:{run}`, and `run_done:{run}` (info). The webhook wording is in the Section 6 (infra) spec.
+Dedup keys (so a 2-second loop cannot flood the webhook): `key_disabled:{label}`, `keys_exhausted:{run}`, `model_not_found`, `jobs_failed:{run}`, `blocked:{run}`, and `run_done:{run}` (info). Worker-level keys (Section 6 §6): `worker_started` (info), `guard_exit` (critical), `supabase_unreachable` (critical, after 5 minutes of failed database calls). The webhook wording and formats are in the Section 6 (infra) spec.
 
 ---
 

@@ -651,7 +651,7 @@ Steps:
 2. For each attempt that has a paper (people who never joined have no `attempt_questions` and get no scores; they show as "absent" with a null percent):
    - **MCQ, in code:** insert `question_scores (source='mcq')`, full marks when `selected_option_id = correct_option_id`, otherwise 0 (`reason: 'No answer'` when blank). `max_marks` = the question's marks.
    - **Written and blank:** insert `question_scores (source='ai', marks=0, reason='No answer submitted', details={auto_zero:true})`. No Gemini call.
-   - **Written and not blank:** group into chunks of chunk size from worker config (default 10, `GRADING_CHUNK_SIZE`) per attempt and insert `grading_jobs` (`chunk_index` 0, 1, …; `question_ids` = that chunk).
+   - **Written and not blank:** group into chunks of `GRADING_CHUNK_SIZE` (default 10) per attempt and insert `grading_jobs` (`chunk_index` 0, 1, …; `question_ids` = that chunk).
 3. Recompute `results` for each attempt (formula in 4.6.1).
 4. If no jobs were created (for example an all-MCQ exam), set the run to `done` right away.
 

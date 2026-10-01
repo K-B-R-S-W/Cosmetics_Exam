@@ -158,7 +158,7 @@ begin
 
     v_vc_before := (select violation_count from public.attempts where id = v_att);
 
-    delete from public.violation_events where attempt_id = v_att and type = 'FOCUS_LOST';
+    delete from public.violation_events where attempt_id = v_att and type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED');
 
     insert into public.violation_events (attempt_id, type, counts, meta)
     values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '10 minutes')::timestamptz::text))
