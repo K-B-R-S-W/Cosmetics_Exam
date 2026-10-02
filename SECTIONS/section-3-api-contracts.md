@@ -134,6 +134,8 @@ New or changed files compared with the plan are marked **NEW**.
 | 39 | `GET /api/admin/results/export` | admin | 7.4 | tables |
 | 40 | `PATCH /api/admin/events/[id]` **NEW (3B.7)** | admin | 3B.7 | `violation_events` update |
 | 41 | `POST /api/admin/exams/[id]/regrade-question` **NEW (6D.8)** | admin | 6D.8 | `grading_runs`, `grading_jobs` insert |
+| 42 | `GET /api/question-images/[questionId]` **NEW** | candidate | 1E.2 | private Storage download |
+| 43 | `POST, DELETE /api/admin/question-images` **NEW** | admin | 1E.2 | private Storage upload/delete |
 
 Candidate page flow and which routes each page uses:
 
@@ -161,6 +163,7 @@ type Question = {
   position: number;            // 0-based position in THIS candidate's paper
   type: 'mcq' | 'written';
   body_html: string;           // already sanitized
+  image: { url: string; alt_text: string; width?: number; height?: number } | null;
   marks: number;
   options?: { id: string; text_html: string }[];   // mcq only, in this candidate's saved order.
                                                    // No `label` and no correct flag, ever.
@@ -194,7 +197,7 @@ type StateBody = {
     deadline: string | null;   // exams.ends_at + extra_minutes; null until the exam starts
     submit_reason: 'manual' | 'auto' | 'forced' | null;
   };
-  broadcast: { id: string; message: string; sent_at: string } | null;  // latest message, last 10 min only
+  announcements: { id: string; message: string; sent_at: string }[]; // last 10 min, oldest first
 };
 ```
 
@@ -205,7 +208,7 @@ type StateBody = {
 | `submitted` | attempt status is `submitted` or `finalized` |
 | `live` | exam `live`, not force-ended, and `now <= deadline` |
 | `waiting` | exam `draft` or `scheduled` |
-| `closed` | anything else (exam ended or force-ended, or the deadline passed, and the attempt is not submitted yet). The client locks the inputs, flushes, calls submit with `reason: 'auto'`, then goes to the done page |
+| `closed` | anything else (exam ended or force-ended, or the deadline passed, and the attempt is not submitted yet). The client locks inputs and flushes. Ordinary timeout submits as `auto`; on force-end the server derives `forced` and accepts the final flush during the 15-second collection window |
 
 The answer key tables are never read by any route in this section. Candidate routes select explicit columns only.
 
@@ -285,9 +288,9 @@ Response: `200 { "attempt": { "status": "acknowledged" } }`.
 Called by the done page. Sets `revoked_at` on the current session, clears the cookie. `200 { "ok": true }`. A candidate who refreshes the done page afterwards lands on login, which is fine.
 
 ### 3.7 `GET /api/exam/state` — candidate
-Returns `StateBody` (3.0). Two queries (attempt joined with exam, latest broadcast). It never calls `generate_paper`, so asking for state cannot start anyone's exam. Called on page load, on every Broadcast message, and on reconnect.
+Returns `StateBody` (3.0): attempt joined with exam plus the last 10 minutes of announcements. It never calls `generate_paper`, so asking for state cannot start anyone's exam. Called on page load, on every Broadcast nudge, and on reconnect.
 
-`broadcast` is the newest `broadcasts` row for the exam from the last 10 minutes. The client shows each broadcast `id` once.
+`announcements` contains all `broadcasts` rows for the exam from the last 10 minutes, ordered by `sent_at, id`. The client keeps a set of shown ids for the session, queues unseen rows in order, shows each as a top-right toast for 5 seconds, and never treats Realtime payload text as authoritative.
 
 ### 3.8 `GET /api/exam/paper` — candidate
 Starts or resumes the paper. Calls `rpc('generate_paper', { p_attempt_id })`, which is idempotent: the first call builds the paper (question pool, shuffle, option order) and moves the attempt to `in_progress`; later calls return the saved one. Calling it before the exam is live fails, which is how "the paper is not loaded until the time" is enforced on the server.
@@ -296,7 +299,7 @@ Starts or resumes the paper. Calls `rpc('generate_paper', { p_attempt_id })`, wh
 {
   "server_time": "<iso>",
   "navigation_mode": "free",
-  "total_questions": 20,
+  "total_questions": 27,
   "current_position": 0,
   "questions": [ /* Question[] */ ],
   "answers": { "<question_id>": { /* SavedAnswer */ } }
@@ -304,7 +307,9 @@ Starts or resumes the paper. Calls `rpc('generate_paper', { p_attempt_id })`, wh
 ```
 - `free`: all questions in paper order, and saved answers for all of them. `current_position` is `null`.
 - `sequential`: exactly **one** question, the one at `attempts.current_position`, and its saved answer if any. Nothing later is sent.
-- Implementation: after `generate_paper`, fetch `questions` and `mcq_options` by id with explicit columns (`id, type, body_html, marks` and `id, text_html`). Order options by the saved `option_order`. Never join `answer_keys`.
+- Implementation: after `generate_paper`, fetch `questions` and `mcq_options` by id with explicit columns (`id, type, body_html, image_path, image_alt_text, marks` and `id, text_html`). Order options by the saved `option_order`. Never join `answer_keys`. When `image_path` exists, expose only the authenticated `/api/question-images/{questionId}` URL plus alt text; never expose the private bucket path or a service key.
+
+**`GET /api/question-images/[questionId]`** verifies that the authenticated candidate's `attempt_questions` contains the question, downloads the object from the private `question-images` bucket with the service role, and streams it with the stored MIME type, `X-Content-Type-Options: nosniff`, and a private cache policy. It returns `404` for both a question outside the paper and a missing image, so paper membership cannot be probed. Admin previews use the admin image route or a short-lived signed URL after `requireAdmin()`.
 
 Errors (from the function):
 
@@ -381,10 +386,10 @@ Request:
   ]
 }
 ```
-- `reason`: `manual` (default) or `auto`. `forced` is admin-only and is rejected with `400`. (The worker also writes `auto` when a deadline passes with no submit; see §7.)
-- `pending_answers` (optional, at most 50): answers the client has not been able to send yet. The route calls `save_answer` for each, then submits. This is the final flush in **one** request, which is much more reliable than N requests on a slow network at the deadline. In sequential mode only the current question can be saved, and the others come back as `wrong_position` in `save_results`.
-- Guard: the attempt must be `in_progress`. An `acknowledged` or `not_started` attempt gets `409 not_started` (the DB function would allow it, see section 0, item 3).
-- Then `rpc('submit_attempt', { p_attempt_id, p_reason })`. It has no deadline check on purpose: a submit that lands just after the deadline still closes the attempt.
+- `reason`: `manual` (default) or `auto`. A candidate-supplied `forced` is rejected with `400`. When the exam is force-ended and still inside its 15-second collection window, the server ignores the requested reason and derives `forced` from `exams.force_ended_at`. Ordinary deadline expiry remains `auto`.
+- `pending_answers` (optional, at most 50 **per request**, not per paper): answers the client has not been able to send yet. This transport batch size does not limit question count. If more than 50 are queued, the client flushes earlier batches through `/api/answers` before this final request. The route calls `save_answer` for each provided item, then submits. In sequential mode only the current question can be saved, and the others come back as `wrong_position` in `save_results`.
+- Guard: the attempt must be `in_progress`. An `acknowledged` or `not_started` attempt gets `409 not_started`. A force-ended attempt may make this final request until `force_ended_at + 15 seconds`; later calls return `409 collection_closed`.
+- Then call `rpc('submit_attempt', { p_attempt_id, p_reason: effectiveReason })`, where `effectiveReason` is derived as above. It has no deadline check on purpose: the route performs the authorization/window checks before closing the attempt.
 
 Response: `200 { "submitted": true, "already_submitted": false, "save_results": [{ "question_id": "...", "result": "saved" }], "server_time": "<iso>" }`.
 `already_submitted` is `true` when the function returned `false` (for example the scheduler got there first).
@@ -541,6 +546,7 @@ Admin only. This is the only route that returns answer keys together with questi
   "exam_id": "<uuid>",
   "type": "mcq",
   "body_html": "<p>Which ingredient ...</p>",
+  "image": null,
   "marks": 1,
   "position": null,
   "options": [{ "text_html": "Niacinamide", "is_correct": true }, { "text_html": "Water", "is_correct": false }],
@@ -550,11 +556,14 @@ Admin only. This is the only route that returns answer keys together with questi
 - `marks`: **optional**. When the admin leaves it out it is saved as `1` (the column default, and grading needs a number). When given: above 0, at most 999.99 (the column is `numeric(5,2)`). `position` defaults to the end.
 - `mcq`: 2 to 10 options and exactly one `is_correct`. Labels (`a`, `b`, `c`…) are assigned by the server from the order.
 - `written`: no `options`. `answer_key.model_answer` is optional here.
+- `image` is `null` or the complete upload metadata from `/api/admin/question-images`; the server rejects partial or mismatched metadata before the database all-or-none constraint does.
 - The server writes `questions`, then `mcq_options`, then `answer_keys`, in that order. The order is chosen so that saving the same question again repairs any partial failure (there is no multi-table transaction in the JS client; if you want one, move this into a `save_question()` database function later).
 - `201 { "question": { ...same shape as GET } }`.
 
 **`PATCH /api/admin/questions/[id]`** (NEW file)
-`{ "body_html"?, "marks"?, "options"? }`. `type` cannot change (`400 type_immutable`): delete and recreate. `options` is a full replacement list: items with an `id` are updated, items without are inserted, ids missing from the list are deleted. Same MCQ rules as create.
+`{ "body_html"?, "marks"?, "options"?, "image"? }`. `image` is either `null` (remove it) or the complete metadata returned by the upload route. `type` cannot change (`400 type_immutable`): delete and recreate. `options` is a full replacement list: items with an `id` are updated, items without are inserted, ids missing from the list are deleted. Same MCQ rules as create.
+
+**`POST /api/admin/question-images`** accepts `multipart/form-data` with one file plus required `alt_text`. Allow only JPEG, PNG and WebP after checking both the declared MIME type and decoded file signature; maximum 5 MB. Re-encode or reject malformed input, generate the object path server-side (`questions/{admin_id}/{uuid}.{ext}`), upload to the private `question-images` bucket, and return all metadata needed by the all-or-none database constraint. Do not trust a client path or filename. **`DELETE`** permits an authenticated admin to remove their own unattached upload or an image owned by a question they may edit. Replacing/removing an attached image deletes the old object after the question row commits, with a retryable cleanup job if deletion fails. The worker purges objects older than 24 hours that are not referenced by any `questions.image_path`, covering abandoned create forms and failed saves.
 
 **`DELETE /api/admin/questions/[id]`** (NEW)
 Draft or scheduled exams only.
@@ -596,11 +605,12 @@ The worker's scheduled start must use the same conditional update, so the two ca
 
 **`POST /api/admin/exams/[id]/force-end`**
 `{ "confirm": true }` (required, `400` without it). Exam must be `live` (`409 invalid_status`).
-1. `update exams set status='ended', ends_at=now(), force_ended_at=now() where id = X and status='live'` (this alone makes `save_answer` return `closed` for everyone).
-2. For every attempt that is not yet submitted (including people who never joined, so the exam can finalize), `rpc('submit_attempt', { p_reason: 'forced' })`.
-3. Publish `exam_ended`.
+1. Atomically `update exams set status='ended', ends_at=now(), force_ended_at=now() where id = X and status='live'`. Candidate screens lock immediately.
+2. Immediately submit `not_started` and `acknowledged` attempts as `forced`. Leave `in_progress` attempts open only for final answer collection: `save_answer` and the submit route accept their pending answers until `force_ended_at + 15 seconds`; no navigation or continued editing is allowed.
+3. Publish `exam_ended`. Connected clients flush `pending_answers`; the submit route derives `forced` server-side and closes each attempt.
+4. After 15 seconds the worker submits every remaining attempt as `forced` from the latest answers already stored, then finalizes. Partial written answers are graded like any other non-blank answer.
 
-`200 { "exam": { "status": "ended", "ends_at": "<iso>", "force_ended_at": "<iso>" }, "submitted": 21, "already_submitted": 2 }`. The worker finalizes on its next tick. Typing in the last second before the click can be lost, so the admin page warns before confirming.
+`202 { "exam": { "status": "ended", "ends_at": "<iso>", "force_ended_at": "<iso>" }, "collection_deadline": "<iso>", "collecting": 21, "already_submitted": 2 }`. Final counts are available after the collection window.
 
 **`POST /api/admin/attempts/[id]/force-submit`**
 `{ "confirm": true }`. `rpc('submit_attempt', { p_reason: 'forced' })`. `200 { "submitted": true }`, or `false` if already submitted. Publishes `attempt_changed`.
@@ -610,7 +620,7 @@ Empty body. Revokes every active session of that attempt's candidate (`revoked_a
 `200 { "revoked_sessions": 1, "livekit_removed": true }`.
 
 **`POST /api/admin/exams/[id]/broadcast`**
-`{ "message": "Five minutes left." }` (1 to 300 chars, plain text). At most **10 broadcasts per exam** (`409 broadcast_limit`; the plan's 5A.5 limit, which the contract had left out). Exam must be `scheduled` or `live`. Inserts a `broadcasts` row, publishes `message`. `200 { "id": "<uuid>" }`. The text reaches candidates through `broadcast` in the state response, not through the Broadcast payload (section 6).
+`{ "message": "Five minutes left." }` (1 to **5,000** characters after trimming, plain text). There is **no per-exam count limit**. Exam must be `scheduled` or `live`. Inserts a `broadcasts` row, publishes the content-free `message` nudge, and returns `200 { "id": "<uuid>" }`. Candidates fetch the authoritative announcement list from state; Discord and Telegram are not used.
 
 ### 4.5 Operations (super admin)
 
@@ -746,7 +756,7 @@ Candidate status words (4C.5) are derived on the page. The rules and their order
 | `exam_ended` | force-end route | none |
 | `time_updated` | extend (everyone) | none |
 | `attempt_changed` | extend (one person), force-submit, kick | `attempt_id` (only that candidate's page needs to refetch, but a refetch by anyone is harmless) |
-| `message` | broadcast route | none (the text comes from `state.broadcast`) |
+| `message` | announcement route | none (the text comes from `state.announcements`) |
 
 - Server publishing uses the Supabase Realtime REST broadcast endpoint, or the JS client's HTTP send *(verify the current method)*. A failed publish is logged and **never** fails the admin action, because the 10 s heartbeat is the backup.
 - A client that reconnects to the channel refetches state once.
@@ -760,15 +770,16 @@ These are worker-side behaviours the contracts above depend on. The proctoring s
 | Behaviour | Rule |
 |---|---|
 | Scheduled start | Every 30 s: for exams `scheduled` with `scheduled_start_at <= now()`, run the **same conditional update as the Start route** |
-| Exam end and finalize | As 2F.5: submit each attempt after its own `grace_deadline` with reason **`'auto'`** (time ran out; `'forced'` is only for the admin's End exam and Submit-for-candidate, so the candidate's Done page and the results summary can tell them apart), mark `ended` after the last one, then `finalized` (attempts `submitted` → `finalized`) |
+| Exam end and finalize | Ordinary deadlines: submit each attempt after its own `grace_deadline` with reason **`auto`**. Admin force-end: wait only until `force_ended_at + 15 seconds`, then submit remaining attempts with **`forced`** from their latest stored answers. Finally mark submitted attempts `finalized`. Partial non-blank written answers always receive Gemini grading |
 | `DISCONNECTED` events | **Two-pass rule (send-on-end model).** **Pass 1 (30s):** every 30 s, for `in_progress` attempts with `last_seen_at` older than 30 s, insert `DISCONNECTED` with `counts = false`, `meta.last_seen_at` = the attempt's current `last_seen_at` (exact timestamptz string from the DB), and no `meta.count_reason`. Skip if the attempt's most recent `DISCONNECTED`/`RECONNECTED` is already a `DISCONNECTED`. **Pass 2:** every 30 s, call `resolve_disconnects()` (RPC, `revoke execute from public, anon, authenticated; grant to service_role`). This function runs two guarded statements: **(1) Mark overlaps** — rows where a focus-type event's interval (using `coalesce(f.duration_ms, 0)`) starts inside the gap get `count_reason = 'overlap'`. The interval rule (Section 4 §5): only the lower bound matters (`incident_end >= gap_start - 10s`); the old upper-bound check on `f.occurred_at` is removed, so an incident starting anywhere inside the gap counts as overlap. **(2) Flip remaining** — unmatched rows get `counts = true, count_reason = 'long_gap'`. Both include `a.status = 'in_progress'`, `coalesce(f.duration_ms, 0)`, `count_reason IS NULL` guard, and `timestamptz` casts. The trigger handles +1/-1. If a late focus event arrives after a flip, the events route calls `reverse_disconnects_for_incident(event_id)` — only touches `long_gap` rows. The heartbeat route sets `count_reason = 'short_gap'` (uses `coalesce(meta, '{}'::jsonb)` and `IS NULL` guard). **Worker reversal safety net:** after Pass 2, call `reverse_disconnects_for_incident()` for any attention incidents inserted in the last 5 minutes (idempotent) |
 | Key check | Every 5 minutes, per key: call the model-listing endpoint, then write `api_key_state` (`active`, or `disabled` with `last_error` on 400/403). This is the only place Gemini keys are used outside grading |
 | Grading jobs | See Section 5 §7. When the last job of an attempt finishes, call `recomputeResults(attemptId)`. The worker auto-resumes pauses it caused itself (`keys_exhausted`) |
 | Snapshot purge | Once a day, the same shared function as `POST /api/admin/snapshots/purge` with the default retention |
+| Unattached question images | Once a day, delete `question-images` objects older than 24 hours that no `questions.image_path` references; never delete referenced exam content |
 | Worker heartbeat | `system_health` row every 30 s (6A.6) |
 | Shared code | `recomputeResults`, the conditional start update, and the snapshot purge are written once and imported by both the Next.js app and the worker |
 
-New environment variables: `SNAPSHOT_RETENTION_DAYS` (default `14`), `NEXT_PUBLIC_LIVEKIT_URL`. Already planned: `NIC_PEPPER`, the session secret, the Supabase keys, the LiveKit key and secret, `ALERT_WEBHOOK_URL`. The Gemini keys go **only** in the worker's environment.
+New environment variables: `SNAPSHOT_RETENTION_DAYS` (default `14`), `NEXT_PUBLIC_LIVEKIT_URL`. Already planned: `NIC_PEPPER`, the session secret, the Supabase keys, and the LiveKit key and secret. Gemini keys go **only** in the worker environment. There is no Discord/Telegram alert webhook.
 
 ---
 
@@ -786,7 +797,7 @@ New environment variables: `SNAPSHOT_RETENTION_DAYS` (default `14`), `NEXT_PUBLI
 | 2A.5 / 2A.6 / 2B.6 | The confirm screen only navigates. Acknowledge is called once from the rules screen with both flags |
 | ➕ 2A.7 | `GET /api/auth/me` (3.4) |
 | ➕ 2A.8 | `POST /api/auth/logout` (3.6) |
-| 2B.3 / 2B.5 | Heartbeat returns the same `StateBody` and is the 10 s poll. Add `phase` and `broadcast` to state |
+| 2B.3 / 2B.5 | Heartbeat returns the same `StateBody` and is the 10 s poll. Add `phase` and `announcements` to state |
 | 2C.1 | Response shape from 3.8. Options have no `label`; the UI letters them A, B, C… by position |
 | 2E.2 / 2E.4 | Revision rule from 3.9 (continue from the server revision; recover on `stale_revision` using `server_revision`) |
 | 2F.1 / 2F.2 | Submit accepts `pending_answers` and requires `in_progress` (3.11) |
@@ -826,7 +837,7 @@ New environment variables: `SNAPSHOT_RETENTION_DAYS` (default `14`), `NEXT_PUBLI
 11. Candidate calls to any `/api/admin/*` route return `401` or `403`; an admin without a profile row gets `403`.
 12. `PATCH` on `navigation_mode` after start returns `409 exam_locked`; question create, delete and reorder after start do the same; an answer-key edit after start succeeds.
 13. Two admins extend the exam at the same moment: both extensions are applied.
-14. Force-end: every attempt (including not joined) is `submitted` with reason `forced`, and a save one second later returns `closed`.
+14. Force-end: screens lock immediately; a connected candidate's pending and partial written answer is accepted inside the 15-second collection window and submitted as `forced`; a later write is rejected; the worker force-submits disconnected and never-started attempts after the window.
 15. Unassigning a started candidate returns them in `blocked`.
 16. `grade` before finalization returns `409`; with a missing key returns `missing_answer_keys`; a blank written answer is scored 0 with no Gemini job.
 17. Override then regrade the same question: the override stays current and `override_present` is `true`.

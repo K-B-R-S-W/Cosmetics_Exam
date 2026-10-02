@@ -6,7 +6,7 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 - `001_initial.sql` → save as `supabase/migrations/001_initial.sql`
 - `001_smoke_test.sql` → run once after the migration, in the SQL editor (it rolls itself back)
 
-> **Not executed here.** There is no Postgres in my sandbox, so I could not run this SQL. I reviewed it line by line, but the smoke test is the real proof: run it on your Supabase project before building on top of it. It needs Postgres 15+ (`security_invoker` views), which new Supabase projects have.
+> **Local verification:** `001_initial.sql`, `002_grading.sql`, and `001_smoke_test.sql` passed together in a clean temporary PostgreSQL 17 container on 2 Oct 2026, using minimal mocks for Supabase `auth`, `storage`, roles, and Realtime publication. This proves PostgreSQL syntax, constraints, functions, triggers, and the smoke assertions (including the half-filled image regression), but it is not hosted Supabase acceptance. Run the same smoke test against the current Supabase PostgreSQL **17.11** project before building on it.
 
 ---
 
@@ -19,6 +19,16 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 4. SQL editor → paste `001_smoke_test.sql` → Run. Expect the notice **SMOKE TEST PASSED**.
 5. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, `exams` are in the `supabase_realtime` publication.
 
+**Existing Supabase project:** do not rerun `001_initial.sql`. During implementation, create a new reviewed migration for the delta (question-image columns/constraint and bucket, 5,000-character announcement constraint, force-end collection rule, and any other changed objects). The deployment migration must include the already-decided threshold change:
+
+```sql
+alter table public.exams
+alter column flag_threshold
+set default 10;
+```
+
+Run that migration only after implementation and its local PostgreSQL 17 smoke tests pass.
+
 ---
 
 ## 2. What changed compared with the plan
@@ -26,6 +36,8 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 | Change | Why |
 |---|---|
 | **Photos removed** (`photo_url` gone) | Everyone is in the office |
+| **Optional question images added** | MCQ and written questions may reference one private `question-images` object. Metadata is all-or-none; the smoke test proves a half-filled record is rejected despite PostgreSQL `CHECK`/`NULL` semantics |
+| **Announcements are 1–5,000 characters with no count cap** | Matches the current in-app announcement requirement |
 | **`violation_events` = one row per incident**, with `merged_types` and `counts` | The plan merges events within ~3 s into one incident, but nothing stored that. `attempts.violation_count` is bumped by a trigger only for counting rows (`RECONNECTED` etc. use `counts = false`) |
 | **`grading_jobs` has `chunk_index`**, unique on `(run_id, attempt_id, chunk_index)` | The plan said 2–3 jobs per candidate per run but keyed jobs by `(run_id, attempt_id)`, which collides. A single-question regrade is its own run (`kind = 'regrade'`) |
 | **Attempts are created when a candidate is assigned** (trigger) | The live grid must show "Not joined" for all 23 before anyone logs in |
@@ -47,7 +59,7 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 | 1A.1 | Replace with: "Save Section 1's `001_initial.sql` as `supabase/migrations/001_initial.sql`. Do not hand-write schema from the task rows." |
 | 1A.3–1A.4 | Done in the file (RLS on every table; admins full access; super-admin-only for `alerts`, `system_health`, `api_key_state`; `sessions` and `login_attempts` are service-role only) |
 | 1A.5 | Realtime tables are now `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, **`exams`** |
-| 1A.6 | Done in the file (private `snapshots` bucket and admin read policy) |
+| 1A.6 | Done in the file (private `snapshots` and `question-images` buckets and admin read policies; candidate image reads go through the authenticated API) |
 | 1A.7 | Admin users are created in the dashboard, then add their `admin_profiles` row (step 3 above). `api_key_state` (key1–key3) and `system_health` (`worker`) are seeded by the file |
 | 1A.8–1A.20 | Done in the file |
 | 1C.3 | No photo field |
@@ -55,7 +67,7 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 | 2C.2 | Call `supabase.rpc('generate_paper', { p_attempt_id })`. It raises `not_acknowledged`, `attempt_closed`, `exam_not_live`, `exam_has_no_questions`; map them to HTTP 403/409. It also moves the attempt to `in_progress` |
 | 2E.4 | The answers route calls `rpc('save_answer', …)` and only maps the returned text (table below). Position guard, revision, deadline, force-end and option checks are inside |
 | 2F.1 / 2F.2 | Call `rpc('submit_attempt', { p_attempt_id, p_reason })` with `'manual'` or `'auto'` |
-| 2F.5 / 5A.3 | Scheduler and force-end use `'forced'`. Per-attempt deadline comes from the `attempt_deadlines` view (`grace_deadline`). Exam goes `ended` after the last `grace_deadline`, then `finalized` (also set attempts `submitted → finalized`) |
+| 2F.5 / 5A.3 | Ordinary timeout uses `'auto'`. Admin force-end locks screens immediately, accepts final pending answers for 15 seconds, then the worker uses `'forced'` for remaining attempts and finalizes. Per-attempt ordinary deadlines come from `attempt_deadlines` |
 | 2F.6 | Call `rpc('advance_position', { p_attempt_id, p_expected_position, p_question_id, p_answer_text, p_selected_option_id, p_revision })` (see results table) |
 | 3A.1 / 3B.1 | The client merges events within ~3 s and sends **one** row: `type` = first event, `merged_types` = the rest. Informational events (`RECONNECTED`) send `counts: false` |
 | 3C.2 | The badge reads `attempts.violation_count` (Realtime on `attempts`) |
@@ -70,7 +82,7 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 |---|---|---|
 | `saved` | Stored | 200 |
 | `stale_revision` | A newer revision already stored | 200, client drops its queued write |
-| `closed` | Not in progress, exam not live, force-ended, or past deadline + 15 s | 409 `exam_closed` (client locks the UI) |
+| `closed` | Not in progress, outside the normal deadline grace, or outside the 15-second admin force-end collection window | 409 `exam_closed` (client locks the UI) |
 | `wrong_position` | Sequential mode, not the current question | 409 |
 | `not_in_paper`, `bad_option` | Invalid input | 400 |
 | `not_found` | Unknown attempt | 404 |
@@ -93,7 +105,7 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 ```sql
 -- =====================================================================
 -- 001_initial.sql  —  Exam platform: consolidated initial migration
--- Target: a FRESH Supabase project (Postgres 15+).
+-- Target: a FRESH Supabase project (current project: PostgreSQL 17.11).
 -- Run once in the Supabase SQL editor, or place in supabase/migrations/.
 -- Order: extensions -> tables -> indexes -> functions/triggers
 --        -> RLS/policies -> views -> realtime/storage -> seed -> hardening
@@ -141,7 +153,7 @@ create table public.exams (
   navigation_mode     text not null default 'free' check (navigation_mode in ('free', 'sequential')),
   questions_per_paper int  check (questions_per_paper is null or questions_per_paper > 0),
   shuffle             boolean not null default false,
-  flag_threshold      int  not null default 10 check (flag_threshold > 0),
+  flag_threshold      int  not null default 10 check (flag_threshold between 1 and 100),
   is_practice         boolean not null default false,
   created_by          uuid references public.admin_profiles (id) on delete set null,
   created_at          timestamptz not null default now(),
@@ -163,8 +175,22 @@ create table public.questions (
   position   int  not null,                    -- admin ordering; not unique so drag-and-drop reorders are simple
   type       text not null check (type in ('mcq', 'written')),
   body_html  text not null,                    -- sanitized server-side (sanitize-html) before insert
+  image_path text,                             -- path in private 'question-images' bucket
+  image_alt_text text,                         -- required when an image is present
+  image_mime text,
+  image_size_bytes int,
   marks      numeric(5,2) not null default 1 check (marks > 0),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint questions_image_all_or_none check (
+    num_nonnulls(image_path, image_alt_text, image_mime, image_size_bytes) = 0
+    or (
+      num_nonnulls(image_path, image_alt_text, image_mime, image_size_bytes) = 4
+      and btrim(image_path) <> ''
+      and btrim(image_alt_text) <> ''
+      and image_mime in ('image/jpeg', 'image/png', 'image/webp')
+      and image_size_bytes between 1 and 5242880
+    )
+  )
 );
 
 create table public.mcq_options (
@@ -362,7 +388,7 @@ create table public.admin_actions (
 create table public.broadcasts (
   id       uuid primary key default gen_random_uuid(),
   exam_id  uuid not null references public.exams (id) on delete cascade,
-  message  text not null,
+  message  text not null check (char_length(btrim(message)) between 1 and 5000),
   sent_at  timestamptz not null default now()
 );
 
@@ -408,15 +434,98 @@ create trigger trg_results_updated_at
 create or replace function public.bump_violation_count()
 returns trigger language plpgsql as $$
 begin
-  if new.counts then
-    update public.attempts set violation_count = violation_count + 1 where id = new.attempt_id;
+  if tg_op = 'INSERT' then
+    if new.counts then
+      update public.attempts set violation_count = violation_count + 1 where id = new.attempt_id;
+    end if;
+  elsif tg_op = 'UPDATE' then
+    if old.counts = false and new.counts = true then
+      update public.attempts set violation_count = violation_count + 1 where id = new.attempt_id;
+    elsif old.counts = true and new.counts = false then
+      update public.attempts set violation_count = greatest(violation_count - 1, 0) where id = new.attempt_id;
+    end if;
   end if;
   return new;
 end $$;
 
 create trigger trg_violation_events_count
-  after insert on public.violation_events
+  after insert or update of counts on public.violation_events
   for each row execute function public.bump_violation_count();
+
+create or replace function public.resolve_disconnects()
+returns void language plpgsql as $$
+begin
+  update public.violation_events ve
+  set meta = jsonb_set(ve.meta, '{count_reason}', '"overlap"')
+  from public.attempts a
+  where a.id = ve.attempt_id
+    and ve.type = 'DISCONNECTED'
+    and ve.counts = false
+    and ve.meta->>'count_reason' is null
+    and (ve.meta->>'last_seen_at')::timestamptz < now() - interval '2 minutes'
+    and a.last_seen_at = (ve.meta->>'last_seen_at')::timestamptz
+    and a.status = 'in_progress'
+    and exists (
+      select 1 from public.violation_events f
+      where f.attempt_id = ve.attempt_id
+        and f.type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED')
+        and f.occurred_at + (coalesce(f.duration_ms, 0) * interval '1 millisecond')
+            >= (ve.meta->>'last_seen_at')::timestamptz - interval '10 seconds'
+    );
+
+  update public.violation_events ve
+  set counts = true,
+      meta = jsonb_set(ve.meta, '{count_reason}', '"long_gap"')
+  from public.attempts a
+  where a.id = ve.attempt_id
+    and a.status = 'in_progress'
+    and ve.type = 'DISCONNECTED'
+    and ve.counts = false
+    and ve.meta->>'count_reason' is null
+    and (ve.meta->>'last_seen_at')::timestamptz < now() - interval '2 minutes'
+    and a.last_seen_at = (ve.meta->>'last_seen_at')::timestamptz;
+end $$;
+
+revoke execute on function public.resolve_disconnects() from public, anon, authenticated;
+grant  execute on function public.resolve_disconnects() to service_role;
+
+create or replace function public.reverse_disconnects_for_incident(p_event_id uuid)
+returns int language plpgsql as $$
+declare
+  v_n int;
+begin
+  with inc as (
+    select attempt_id,
+           occurred_at,
+           occurred_at + (coalesce(duration_ms, 0) * interval '1 millisecond') as ends_at
+    from public.violation_events
+    where id = p_event_id
+      and type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED')
+  ), upd as (
+    update public.violation_events d
+    set counts = false,
+        meta = jsonb_set(d.meta, '{count_reason}', '"reversed_by_focus"')
+    from inc
+    where d.attempt_id = inc.attempt_id
+      and d.type = 'DISCONNECTED'
+      and d.counts = true
+      and d.meta->>'count_reason' = 'long_gap'
+      and inc.ends_at >= (d.meta->>'last_seen_at')::timestamptz - interval '10 seconds'
+      and inc.occurred_at <= coalesce(
+            (select min(r.occurred_at) from public.violation_events r
+              where r.attempt_id = d.attempt_id
+                and r.type = 'RECONNECTED'
+                and r.occurred_at > d.occurred_at),
+            now())
+    returning 1
+  )
+  select count(*) into v_n from upd;
+  return v_n;
+end $$;
+
+revoke execute on function public.reverse_disconnects_for_incident(uuid) from public, anon, authenticated;
+grant  execute on function public.reverse_disconnects_for_incident(uuid) to service_role;
+
 
 -- 3.3 Assigning a candidate to an exam creates their (not_started) attempt, so the admin grid
 --     can show "Not joined" for everyone. Unassigning removes it only if they never started.
@@ -516,7 +625,7 @@ begin
 end $$;
 
 -- 3.7 save_answer(): the single write path for answers. Enforces, atomically and with the DATABASE clock:
---     attempt in progress, exam live and not force-ended, deadline + 15 s grace, question belongs to the
+--     attempt in progress; normal live deadline or the 15 s force-end collection window; question belongs to the
 --     paper, sequential position guard (only the CURRENT question), option belongs to the question,
 --     and "only a higher revision overwrites".
 --     Returns: saved | stale_revision | closed | not_found | not_in_paper | wrong_position | bad_option
@@ -539,10 +648,16 @@ begin
   select * into v_exam from public.exams where id = v_attempt.exam_id;
 
   if v_attempt.status <> 'in_progress'
-     or v_exam.status <> 'live'
-     or v_exam.force_ended_at is not null
      or v_exam.ends_at is null
-     or now() > v_exam.ends_at + make_interval(mins => v_attempt.extra_minutes) + interval '15 seconds'
+     or not (
+       (v_exam.status = 'live'
+        and v_exam.force_ended_at is null
+        and now() <= v_exam.ends_at + make_interval(mins => v_attempt.extra_minutes) + interval '15 seconds')
+       or
+       (v_exam.status = 'ended'
+        and v_exam.force_ended_at is not null
+        and now() <= v_exam.force_ended_at + interval '15 seconds')
+     )
   then
     return 'closed';
   end if;
@@ -752,10 +867,25 @@ insert into storage.buckets (id, name, public)
 values ('snapshots', 'snapshots', false)
 on conflict (id) do nothing;
 
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'question-images', 'question-images', false, 5242880,
+  array['image/jpeg', 'image/png', 'image/webp']
+)
+on conflict (id) do update
+set public = false,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
 create policy "admins read snapshots" on storage.objects
   for select to authenticated
   using (bucket_id = 'snapshots' and public.is_admin());
--- Uploads and deletes happen through the API / worker (service role).
+
+create policy "admins read question images" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'question-images' and public.is_admin());
+-- Uploads and deletes happen through the API / worker (service role). Candidates receive
+-- question images only through an authenticated API route that verifies attempt membership.
 
 -- =====================================================================
 -- 7. SEED
@@ -796,7 +926,7 @@ grant  execute on function public.submit_attempt(uuid, text)                    
 
 ## 5. Smoke test (`001_smoke_test.sql`)
 
-It checks: attempt auto-creation, paper refusal before acknowledge, paper idempotency (2 of 3 questions), sequential Next and its idempotency, earlier-question edits rejected, revision rule, submit and closed saves, override-wins scoring, incident counting, alert dedup and multi-chunk grading jobs.
+It checks: optional-image metadata all-or-none (including the `CHECK`/`NULL` regression), attempt auto-creation, paper refusal before acknowledge, dynamic paper generation, sequential Next and its idempotency, revision and closed-save rules, override-wins scoring, incident counting and reversal, disconnect overlap/race guards, alert dedup, multi-chunk grading jobs, idempotent AI-score writes, and the 15-second admin force-end collection window for partial answers.
 
 ```sql
 -- =====================================================================
@@ -828,6 +958,24 @@ begin
     (v_q1, v_exam, 0, 'mcq',     '<p>Q1</p>', 1),
     (v_q2, v_exam, 1, 'written', '<p>Q2</p>', 2),
     (v_q3, v_exam, 2, 'written', '<p>Q3</p>', 2);
+
+  -- 0. Optional question-image metadata is all-or-none. This specifically guards against
+  -- SQL CHECK expressions accidentally accepting a half-filled row because they evaluate NULL.
+  begin
+    update public.questions set image_path = 'questions/half-filled.png' where id = v_q2;
+    assert false, '0a: half-filled question image metadata must be rejected';
+  exception when check_violation then
+    null; -- expected
+  end;
+  update public.questions
+     set image_path = 'questions/complete.png', image_alt_text = 'Product label',
+         image_mime = 'image/png', image_size_bytes = 1024
+   where id = v_q2;
+  assert (select image_path from public.questions where id = v_q2) = 'questions/complete.png',
+    '0b: complete question image metadata must be accepted';
+  update public.questions
+     set image_path = null, image_alt_text = null, image_mime = null, image_size_bytes = null
+   where id = v_q2;
   insert into public.mcq_options (id, question_id, position, label, text_html) values (v_opt, v_q1, 0, 'a', 'Yes');
 
   insert into public.candidates (id, mer_code, full_name, nic_hash) values (v_cand, 'SMOKE-1', 'Smoke Tester', 'x');
@@ -888,7 +1036,20 @@ begin
   -- 7. Violation incidents: only counting rows bump the badge number
   insert into public.violation_events (attempt_id, type, merged_types) values (v_att, 'FULLSCREEN_EXIT', array['FOCUS_LOST', 'VIEWPORT_CHANGED']);
   insert into public.violation_events (attempt_id, type, counts)       values (v_att, 'RECONNECTED', false);
-  assert (select violation_count from public.attempts where id = v_att) = 1, '7: only counting incidents are counted';
+  assert (select violation_count from public.attempts where id = v_att) = 1, '7a: only counting incidents are counted';
+
+  -- 7b-d. Trigger UPDATE OF counts path (two-pass DISCONNECTED rule)
+  declare v_evt uuid;
+  begin
+    insert into public.violation_events (attempt_id, type, counts) values (v_att, 'DISCONNECTED', false) returning id into v_evt;
+    assert (select violation_count from public.attempts where id = v_att) = 1, '7b: insert with counts=false must not increment';
+
+    update public.violation_events set counts = true where id = v_evt;
+    assert (select violation_count from public.attempts where id = v_att) = 2, '7c: flip false->true must increment (+1)';
+
+    update public.violation_events set counts = false where id = v_evt;
+    assert (select violation_count from public.attempts where id = v_att) = 1, '7d: flip true->false must decrement (-1)';
+  end;
 
   -- 8. Alert dedup: one ACTIVE alert per key
   insert into public.alerts (type, message, unique_key) values ('keys', 'all keys exhausted', 'keys-exhausted');
@@ -905,6 +1066,170 @@ begin
     insert into public.grading_runs (id, exam_id) values (v_run, v_exam);
     insert into public.grading_jobs (run_id, attempt_id, chunk_index, question_ids) values (v_run, v_att, 0, '[]'::jsonb), (v_run, v_att, 1, '[]'::jsonb);
   end;
+
+  -- 10. resolve_disconnects(): overlap, flip, guard, and positive case
+  declare v_disc uuid; v_disc2 uuid; v_disc3 uuid; v_disc4 uuid; v_vc_before int;
+  begin
+    update public.attempts set status = 'in_progress', violation_count = 0 where id = v_att;
+
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '5 minutes')::timestamptz::text))
+    returning id into v_disc;
+
+    update public.attempts set last_seen_at = (now() - interval '5 minutes') where id = v_att;
+
+    insert into public.violation_events (attempt_id, type, occurred_at, duration_ms, counts)
+    values (v_att, 'FOCUS_LOST', now() - interval '5 minutes' - interval '5 seconds', 30000, false);
+
+    perform public.resolve_disconnects();
+    assert (select meta->>'count_reason' from public.violation_events where id = v_disc) = 'overlap',
+      '10a: overlapping DISCONNECTED must get count_reason=overlap';
+    assert (select violation_count from public.attempts where id = v_att) = 0,
+      '10b: overlapping row must not increment violation_count';
+
+    update public.violation_events set meta = jsonb_set(meta, '{count_reason}', 'null'::jsonb) where id = v_disc;
+
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '4 minutes')::timestamptz::text))
+    returning id into v_disc2;
+
+    update public.attempts set last_seen_at = (now() - interval '4 minutes') where id = v_att;
+
+    update public.violation_events
+    set meta = jsonb_set(meta, '{count_reason}', '"short_gap"')
+    where id = v_disc2 and counts = false and meta->>'count_reason' is null;
+
+    perform public.resolve_disconnects();
+    assert (select counts from public.violation_events where id = v_disc2) = false,
+      '10c: short_gap guard must prevent flip';
+    assert (select meta->>'count_reason' from public.violation_events where id = v_disc2) = 'short_gap',
+      '10d: short_gap must not be overwritten by long_gap';
+
+    v_vc_before := (select violation_count from public.attempts where id = v_att);
+
+    delete from public.violation_events where attempt_id = v_att and type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED');
+
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '10 minutes')::timestamptz::text))
+    returning id into v_disc3;
+
+    update public.attempts set last_seen_at = (now() - interval '10 minutes') where id = v_att;
+
+    perform public.resolve_disconnects();
+    assert (select counts from public.violation_events where id = v_disc3) = true,
+      '10e: clean disconnect must flip to counts=true';
+    assert (select meta->>'count_reason' from public.violation_events where id = v_disc3) = 'long_gap',
+      '10f: clean disconnect must get count_reason=long_gap';
+    assert (select violation_count from public.attempts where id = v_att) = v_vc_before + 1,
+      '10g: clean disconnect must increment violation_count by 1';
+
+    update public.attempts set status = 'submitted' where id = v_att;
+
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false, jsonb_build_object('last_seen_at', (now() - interval '15 minutes')::timestamptz::text))
+    returning id into v_disc4;
+
+    update public.attempts set last_seen_at = (now() - interval '15 minutes') where id = v_att;
+
+    perform public.resolve_disconnects();
+    assert (select counts from public.violation_events where id = v_disc4) = false,
+      '10h: submitted attempt disconnect must not flip';
+  end;
+
+  -- 11. One absence counts once (section 4, section 5)
+  declare v_d1 uuid; v_d2 uuid; v_f2 uuid; v_d3 uuid; v_f3 uuid;
+  begin
+    delete from public.violation_events where attempt_id = v_att;
+    update public.attempts
+      set status = 'in_progress', violation_count = 0,
+          last_seen_at = now() - interval '6 minutes'
+      where id = v_att;
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false,
+            jsonb_build_object('last_seen_at', (now() - interval '6 minutes')::timestamptz::text))
+    returning id into v_d1;
+    insert into public.violation_events (attempt_id, type, occurred_at, duration_ms, counts)
+    values (v_att, 'FOCUS_LOST', now() - interval '5 minutes', 30000, false);
+    perform public.resolve_disconnects();
+    assert (select meta->>'count_reason' from public.violation_events where id = v_d1) = 'overlap',
+      '11a: incident inside the gap must mark the disconnect overlap';
+
+    delete from public.violation_events where attempt_id = v_att;
+    update public.attempts
+      set violation_count = 0, last_seen_at = now() - interval '6 minutes'
+      where id = v_att;
+    insert into public.violation_events (attempt_id, type, counts, meta)
+    values (v_att, 'DISCONNECTED', false,
+            jsonb_build_object('last_seen_at', (now() - interval '6 minutes')::timestamptz::text))
+    returning id into v_d2;
+    perform public.resolve_disconnects();
+    assert (select counts from public.violation_events where id = v_d2) = true, '11b-pre: flips to counted';
+    insert into public.violation_events (attempt_id, type, occurred_at, duration_ms, counts)
+    values (v_att, 'FOCUS_LOST', now() - interval '5 minutes', 30000, true)
+    returning id into v_f2;
+    assert public.reverse_disconnects_for_incident(v_f2) = 1, '11b: one disconnect reversed';
+    assert (select meta->>'count_reason' from public.violation_events where id = v_d2) = 'reversed_by_focus',
+      '11b: reason must be reversed_by_focus';
+    assert (select violation_count from public.attempts where id = v_att) = 1,
+      '11b: net count must be 1 (the tab switch), not 2';
+
+    delete from public.violation_events where attempt_id = v_att;
+    update public.attempts
+      set violation_count = 0, last_seen_at = now() - interval '6 minutes'
+      where id = v_att;
+    insert into public.violation_events (attempt_id, type, occurred_at, counts, meta)
+    values (v_att, 'DISCONNECTED', now() - interval '5 minutes', false,
+            jsonb_build_object('last_seen_at', (now() - interval '6 minutes')::timestamptz::text))
+    returning id into v_d3;
+    perform public.resolve_disconnects();
+    insert into public.violation_events (attempt_id, type, occurred_at, counts, duration_ms)
+    values (v_att, 'RECONNECTED', now() - interval '2 minutes', false, 240000);
+    insert into public.violation_events (attempt_id, type, occurred_at, duration_ms, counts)
+    values (v_att, 'FOCUS_LOST', now() - interval '1 minute', 10000, true)
+    returning id into v_f3;
+    assert public.reverse_disconnects_for_incident(v_f3) = 0,
+      '11c: incident after the reconnect must not reverse the disconnect';
+    assert (select counts from public.violation_events where id = v_d3) = true,
+      '11c: disconnect stays counted';
+  end;
+
+  -- 12. Idempotent AI writes: one job can score a question only once (needs 002_grading.sql)
+  declare v_run2 uuid := gen_random_uuid(); v_job uuid := gen_random_uuid();
+  begin
+    insert into public.grading_runs (id, exam_id) values (v_run2, v_exam);
+    insert into public.grading_jobs (id, run_id, attempt_id, chunk_index, question_ids)
+    values (v_job, v_run2, v_att, 0, '[]'::jsonb);
+
+    insert into public.question_scores (attempt_id, question_id, source, marks, max_marks, job_id)
+    values (v_att, v_first, 'ai', 1, 2, v_job);
+    insert into public.question_scores (attempt_id, question_id, source, marks, max_marks, job_id)
+    values (v_att, v_first, 'ai', 1, 2, v_job)
+    on conflict do nothing;                      -- how the worker writes
+    assert (select count(*) from public.question_scores where job_id = v_job) = 1,
+      '12a: a duplicate score for the same job and question must be ignored';
+
+    begin
+      insert into public.question_scores (attempt_id, question_id, source, marks, max_marks, job_id)
+      values (v_att, v_first, 'ai', 2, 2, v_job);
+      assert false, '12b: a plain duplicate insert must violate the unique index';
+    exception when unique_violation then
+      null;                                      -- expected
+    end;
+  end;
+
+  -- 13. Admin force-end collection window accepts the candidate's final partial answer,
+  -- then closes after 15 seconds.
+  update public.attempts
+     set status = 'in_progress', submit_reason = null, submitted_at = null, current_position = 1
+   where id = v_att;
+  update public.exams
+     set status = 'ended', ends_at = now(), force_ended_at = now()
+   where id = v_exam;
+  assert public.save_answer(v_att, v_second, 'partial final answer', null, false, 10) = 'saved',
+    '13a: force-end window must accept the latest partial answer';
+  update public.exams set force_ended_at = now() - interval '16 seconds' where id = v_exam;
+  assert public.save_answer(v_att, v_second, 'too late', null, false, 11) = 'closed',
+    '13b: force-end window must close after 15 seconds';
 
   raise notice 'SMOKE TEST PASSED';
 end $$;

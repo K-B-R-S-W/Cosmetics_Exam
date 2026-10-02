@@ -155,6 +155,8 @@ Everything else is `false`. `COUNTING_TYPES` lives in `lib/proctoring-rules.ts`,
 
 - `exams.flag_threshold`, default **10**, whole number **1 to 100** (already in the schema and in the exam create and update contract).
 - A candidate is **red** when `violation_count >= flag_threshold`.
+- Reaching the threshold records/flags evidence only. It never ejects, terminates, signs out, disqualifies, or auto-submits the candidate. Admin review happens after the exam.
+- The live grid remains ordered by MER code; incident and threshold updates never reorder candidates.
 - The threshold can be edited **while the exam is live** (the exam update route already allows `title` and `flag_threshold` after the start). Every tile recolours at once, because the colour is calculated in the browser from the exam row and the candidate's `violation_count`.
 - Changes are written to `admin_actions` with the old and new value.
 

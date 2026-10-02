@@ -4,6 +4,12 @@
 # connection can be IPv6-only and EC2 may not reach it) and a pg_dump at least as new as the Supabase server (verify).
 set -euo pipefail
 : "${SUPABASE_DB_URL:?Set SUPABASE_DB_URL}"
+POSTGRES_SERVER_MAJOR="${POSTGRES_SERVER_MAJOR:-17}"
+PG_DUMP_MAJOR="$(pg_dump --version | sed -E 's/.*PostgreSQL\) ([0-9]+).*/\1/')"
+if [[ ! "$PG_DUMP_MAJOR" =~ ^[0-9]+$ ]] || (( PG_DUMP_MAJOR < POSTGRES_SERVER_MAJOR )); then
+  echo "pg_dump major ${PG_DUMP_MAJOR:-unknown} is older than PostgreSQL server major ${POSTGRES_SERVER_MAJOR}; refusing backup" >&2
+  exit 2
+fi
 OUT_DIR="${OUT_DIR:-/var/backups/exam}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 FILE="${OUT_DIR}/exam-${STAMP}.dump"

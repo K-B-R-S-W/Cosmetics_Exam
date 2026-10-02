@@ -27,6 +27,24 @@ begin
     (v_q1, v_exam, 0, 'mcq',     '<p>Q1</p>', 1),
     (v_q2, v_exam, 1, 'written', '<p>Q2</p>', 2),
     (v_q3, v_exam, 2, 'written', '<p>Q3</p>', 2);
+
+  -- 0. Optional question-image metadata is all-or-none. This specifically guards against
+  -- SQL CHECK expressions accidentally accepting a half-filled row because they evaluate NULL.
+  begin
+    update public.questions set image_path = 'questions/half-filled.png' where id = v_q2;
+    assert false, '0a: half-filled question image metadata must be rejected';
+  exception when check_violation then
+    null; -- expected
+  end;
+  update public.questions
+     set image_path = 'questions/complete.png', image_alt_text = 'Product label',
+         image_mime = 'image/png', image_size_bytes = 1024
+   where id = v_q2;
+  assert (select image_path from public.questions where id = v_q2) = 'questions/complete.png',
+    '0b: complete question image metadata must be accepted';
+  update public.questions
+     set image_path = null, image_alt_text = null, image_mime = null, image_size_bytes = null
+   where id = v_q2;
   insert into public.mcq_options (id, question_id, position, label, text_html) values (v_opt, v_q1, 0, 'a', 'Yes');
 
   insert into public.candidates (id, mer_code, full_name, nic_hash) values (v_cand, 'SMOKE-1', 'Smoke Tester', 'x');
@@ -267,6 +285,20 @@ begin
       null;                                      -- expected
     end;
   end;
+
+  -- 13. Admin force-end collection window accepts the candidate's final partial answer,
+  -- then closes after 15 seconds.
+  update public.attempts
+     set status = 'in_progress', submit_reason = null, submitted_at = null, current_position = 1
+   where id = v_att;
+  update public.exams
+     set status = 'ended', ends_at = now(), force_ended_at = now()
+   where id = v_exam;
+  assert public.save_answer(v_att, v_second, 'partial final answer', null, false, 10) = 'saved',
+    '13a: force-end window must accept the latest partial answer';
+  update public.exams set force_ended_at = now() - interval '16 seconds' where id = v_exam;
+  assert public.save_answer(v_att, v_second, 'too late', null, false, 11) = 'closed',
+    '13b: force-end window must close after 15 seconds';
 
   raise notice 'SMOKE TEST PASSED';
 end $$;

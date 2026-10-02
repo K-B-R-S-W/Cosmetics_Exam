@@ -23,7 +23,7 @@ Uses the tokens and components from Section 2A (`--ink`, `--surface`, the Button
 11. **The waiting room can reach 0:00 before the state says `live`.** The worker scheduler runs every 30 s (plan 2F.5), so the phase can lag. §6 now covers that gap.
 12. **A LiveKit-only fault is not the candidate's fault** (Section 4). The camera banner (§8.4) now has separate wording for it, so the candidate is not told to "reconnect" a camera that works.
 
-13. **Review fixes (round 2).** (a) The worker now submits expired attempts with reason `auto` (contract §7), so the Done page's "Time ran out" line is correct for them, and `forced` means only "the exam team ended it". (b) The time-up and Offline copy no longer promise that late answers are sent, because the server refuses saves 15 s after the deadline (§4 row 7, §7.7, §8.6, §9). (c) The camera preview scrolls clear of the answer text (§7.1). (d) No images in questions (§7.2).
+13. **Review fixes (current).** (a) The worker submits ordinary timeouts with reason `auto`; `forced` is reserved for an admin end/submit. (b) The time-up and Offline copy does not promise delivery after the 15-second collection window. (c) The camera preview scrolls clear of the answer text (§7.1). (d) Optional MCQ and written-question images render between the question and its answer controls (§7.2).
 
 ---
 
@@ -177,7 +177,7 @@ This is the longest page. It is a reading page, so it follows the question text 
 ┌────────────────────────────────────────────┐
 │ [logo]                                     │
 │   Before you start                         │
-│   Beauty Product Knowledge · 20 questions  │
+│   Beauty Product Knowledge · {question_count} questions │
 │   · 45 minutes                             │
 │                                            │
 │   How this exam works                      │
@@ -315,7 +315,7 @@ The check is a short list of steps. Each step shows a status in words and an ico
 - **Start:** when the state says `phase: live` (a Broadcast `exam_started` is only a nudge, so the page calls `/api/exam/state` and acts on the answer), the page calls `GET /api/exam/paper` and navigates to `/exam`. Show "The exam is starting…" (Notice, no countdown) while the paper loads. If the paper call returns an error (see §7.8), the page shows the matching message and keeps retrying every 5 s.
 - **Time changes:** if the admin changes the start time, the next state reply carries the new time and the countdown simply updates. A Notice says "The start time changed to {time}."
 - **Proctoring:** the proctoring hook and the 10-second heartbeat run here. The fullscreen overlay applies here too (3A.4 and 2B.3). Leaving fullscreen shows the overlay (§8.3).
-- **Broadcast messages** from the exam team appear as a Notice banner (§8.5).
+- **Announcements** from the exam team appear as queued top-right 5-second toasts (§8.5).
 - The camera preview is 160×120, mirrored, with "Camera on" and "Microphone on" in words next to it. If a track is lost, the words change to "Camera off" with a Warning icon, and the Camera banner appears (§8.4).
 
 **States**
@@ -339,7 +339,7 @@ The check is a short list of steps. Each step shows a status in words and an ico
 
 ```
  ┌───────────────────────────────────────────────────────────────┐
- │ Title    Question 7 of 20        ✓ Saved 10:42      48:12     │  56 px strip, fixed
+ │ Title    Question {n} of {total}   ✓ Saved 10:42    48:12     │  56 px strip, fixed
  ├───────────────────────────────────────────────────────────────┤
  │ [banner area: only when needed]                               │
  │                                                               │
@@ -353,14 +353,15 @@ The check is a short list of steps. Each step shows a status in words and an ico
 
 - Built with `100dvh`, `overscroll-behavior: none`, a fixed strip, a scrolling middle and a fixed bottom bar, so Next and Submit stay visible above the on-screen keyboard (2D.1).
 - **Strip contents:** left, the exam title (truncated, hidden below 900 px wide); centre, position; right, the save indicator and the timer (Section 2A §4.4 and §4.5). The logo is **not** shown here.
-- **Position text:** sequential "Question 7 of 20"; free "20 questions · 14 answered". Position text is `aria-live="off"`.
+- **Position text:** sequential "Question {n} of {total}"; free "{total} questions · {answered} answered". Both values come from the generated paper; no question count is hardcoded. Position text is `aria-live="off"`.
 - **Camera preview:** 96×72, mirrored, fixed bottom-right above the bottom bar, not draggable, `aria-label="Your camera preview"`. It is **hidden while the on-screen keyboard is open** on a 768 px portrait tablet, so it can never cover the answer box (the camera keeps streaming, only the self-view is hidden). It comes back when the keyboard closes. The scrolling content area has bottom padding equal to the preview's height plus 16 px, so the last lines of a long answer can always be scrolled clear of it.
 - **Content width:** question and answer share one column, at most 68ch. Free mode adds the sidebar to the left (§7.4).
 - **Browser Back** is blocked, pull-to-refresh is off, and right-click and long-press menus are blocked and logged (3A.8). When paste is blocked, a small inline message appears under the answer box for 4 seconds: "Pasting is turned off during this exam." (`role="status"`).
 
 ### 7.2 Question card
 
-- **Question text:** `body_html` (already sanitized by the server) at `--text-question`, with the question number first: "7." followed by the text. Questions are text only: the sanitizer allowlist has no images (decided), so none are rendered.
+- **Question text:** `body_html` (already sanitized by the server) at `--text-question`, with the question number first: "7." followed by the text.
+- **Optional question image:** when `image` is present in the paper response, render it after the question text and before the MCQ options or written-answer box. Load it from the authenticated question-image API, preserve aspect ratio (`max-width: 100%; height: auto`), use the stored alt text, reserve its layout space, and show a non-blocking **Image could not be loaded** placeholder with Retry on failure. With no image, render the text-only layout unchanged.
 - **Marks:** shown quietly to the right of the number, "2 marks" ("1 mark" for one), in `--muted`. The admin sets marks per question and may leave the field empty, in which case the question carries 1 mark (contract 4.3). Candidates always see the number the question carries.
 - **Language:** `lang="si"` is set on any block with a Sinhala character (§0 point 7).
 - **MCQ:** the Section 2A option row component. Letters A, B, C… by position. Selecting an option saves at once (no debounce). The selected option has the 2 px ink border, the grey background and a check icon.
@@ -396,7 +397,7 @@ The check is a short list of steps. Each step shows a status in words and an ico
 ### 7.4 Free mode
 
 ```
- strip:  Title      20 questions · 14 answered     ✓ Saved     48:12
+ strip:  Title   {total} questions · {answered} answered   ✓ Saved   48:12
  ┌────────────────┬──────────────────────────────────────────────┐
  │ Questions      │ 7.  Explain how you would …    [⚑ Flag]      │
  │  1 ✓ Answered  │                                              │
@@ -410,7 +411,7 @@ The check is a short list of steps. Each step shows a status in words and an ico
 ```
 
 - **Sidebar** (laptop and tablet landscape): 240 px, the Section 2A question list. Every row says "Answered", "Not answered" or "Flagged" in words with an icon. A question that is both answered and flagged shows "Answered, flagged". The current row has the 2 px ink left rule and `aria-current="step"`. Rows are 44 px buttons.
-- **Tablet portrait (under 900 px):** the sidebar becomes a drawer opened by a button in the strip, **Questions (14/20)**. The drawer closes on selection and on Escape. Focus returns to the button.
+- **Tablet portrait (under 900 px):** the sidebar becomes a drawer opened by a button in the strip, **Questions ({answered}/{total})**. The drawer closes on selection and on Escape. Focus returns to the button.
 - **Flag toggle:** a button in the question header, "Flag for review" / "Remove flag", `aria-pressed`. It saves the same way as an answer (`flagged` in `POST /api/answers`).
 - **Previous / Next** in the bottom bar. Previous is disabled on question 1, Next on the last question. On the last question the primary button becomes **Review and submit**.
 - **Review and submit** (sidebar button and last-question button) opens the **Summary screen** (§7.5). The sidebar button is Secondary, so the bottom bar keeps the single Primary button (Section 2A §4.1).
@@ -421,7 +422,7 @@ The check is a short list of steps. Each step shows a status in words and an ico
 Replaces the content area. Heading **Review your answers**.
 
 - Counts line: "14 answered · 6 not answered · 2 flagged".
-- A list of the questions that are **not answered** or **flagged**, each a button that jumps to that question. If all are answered and none flagged: "All 20 questions are answered."
+- A list of the questions that are **not answered** or **flagged**, each a button that jumps to that question. If all are answered and none flagged: "All {total} questions are answered."
 - Buttons: **Back to questions** (secondary) and **Submit exam** (primary). Submit opens the Submit dialog (§7.6).
 
 ### 7.6 Dialogs on the exam screen
@@ -507,11 +508,11 @@ The last row is the platform's fault, not the candidate's: Section 4 logs it wit
 | Event | Banner text | Dismiss |
 |---|---|---|
 | Time extended (`time_updated`, or the deadline in state moved later) | Your time was extended by {n} minutes. The timer now shows your new time. | Dismiss button, also auto-hides after 30 s |
-| Message from the exam team (`state.broadcast`, shown once per `id`) | The exam team says: "{message}" | Dismiss button, stays until dismissed. Message text is escaped plain text, at most 300 characters (contract 4.4) |
+| Message from the exam team (`state.announcements`, each `id` shown once) | The exam team says: "{message}" | Top-right toast, automatically disappears after 5 seconds. Escaped plain text, at most 5,000 characters; long text wraps/scrolls without covering answer controls |
 | Moved to the current question (`out_of_sync`) | We moved you to question {n}. | Auto-hides after 10 s |
 | Start time changed | The start time changed to {time}. | Auto-hides after 30 s |
 
-A broadcast is announced once (`role="status"`). Extension amount is the difference between the old and new deadlines, rounded to whole minutes.
+Announcements are queued in `sent_at` order and each is announced once (`role="status"`). There is no per-exam announcement-count limit. Extension amount is the difference between the old and new deadlines, rounded to whole minutes.
 
 ### 8.6 Time up and the locked screen
 
@@ -523,7 +524,7 @@ When the deadline passes (`phase: closed`, or the local clock passes the deadlin
 4. On success (including `already_submitted`), go to `/done`.
 5. If the connection is down, the Notice becomes **Time is up. Reconnect to send your answers. Keep this page open. Answers can only be saved for a few seconds after time is up.** The client keeps retrying. (The server accepts saves for 15 seconds after the deadline, then refuses them. Anything still waiting on the device after that is not saved, so the text must not promise otherwise.) If the server submits first (the worker does after the grace period), the next heartbeat returns `submitted` and the client goes to `/done`.
 
-The same screen is used when the exam team ends the exam (`exam_ended` Broadcast, then state `closed`), with the text **The exam has ended. Sending your answers…**
+When the exam team ends the exam (`exam_ended` Broadcast, then state `closed`), the same locked screen says **The exam has ended. Sending your answers…** The client immediately sends its current queued answers through `POST /api/exam/submit`; the server derives `reason = "forced"` from the force-ended exam rather than trusting the candidate payload. It retries during the 15-second force-end collection window. The worker then force-submits any remaining attempts from the latest answers already received, so partial written answers are retained and graded.
 
 ### 8.7 Tab switch or focus loss: warning toast
 
@@ -601,7 +602,7 @@ Banner (Warning): **Something went wrong on our side. Your answers are saved on 
 ## 11. Language
 
 - **Interface: English only (decided).** Every label, button, message and heading on these screens is the English text in this file. There is no language switch and no Sinhala interface strings.
-- **Content: Sinhala, English, mixed Sinhala and English, or Singlish.** This covers question text, option text, the exam title, the instructions and admin broadcasts (what the examiner wrote), and the candidate's own answers.
+- **Content: Sinhala, English, mixed Sinhala and English, or Singlish.** This covers question text, option text, the exam title, the instructions and admin announcements (what the examiner wrote), and the candidate's own answers.
   - The client sets `lang="si"` on any text block that contains a Sinhala character (U+0D80–U+0DFF), which applies the Sinhala size and line height (Section 2A §1.2). Mixed Sinhala and English blocks get the Sinhala sizing.
   - **Singlish is just Latin letters**, so it is treated as English. It needs no detection and no special font.
   - The answer box does not fix a language. It checks its own text on every `input` event and sets `lang="si"` when a Sinhala character is present, `lang="en"` otherwise. It keeps `spellcheck="false"` and autocorrect off, so a Singlish word is never changed or underlined.
@@ -654,41 +655,43 @@ Banner (Warning): **Something went wrong on our side. Your answers are saved on 
 | 23 | 2F.5, 8.44 | The worker submits attempts after their own grace deadline with `p_reason: 'auto'`, not `'forced'`. `forced` stays for End exam and Submit for this candidate. Test 8.44 (force-end) keeps `forced` |
 | 24 | 2F.2, 2B.6 | Time-up copy (§8.6 step 5), the Time paragraph on the rules screen (§4 row 7) and the Offline save-indicator words (§7.7) |
 | 25 | 2D.1 | Camera preview: bottom padding on the scrolling area (§7.1) |
-| 26 | 1E.2 | Questions are text only. No image button, no `<img>` (§7.2) |
+| 26 | 1E.2 | Add optional question-image upload/select, alt text, preview/replace/remove, and the candidate rendering/loading behavior in §7.2 |
 
 ---
 
-## 14. Tests for the candidate screens (continue after the last number in Phase 8)
+## 14. Tests for the candidate screens (IDs continue after Section 2A)
 
-| Test | What to check |
-|---|---|
-| Login errors | Unknown MER, wrong ID and inactive candidate show the identical message |
-| Rate limit | Sixth wrong try shows the wait message and disables the button |
-| Picker | A candidate with two open exams sees the picker and none is preselected |
-| Rules flag | Opening `/rules` directly with no confirm flag redirects to `/confirm` |
-| Retention number | The rules page shows the number from the API (change the setting, number changes) |
-| Check order | Camera prompt appears before fullscreen; denied camera shows its message; Continue stays disabled |
-| Desktop site | An Android tablet in Desktop site mode is blocked at step 5 |
-| Second screen | Laptop with two screens shows the warning and can still continue |
-| Reload on exam | Refresh in the exam shows the fullscreen overlay, then the exam resumes with the same question and answers |
-| Sequential Next | Blank answer shows the dialog; offline Next shows Reconnecting and does not advance; lost reply (`already_advanced`) shows the right question |
-| Last question | Next becomes Submit exam; typed answer is saved before submit |
-| Free mode | Drawer opens on a 768 px portrait tablet; flagged and unanswered show in words; summary lists both |
-| Time up | Deadline locks everything, shows "Sending…", reaches Done; offline at deadline keeps retrying and ends on Done when the worker submits |
-| Kick | Admin kicks a candidate: signed-out screen within 10 s, saved answers still there after signing in again |
-| Done | No marks shown, camera light turns off, fullscreen exits, reload goes to login |
-| Sinhala, mixed and Singlish | A Sinhala, a mixed Sinhala and English, and a Singlish question and answer render correctly on the exam screen, strip and dialogs. Typing Sinhala on the tablet works and is saved as typed. The Singlish answer has no spellcheck underline |
-| Keyboard only | The whole flow login to done works with the keyboard, focus lands on the heading after every move |
-| 200% zoom | Rules, check and exam screens at 200% keep every button reachable |
-| Waiting room at 0:00 | Start the exam so the worker lags 20 s: the page shows "The exam is starting…", never a negative time, and enters the exam when the phase flips |
-| Closed before start | A candidate who acknowledged but never loaded the paper, with the exam ended, sees "This exam has ended." and no submit call is made |
-| LiveKit-only fault | Stop LiveKit during the exam: the banner says "Your exam continues…", has no "recorded" wording, the preview stays on, and nothing counts (matches 8.58) |
-| Late autosave | In sequential mode a save for the previous question returns `wrong_position`: no message, no retry, no stuck "Saving…" state |
-| Tab-switch toast | Switching tabs for 3 s during the exam: the toast shows on return, the admin timeline has the event. A 0.5 s blur shows nothing. In the waiting room, no toast |
-| Marks | A question with the marks field left empty shows "1 mark"; one with 2.5 shows "2.5 marks" |
-| Reload counting | Reload in the exam: `RELOAD` and `FULLSCREEN_EXIT` are both logged and counted (2 points), and the tile stays below the red line at the default threshold of 10 |
-| Check while live | Sign in again during a live exam: the check page shows the running timer |
-| Picker memory | After a second login via the picker, the ID is in no storage and no URL |
-| Worker submit reason | Let the deadline pass with the candidate offline: the worker submits with reason `auto`, and the Done page says "Time ran out…" (not "The exam team ended the exam") |
-| Late answers | Go offline, type, let time run out, come back after 30 s: the lines typed after the grace period are not saved, and no screen claimed they would be |
-| Preview and long answers | A 20-line answer on a 768 px portrait tablet with the keyboard closed can be scrolled so the last line is clear of the camera preview |
+| ID | Test | What to check |
+|---|---|---|
+| 8.104 | Login errors | Unknown MER, wrong ID and inactive candidate show the identical message |
+| 8.105 | Rate limit | Sixth wrong try shows the wait message and disables the button |
+| 8.106 | Picker | A candidate with two open exams sees the picker and none is preselected |
+| 8.107 | Rules flag | Opening `/rules` directly with no confirm flag redirects to `/confirm` |
+| 8.108 | Retention number | The rules page shows the number from the API (change the setting, number changes) |
+| 8.109 | Check order | Camera prompt appears before fullscreen; denied camera shows its message; Continue stays disabled |
+| 8.110 | Desktop site | An Android tablet in Desktop site mode is blocked at step 5 |
+| 8.111 | Second screen | Laptop with two screens shows the warning and can still continue |
+| 8.112 | Reload on exam | Refresh in the exam shows the fullscreen overlay, then the exam resumes with the same question and answers |
+| 8.113 | Sequential Next | Blank answer shows the dialog; offline Next shows Reconnecting and does not advance; lost reply (`already_advanced`) shows the right question |
+| 8.114 | Last question | Next becomes Submit exam; typed answer is saved before submit |
+| 8.115 | Free mode | Drawer opens on a 768 px portrait tablet; flagged and unanswered show in words; summary lists both |
+| 8.116 | Time up | Deadline locks everything, shows "Sending…", reaches Done; offline at deadline keeps retrying and ends on Done when the worker submits |
+| 8.117 | Kick | Admin kicks a candidate: signed-out screen within 10 s, saved answers still there after signing in again |
+| 8.118 | Done | No marks shown, camera light turns off, fullscreen exits, reload goes to login |
+| 8.119 | Sinhala, mixed and Singlish | A Sinhala, a mixed Sinhala and English, and a Singlish question and answer render correctly on the exam screen, strip and dialogs. Typing Sinhala on the tablet works and is saved as typed. The Singlish answer has no spellcheck underline |
+| 8.120 | Keyboard only | The whole flow login to done works with the keyboard, focus lands on the heading after every move |
+| 8.121 | 200% zoom | Rules, check and exam screens at 200% keep every button reachable |
+| 8.122 | Waiting room at 0:00 | Start the exam so the worker lags 20 s: the page shows "The exam is starting…", never a negative time, and enters the exam when the phase flips |
+| 8.123 | Closed before start | A candidate who acknowledged but never loaded the paper, with the exam ended, sees "This exam has ended." and no submit call is made |
+| 8.124 | LiveKit-only fault | Stop LiveKit during the exam: the banner says "Your exam continues…", has no "recorded" wording, the preview stays on, and nothing counts (matches 8.58) |
+| 8.125 | Late autosave | In sequential mode a save for the previous question returns `wrong_position`: no message, no retry, no stuck "Saving…" state |
+| 8.126 | Tab-switch toast | Switching tabs for 3 s during the exam: the toast shows on return, the admin timeline has the event. A 0.5 s blur shows nothing. In the waiting room, no toast |
+| 8.127 | Marks | A question with the marks field left empty shows "1 mark"; one with 2.5 shows "2.5 marks" |
+| 8.128 | Reload counting | Reload in the exam: `RELOAD` and `FULLSCREEN_EXIT` are both logged and counted (2 points), and the tile stays below the red line at the default threshold of 10 |
+| 8.129 | Check while live | Sign in again during a live exam: the check page shows the running timer |
+| 8.130 | Picker memory | After a second login via the picker, the ID is in no storage and no URL |
+| 8.131 | Worker submit reason | Let the deadline pass with the candidate offline: the worker submits with reason `auto`, and the Done page says "Time ran out…" (not "The exam team ended the exam") |
+| 8.132 | Late answers | Go offline, type, let time run out, come back after 30 s: the lines typed after the grace period are not saved, and no screen claimed they would be |
+| 8.133 | Preview and long answers | A 20-line answer on a 768 px portrait tablet with the keyboard closed can be scrolled so the last line is clear of the camera preview |
+| 8.134 | Optional question images | MCQ and written images render between text and answers; no-image questions remain unchanged; failed loads show Retry without blocking the exam |
+| 8.135 | Admin force-end flush | Type an incomplete written answer, then force-end: the screen locks, the pending answer is accepted inside 15 seconds, submitted as `forced`, and later appears for Gemini grading |

@@ -1,6 +1,6 @@
 # Section 2C: Admin screens
 
-*Built on Section 2A (design system), Section 3 (API contracts), Section 4 (proctoring), Section 5 (grading) and the plan's admin tasks (1B–1E, 3C, 4C, 5A, 5C, 6D, 7). Status: spec only. Nothing here has been built or rendered. The interface is English only (decided in 2B). Questions, answers and broadcasts can be Sinhala, English, mixed or Singlish, and use the content rules in Section 2B §11.*
+*Built on Section 2A (design system), Section 3 (API contracts), Section 4 (proctoring), Section 5 (grading) and the plan's admin tasks (1B–1E, 3C, 4C, 5A, 5C, 6D, 7). Status: spec only. Nothing here has been built or rendered. The interface is English only (decided in 2B). Questions, answers and announcements can be Sinhala, English, mixed or Singlish, and use the content rules in Section 2B §11.*
 
 ---
 
@@ -9,11 +9,11 @@
 These are gaps between the plan, the contracts and the sections. Each one is settled below so you do not have to decide again. Items marked **contract** changed `section-3-api-contracts.md` in this round.
 
 1. **No way to "accept" an AI mark.** Section 5 §8.1 says a reviewer "clears reviews by overriding or accepting", but no accept route exists. **Decided:** *Accept AI marks* is a one-click **override with the same marks** and a prefilled note ("Accepted AI marks after review."), through the existing override route (37). Side effect, shown in the button's dialog: an accepted mark becomes an override, so a later regrade will not replace it.
-2. **Broadcast limit conflict.** Plan 5A.5 says 500 characters and 10 per exam. The contract said 300 and had no per-exam limit. **Decided: 300 characters** (contract) **and 10 per exam** (plan). **Contract:** the 10 limit is added as `409 broadcast_limit`.
+2. **Announcements.** The current rule is **5,000 characters per announcement and unlimited announcements per exam**. They are in-app website notifications; Discord and Telegram are not part of this system.
 3. **Correcting an MCQ answer key after grading would burn Gemini quota.** The only way to rescore MCQs was to run the whole grading again, which re-creates a Gemini job for every written answer. **Decided: contract:** the grade route takes an optional body `{ "mcq_only": true }` that rescores MCQs and recomputes results without any Gemini job. The answer-key form offers it.
 4. **CSV column name.** The contract said `violation_count`, the plan and Section 4 say `violations_counted`. **Contract** now says `violations_counted`.
 5. **The live grid status words had no rules.** Section 4 only defines "Offline" (no heartbeat for 25 s). §7.2 defines all six statuses and the order they win in.
-6. **The grid must not reorder by itself.** Tiles that jump under the cursor make a wrong click on exam day. Order is by MER code and changes only when the admin picks another sort.
+6. **The grid stays in MER order.** Suspicion, status and violation updates never change candidate order. Admins use filters and the visible incident count instead of an attention-first sort.
 7. **The admin's own live connection can drop.** The plan covers the candidates' connection loss but not the admin's. §7.7 adds a "Live updates paused" banner and a 10-second refetch fallback.
 8. **Regrade-after-key-change only works once scores exist,** and scores only exist after the exam is finalized, so the regrade button appears only when `regrade_needed` is true. The answer-key form is locked while a grading run is active (`409 grading_in_progress`), and the screen says why.
 9. **No screen to create admins.** Admins are created by hand in the Supabase dashboard plus an `admin_profiles` row (task 1A.6). This spec adds no admin-management screen. If you want one later it is a separate small task.
@@ -22,7 +22,7 @@ These are gaps between the plan, the contracts and the sections. Each one is set
 12. **Plain admins can't read the key and health tables.** Row-level security limits `system_health`, `api_key_state` and `alerts` to a super admin, so the Keys table and time estimate on the Grading tab are super admin only (§8.2). Everything else on that tab comes from tables every admin can read.
 13. **"Snapshot deleted" could not be told apart from "no snapshot".** The purge only nulled `snapshot_path`. **Contract:** the purge now also writes `meta.snapshot_deleted_at`, and the timeline reads it (§7.6).
 14. **Extend had no error for losing the race three times.** **Contract:** `409 concurrent_update` added to the extend route (§6.2).
-15. **Review fixes (round 2).** (a) **Camera off** no longer relies on an open `CAMERA_LOST` incident, which the client only sends when it ends (§7.2). (b) The Failed grading state has no "retry jobs that never ran" checkbox, because the resume route takes no body (§8.2). (c) The summary's Forced and Auto labels are now meaningful, because the worker submits at the deadline with `auto` (contract §7, §9.1). (d) The status rules in the contract's admin-reads table were stale and now match §7.2. (e) The "k in the waiting room" count is defined as status Ready (§6.1). (f) No images in questions (§4.2).
+15. **Current question-image rule.** MCQ and written questions both support one optional image, stored separately from rich text and rendered between question text and answer controls (§4.2).
 
 ---
 
@@ -172,7 +172,8 @@ A new sub-page: `admin/exams/[id]/candidates`. Two tables stacked, with a one-li
 | Field | Rules |
 |---|---|
 | Type | Chosen when the question is created, shown as a label after that. Help: "The type can't be changed. To switch, delete the question and add a new one." |
-| Question text | Tiptap editor (2A 4.15). Toolbar only offers what the allowlist allows: bold, italic, underline, strike, lists, headings 2–3, sub/superscript is **not** offered (not in the contract allowlist), font size (a small custom Tiptap extension, 2A §4.15). **No images**: the allowlist has no `<img>` (decided). Max 50,000 characters |
+| Question text | Tiptap editor (2A 4.15). Toolbar only offers what the allowlist allows: bold, italic, underline, strike, lists, headings 2–3, sub/superscript is **not** offered, and font size through the custom extension. Max 50,000 characters |
+| Optional image | Checkbox **Add image**. When enabled: upload/select JPEG, PNG or WebP up to 5 MB; required alt text; preview plus **Replace image** and **Remove image**. Upload through the admin image route to the private `question-images` bucket. The database saves all four metadata fields together or none; a partial record is rejected |
 | Marks | Number, step 0.25, **optional**. Placeholder **1**. Help: "Leave empty for 1 mark. Candidates see this next to the question." Range above 0, up to 999.99 |
 
 **MCQ** also has:
@@ -267,12 +268,12 @@ The controls sit in the live page header (§7.1). Each opens one dialog (2A 4.7:
 | Control | Shown when | Button style |
 |---|---|---|
 | **Start now** | Draft or Scheduled | Primary (the page's one primary) |
-| **Broadcast** | Scheduled or Live | Secondary |
+| **Announcement** | Scheduled or Live | Secondary |
 | **Extend time** | Live and the end time has not passed | Secondary |
 | **End exam** | Live | Destructive |
 | Flag threshold field | Any status except Finalized | Number field in the header |
 
-In Draft the **Broadcast** button is disabled and a tooltip-free line under the header says **Schedule the exam to send messages.** (the route needs `scheduled` or `live`).
+In Draft the **Announcement** button is disabled and a tooltip-free line under the header says **Schedule the exam to send messages.** (the route needs `scheduled` or `live`).
 
 ### 6.1 Start now (route 26)
 
@@ -293,16 +294,16 @@ In Draft the **Broadcast** button is disabled and a tooltip-free line under the 
 - Errors: `409 deadline_passed`: **The time is already up, so it can't be extended.** For one candidate whose own deadline has passed or who has submitted: **This candidate's time is already up or they have submitted.**
 - Server compare-and-set retries are invisible to the admin. If all three retries lose, the route returns `409 concurrent_update` (contract 4.4) and the dialog shows **Someone else changed the time at the same moment. Check the time shown and try again.**
 
-### 6.3 Broadcast (route 29)
+### 6.3 Announcement (route 29)
 
 | Part | Text |
 |---|---|
 | Title | **Send a message to all candidates** |
-| Field | Textarea, plain text, with a counter **0 / 300**. May be Sinhala, English, mixed or Singlish |
-| Help | **Candidates see this at the top of their screen until they close it.** and **{n} of 10 messages used.** |
+| Field | Textarea, plain text, with a counter **0 / 5000**. May be Sinhala, English, mixed or Singlish |
+| Help | **Candidates see this as a top-right notification for 5 seconds. You can send as many announcements as needed.** |
 | Buttons | **Send message** (solid ink) / **Cancel** |
 | Previous messages | A short list below the field (time in Colombo and text), read directly from `broadcasts`, so an admin does not send the same message twice |
-| Errors | `409 broadcast_limit`: **You have used all 10 messages for this exam.** (the send button is disabled at 10) |
+| Errors | Validation errors are shown beside the field; there is no per-exam count limit |
 
 Publish failure never fails the send (contract 4.4): the candidate gets the message on their next 10-second heartbeat. The admin sees **Sent.**
 
@@ -311,9 +312,9 @@ Publish failure never fails the send (contract 4.4): the candidate gets the mess
 | Part | Text |
 |---|---|
 | Title | **End the exam for everyone?** |
-| Body | **{k} candidates are still working. Their answers so far will be submitted now and they won't be able to continue. Anything typed in the last few seconds may be lost. This cannot be undone.** |
+| Body | **{k} candidates are still working. Their screens will lock now, their latest available answers (including partial written answers) will be collected and submitted, and they won't be able to continue. This cannot be undone.** |
 | Buttons | **End exam for everyone** (solid ink with the verb, per 2A 4.1) / **Keep exam running** (focus here) |
-| Result toast | **Exam ended. {submitted} submitted, {already} had already submitted.** |
+| Result toast | **Exam ended. Collecting final answers from {working} candidates.** The finalized counts update after the 15-second collection window |
 
 The request carries `confirm: true` (contract 4.4). The dialog is the only confirmation. It does not ask the admin to type anything: on exam day speed matters, and the safe button holds the focus.
 
@@ -377,7 +378,7 @@ Progress label under the tile (2A 4.12): **Q 7/20** in sequential mode, **14 ans
 ### 7.4 Filters and sort
 
 - **Filter chips with counts**, single choice: **All 23**, **Flagged 2**, **Offline 1**, **Camera off 0**, **Not joined 2**. The count updates live. An empty filter shows **No candidates match.**
-- **Sort:** a select with **MER code** (default) and **Needs attention first** (Flagged, then Offline, then Camera off, then the rest). **Tiles never reorder on their own.** With "Needs attention first" selected, the order is recalculated only when the admin picks it again or presses **Refresh order** (a Quiet button that appears next to the select).
+- **Order:** always ascending by normalized MER code. There is no "Needs attention first" sort and live incidents never move tiles. Filters narrow the fixed-order list without changing relative MER order.
 
 ### 7.5 Candidate panel (4C.4)
 
@@ -512,11 +513,11 @@ Filter chips: **All**, **Needs review**, **Not graded**, **Flagged**, **Absent**
 One block per question on the candidate's paper, in the order the candidate saw it:
 
 1. Heading: **Question {paper number}** and **(question {admin number} in the exam)**, the marks **1.5 / 2**, and a source word: **MCQ**, **AI**, or **Override**.
-2. The question text.
+2. The question text, followed by the optional question image with its alt text. A failed private-image load shows **Image unavailable** and does not hide the answer or marks.
 3. **Candidate's answer.** Written: the text in a box with `lang` set per content (Sinhala sizing). MCQ: the selected option, and **No answer** when blank.
 4. **Model answer** (collapsed by default) and, for MCQ, the correct option.
 5. For AI-graded questions: the **reason**; **Matched points**, **Missing points**, **Incorrect claims** as short lists; **Confidence 82%**; **Language** (English, Sinhala, Singlish, mixed); **In English:** the `candidate_meaning_english` line for Sinhala and Singlish answers; and in small type **Graded by {model}, prompt {version}**.
-6. **Review reasons** in plain words when the question needs review: `low_confidence` **Low confidence**; `low_confidence_singlish` **Low confidence on a Singlish or mixed answer**; `verdict_mismatch` **Verdict and marks don't agree**; `no_answer_on_nonblank` **Marked "no answer" but the candidate wrote something**; `points_mismatch` **Points and marks don't agree**; `clamped` **Marks were outside the allowed range and were adjusted**; `truncated_answer` **The answer was cut before grading**; `empty_reason` **No reason was given**; `fallback_model` **Graded by a backup model**.
+6. **Review reasons** in plain words when the question needs review: `low_confidence` **Low confidence**; `low_confidence_singlish` **Low confidence on a Singlish or mixed answer**; `verdict_mismatch` **Verdict and marks don't agree**; `no_answer_on_nonblank` **Marked "no answer" but the candidate wrote something**; `points_mismatch` **Points and marks don't agree**; `clamped` **Marks were outside the allowed range and were adjusted**; `truncated_answer` **The answer was cut before grading**; `empty_reason` **No reason was given**.
 7. Buttons on each block: **Override marks** (Secondary), **Accept AI marks** (Secondary, only when the question needs review), **Regrade this question** (Secondary; disabled with the reason in words for MCQ, blank answers, and exams that are not finalized).
 
 **Override and accept:** both use route 37, which requires the attempt to be `finalized`, a note, and marks from 0 to the question's marks.
@@ -533,7 +534,7 @@ One block per question on the candidate's paper, in the order the candidate saw 
 
 - A control row (hidden when printing): checkbox **Include model answers** (off by default), **Print or save as PDF** (Primary, the browser print dialog) and **Back**.
 - The page itself is A4, black on white, Noto Sans Sinhala for Sinhala text (2A §1.2). **No colour carries meaning** in print: marks, source (**AI** or **Override**) and **Final / Not final** are words.
-- Content: exam title and date, candidate name, MER code and outlet, the total and percent; then each question with its text, the candidate's answer, the marks, and the reason; with model answers when the checkbox is on. Page breaks never split a question block.
+- Content: exam title and date, candidate name, MER code and outlet, the total and percent; then each question with its text, optional image scaled within the printable width, the candidate's answer, the marks, and the reason; with model answers when the checkbox is on. Page breaks never split a question block.
 - The footer on each page: **{name} · {MER} · page {n} of {total}**. The header says **Not final** when any question is unscored or needs review.
 
 ---
@@ -595,7 +596,6 @@ The server returns a code (contract 1.2). The page shows the sentence, never the
 | `no_candidates_assigned` | **Assign at least one candidate first.** |
 | `concurrent_update` | **Someone else changed the time at the same moment. Check the time shown and try again.** |
 | `deadline_passed` | **The time is already up, so it can't be extended.** |
-| `broadcast_limit` | **You have used all 10 messages for this exam.** |
 | `type_immutable` | **A question's type can't be changed. Delete it and add a new one.** |
 | `type_mismatch` | **That field doesn't apply to this type of question.** |
 | `duplicate_mer` | **This MER code already exists.** |
@@ -650,10 +650,10 @@ You said you will update the plan after all of Section 2 is done. These rows are
 | 11 | 4C.2 | Only one speaker on at a time (§7.3) |
 | 12 | 4C.4 | The candidate side panel (§7.5) instead of an enlarged tile |
 | 13 | 4C.5 | The status rules and their order (§7.2) |
-| 14 | New | Filter chips and sort that never reorders by itself (§7.4) |
+| 14 | New | Filter chips with a fixed MER-code order; remove attention-first sorting (§7.4) |
 | 15 | New | "Live updates paused" banner and the 10 s fallback (§7.7) |
 | 16 | 5A.1–5A.4 | The five dialogs in §6, with focus on the safe button |
-| 17 | 5A.5 | Broadcast limit is **300 characters** and 10 per exam (the plan says 500) |
+| 17 | 5A.5 | Announcements are **5,000 characters**, unlimited per exam, and appear as top-right 5-second toasts |
 | 18 | 5C.1, 5C.3 | Health layout and alerts list (§10) |
 | 19 | 7.7 | The snapshot cleanup panel on the Health page (§10) |
 | 20 | 6D.1 | Optional body `{ "mcq_only": true }`. The UI shows `estimated_calls` after the start response (§8.2) |
@@ -669,70 +669,74 @@ You said you will update the plan after all of Section 2 is done. These rows are
 | 30 | 2F.5 | Worker submits at the deadline with `auto` (see 2B §13 row 23). The summary's Forced / Auto labels depend on it (§9.1) |
 | 31 | 4C.5 | Camera off uses the video track only; no open-`CAMERA_LOST` rule (§7.2) |
 | 32 | 6D.3 | Remove the "retry jobs that never ran" checkbox: the resume route has no options (§8.2) |
-| 33 | 1E.2 | Tiptap font size is a custom extension; no image support (§4.2) |
+| 33 | 1E.2 | Tiptap font size is a custom extension; optional question image uses the separate secure upload/select control (§4.2) |
 
-**Already changed in the contract:** broadcast limit of 10 (`409 broadcast_limit`), `violations_counted` in the CSV, the optional `mcq_only` body on the grade route, `409 concurrent_update` on extend, and `meta.snapshot_deleted_at` on purge.
+**Already changed in the contract:** unlimited 5,000-character announcements, `violations_counted` in the CSV, the optional `mcq_only` body on the grade route, `409 concurrent_update` on extend, question images, and `meta.snapshot_deleted_at` on purge.
 
 ---
 
 ## 13. New tests (rehearsal and Phase 8)
 
-Numbers are left open (continue after the last number in Phase 8, 8.96 at the time of writing). Each line is one test.
+IDs continue after Section 2B at 8.136. Each line is one test.
 
 **Access and sign in**
-- Wrong password shows the one message and never says which part was wrong.
-- A signed-in user with no admin profile sees the "not set up" message.
-- A plain admin who opens Health sees the 403 page. A super admin opens it.
-- An admin page left open for 4 hours still works with no sign-in prompt (the cookie refreshes).
+- **8.136** — Wrong password shows the one message and never says which part was wrong.
+- **8.137** — A signed-in user with no admin profile sees the "not set up" message.
+- **8.138** — A plain admin who opens Health sees the 403 page. A super admin opens it.
+- **8.139** — An admin page left open for 4 hours still works with no sign-in prompt (the cookie refreshes).
 
 **Exams and candidates**
-- Colombo 9:30 am saves as 04:00 UTC and displays as 9:30 am again.
-- From live onward, only Title and Flag threshold are editable, the rest show "Locked while the exam is live."
-- **Schedule exam** with no questions lists the missing items in words.
-- Removing a candidate who has started is blocked and named. A late assignment while live works.
-- CSV import of 230 rows in batches: a bad row is listed and skipped, the rest import, a Sinhala name from a UTF-8 CSV shows correctly, "Skip" and "Update" behave as labelled.
-- Unlock login clears the count and the candidate can sign in.
+- **8.140** — Colombo 9:30 am saves as 04:00 UTC and displays as 9:30 am again.
+- **8.141** — From live onward, only Title and Flag threshold are editable, the rest show "Locked while the exam is live."
+- **8.142** — **Schedule exam** with no questions lists the missing items in words.
+- **8.143** — Removing a candidate who has started is blocked and named. A late assignment while live works.
+- **8.144** — CSV import of 230 rows in batches: a bad row is listed and skipped, the rest import, a Sinhala name from a UTF-8 CSV shows correctly, "Skip" and "Update" behave as labelled.
+- **8.145** — Unlock login clears the count and the candidate can sign in.
 
 **Question builder**
-- Leaving marks empty saves 1. A question with 2.5 shows "2.5 marks" to the candidate.
-- Reordering works by keyboard alone.
-- While live, the question is locked, the answer key is still editable and saves through the key route.
-- An MCQ with no correct answer shows "Choose the correct answer."
-- Editing a key during a running grading shows the locked message.
-- After a finished grading, changing a written key shows **Regrade this question for everyone**, and changing an MCQ key shows **Rescore MCQs** and creates **no** Gemini jobs.
+- **8.146** — Leaving marks empty saves 1. A question with 2.5 shows "2.5 marks" to the candidate.
+- **8.147** — Reordering works by keyboard alone.
+- **8.148** — While live, the question is locked, the answer key is still editable and saves through the key route.
+- **8.149** — An MCQ with no correct answer shows "Choose the correct answer."
+- **8.150** — Editing a key during a running grading shows the locked message.
+- **8.151** — After a finished grading, changing a written key shows **Regrade this question for everyone**, and changing an MCQ key shows **Rescore MCQs** and creates **no** Gemini jobs.
 
 **Live view**
-- Each of the six statuses appears, and Offline beats Camera off.
-- Tiles do not move when updates arrive. They reorder only when the sort is re-selected.
-- Only one speaker is on at a time.
-- Changing the threshold turns the right tiles amber or red and shows the red toast once.
-- Switch off the admin's network: the "Live updates paused" banner shows, then clears when it returns, with the summary labelled "as of" in between.
-- Stop LiveKit: the video-not-available banner shows and status, progress and violations still update.
-- Tab to a tile, Enter opens the panel, Escape closes it and focus returns to the tile.
-- A candidate whose camera is switched off shows **Camera off** after about 10 s, and the panel says "No video received…" (no claim about the cause). After the camera returns, the timeline row shows the source.
-- A candidate who ran out of time offline appears in the summary as **Auto**, not **Forced**.
+- **8.152** — Each of the six statuses appears, and Offline beats Camera off.
+- **8.153** — Tiles remain in MER order when status and violation updates arrive.
+- **8.154** — Only one speaker is on at a time.
+- **8.155** — Changing the threshold turns the right tiles amber or red and shows the red toast once.
+- **8.156** — Switch off the admin's network: the "Live updates paused" banner shows, then clears when it returns, with the summary labelled "as of" in between.
+- **8.157** — Stop LiveKit: the video-not-available banner shows and status, progress and violations still update.
+- **8.158** — Tab to a tile, Enter opens the panel, Escape closes it and focus returns to the tile.
+- **8.159** — A candidate whose camera is switched off shows **Camera off** after about 10 s, and the panel says "No video received…" (no claim about the cause). After the camera returns, the timeline row shows the source.
+- **8.160** — A candidate who ran out of time offline appears in the summary as **Auto**, not **Forced**.
 
 **Controls**
-- **Start now** with a scheduled time says it will be replaced. The preview in **Extend time** shows the right new end time. Extending after the deadline is refused in words.
-- Two admins extend at the same moment: neither extension is lost.
-- The 11th broadcast is blocked. A Sinhala broadcast reaches candidates intact.
-- **End exam** puts the focus on **Keep exam running**. Forcing one candidate submits only that candidate. A kicked candidate gets the session-revoked message and can sign in again.
+- **8.161** — **Start now** with a scheduled time says it will be replaced. The preview in **Extend time** shows the right new end time. Extending after the deadline is refused in words.
+- **8.162** — Two admins extend at the same moment: neither extension is lost.
+- **8.163** — More than 10 announcements can be sent; a 5,000-character Sinhala announcement reaches candidates intact and displays safely for 5 seconds.
+- **8.164** — **End exam** puts the focus on **Keep exam running**. Forcing one candidate submits only that candidate. A kicked candidate gets the session-revoked message and can sign in again.
 
 **Timeline and snapshots**
-- Dismiss without a note is refused. Restore brings the count back.
-- A snapshot opened after 5 minutes still loads (a fresh signed link is fetched).
-- A purged snapshot shows "Snapshot deleted".
-- A paired disconnect shows "Back after 3 m 20 s" and its reason in words.
+- **8.165** — Dismiss without a note is refused. Restore brings the count back.
+- **8.166** — A snapshot opened after 5 minutes still loads (a fresh signed link is fetched).
+- **8.167** — A purged snapshot shows "Snapshot deleted".
+- **8.168** — A paired disconnect shows "Back after 3 m 20 s" and its reason in words.
 
 **Grading and review**
-- Every state in §8.2 can be reached. A missing answer key lists each question as a link.
-- The two pause reasons show the right banner and the right button. Resume requeues jobs. The quota reset time shows in Colombo time.
-- The log never shows an answer, prompt or key.
-- **Accept AI marks** creates an override with the prefilled note. An override out of range is refused with the max shown. A regrade keeps the override.
-- A result with a question needing review shows **Not final**. Print shows Sinhala correctly, uses no colour for meaning, and never splits a question across pages.
+- **8.169** — Every state in §8.2 can be reached. A missing answer key lists each question as a link.
+- **8.170** — The two pause reasons show the right banner and the right button. Resume requeues jobs. The quota reset time shows in Colombo time.
+- **8.171** — The log never shows an answer, prompt or key.
+- **8.172** — **Accept AI marks** creates an override with the prefilled note. An override out of range is refused with the max shown. A regrade keeps the override.
+- **8.173** — A result with a question needing review shows **Not final**. Print shows Sinhala correctly, uses no colour for meaning, and never splits a question across pages.
 
 **Health**
-- Stop the worker: within 90 s the row says "Not responding" in words. Resolve an alert and the chip count drops. The snapshot **Check** shows a count before anything is deleted.
+- **8.174** — Stop the worker: within 90 s the row says "Not responding" in words. Resolve an alert and the chip count drops. The snapshot **Check** shows a count before anything is deleted.
+
+**Current requirement additions**
+- **8.175** — Upload, preview, replace and remove an optional JPEG/PNG/WebP question image for both MCQ and written questions; oversize, spoofed MIME and missing alt text are rejected; a half-filled database record fails.
+- **8.176** — End an exam while a candidate has an incomplete written answer: the UI reports the collection window, the answer is retained and graded, and final counts appear after collection closes.
 
 ---
 
@@ -743,7 +747,7 @@ These are the choices this spec makes. None blocks the build.
 | # | Choice | Result |
 |---|---|---|
 | 1 | Accepting an AI mark | An override with the same marks and a prefilled note |
-| 2 | Broadcast limit | 300 characters, 10 per exam |
+| 2 | Announcement limit | 5,000 characters each, unlimited per exam |
 | 3 | Rescoring MCQs after a key fix | Optional `mcq_only` body on the grade route, no Gemini jobs |
 | 4 | Grid order | MER code, never reorders by itself |
 | 5 | Speakers | One candidate's audio at a time |
@@ -751,4 +755,4 @@ These are the choices this spec makes. None blocks the build.
 | 7 | Admin accounts | Created by hand in Supabase (task 1A.6). No admin-management screen |
 | 8 | Language | English interface. Content can be Sinhala, English, mixed or Singlish |
 | 9 | Print | Black and white, no colour carries meaning, optional model answers |
-| 10 | Images in questions | Not supported. Questions are text only. (Default chosen because no answer was given. Adding them later needs an upload route, a storage bucket, an `<img>` entry in the allowlist and a loading rule on the candidate screen.) |
+| 10 | Images in questions | One optional secure image for every MCQ or written question, with required alt text and a text-only fallback |

@@ -5,13 +5,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 [[ -d worker ]] || { echo "Run from the repo (worker/ not found)"; exit 1; }
-echo "==> Build"
-( cd worker && npm ci && npm run build )
+echo "==> Build and test the production bundle"
+# build must bundle shared TypeScript into dist/index.js. test:dist runs the built artifact
+# from an otherwise empty temporary directory, so missing shared files/imports fail here.
+( cd worker && npm ci && npm run build && npm run test:dist )
+[[ -f worker/dist/index.js ]] || { echo "worker/dist/index.js was not produced"; exit 1; }
 echo "==> Install to /opt/exam-worker"
 sudo rsync -a --delete --exclude node_modules worker/dist/ /opt/exam-worker/dist/
-sudo cp worker/package.json worker/package-lock.json /opt/exam-worker/
-( cd /opt/exam-worker && sudo npm ci --omit=dev )
 sudo chown -R exam:exam /opt/exam-worker
+sudo -u exam /usr/bin/node --check /opt/exam-worker/dist/index.js
 echo "==> systemd unit"
 sudo cp infra/ec2/exam-worker.service /etc/systemd/system/exam-worker.service
 sudo systemctl daemon-reload

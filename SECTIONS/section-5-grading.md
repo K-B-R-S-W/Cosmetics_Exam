@@ -1,6 +1,6 @@
 # Section 5 - Grading Spec
 
-> Status: written by reading `implementation-plan.md` (Phase 6, rounds 1-20), `section-3-api-contracts.md` (§4.6, §7), `section-4-proctoring.md` and `001_initial.sql`. **Nothing here was run.** I have no Gemini key and no Postgres, so the prompt has **never been tested against Gemini** and the SQL in Appendix A is proposed code. Anything marked *(verify)* depends on Google's current docs or limits. Anything marked *(test)* must be confirmed in task 6E or the rehearsal.
+> Status: written from `implementation-plan.md` (Phase 6, rounds 1-20), `section-3-api-contracts.md` (§4.6, §7), `section-4-proctoring.md` and `001_initial.sql`. The proposed `002_grading.sql` and the combined smoke test passed in a clean local PostgreSQL 17 container on 2 Oct 2026 with minimal Supabase mocks. The prompt has **not** been tested against Gemini and hosted Supabase behavior is still unverified. Anything marked *(verify)* depends on current Google/Supabase behavior; anything marked *(test)* must be confirmed in task 6E or rehearsal.
 
 ---
 
@@ -9,20 +9,20 @@
 | # | Decision | Where it came from |
 |---|---|---|
 | 1 | Written answers are graded by Gemini **in chunks of at most 10 questions per candidate**; MCQs and blank answers are scored in code | Earlier rounds |
-| 2 | Three Google accounts, **one key per project**, rotated with failover and a progress log | You |
+| 2 | Gemini **3.7 Flash**, with every configured free-tier key rotated automatically on quota/failure and a progress log | You |
 | 3 | The final score is computed in code, never by the AI | Earlier rounds |
 | 4 | Answers are in English, Sinhala, or a mix, including Sinhala typed in English letters ("Singlish") | You |
 | 5 | Privacy is not a concern (Google may use free-tier content to improve its products) | You |
 
-**The most important finding in this section: the free tier is much smaller than the plan assumed.** The most recent source I found (September 2026) lists free Flash models at about **20 requests per day** and Flash-Lite models at about **500 per day**, per project and per model (section 2). Older articles say 500 to 1,500 per day, so the numbers are not reliable. Because of that, this section designs the worker around a **call budget** and a **pause-and-resume** path instead of assuming unlimited calls.
+**Quota rule:** do not hardcode a guessed free-tier quota. The worker uses environment-provided per-key limits, confirms current limits in AI Studio before rehearsal, and also reacts to real quota responses. It rotates across all configured keys without manual intervention and pauses/resumes safely when none is available.
 
 **Design choices I made that you did not decide.** Please confirm or change them:
 
 | Choice | Default | Why |
 |---|---|---|
-| Quota tracking | The worker tracks usage per **(key, model)** and stops at a safe limit instead of waiting for `429` errors | At 20 calls a day, discovering the limit by errors wastes calls |
-| When every key is used up | The run **pauses and resumes by itself** after the next Pacific-midnight quota reset. You get a webhook message with the resume time | Grading is not urgent; nothing is lost |
-| Fallback model | **None by default.** A second model (for example Flash-Lite) is used only if you list it in `GEMINI_MODELS`; its results are shown with the model name | Mixing models inside one exam hurts consistency |
+| Quota tracking | The worker tracks usage per **key** for Gemini 3.7 Flash and stops at the configured safe limit instead of waiting for `429` errors | Discovering a daily limit by errors wastes calls |
+| When every key is used up | The run **pauses and resumes by itself** after the next Pacific-midnight quota reset. The admin Health page gets an in-app alert with the resume time | Grading is not urgent; nothing is lost |
+| Model | **Gemini 3.7 Flash only.** No fallback model is configured. A different model requires a later documented technical decision and new prompt-quality rehearsal | Keeps grading consistent with the selected model |
 | Prompt input | The user message is **one JSON document**; every answer is a JSON string | A candidate cannot break out of a delimiter, which is the main prompt-injection defence |
 | Partial results | Valid items in a response are saved; only the missing items are re-queued | One bad item should not cost the whole chunk |
 | Mark step | 0.5 | Matches 1- and 2-mark questions. A 1-mark question can only give 0, 0.5 or 1 |
@@ -38,25 +38,24 @@
 2. **Never silently give or lose marks.** A question the AI could not grade is shown as "not graded", never as 0. Admin can always override.
 3. **Every job is safe to run twice.** A crash or a Resume must not create duplicate scores (Appendix A, unique index).
 4. **Candidate text is data.** It is never placed in the instruction part of the prompt.
-5. **One model per exam where possible**, so all 23 papers are marked by the same marker.
+5. **Gemini 3.7 Flash for every written answer.** No fallback model may silently mix results within an exam.
 6. **Quota is a budget.** The worker knows its budget, shows it to the admin, and pauses cleanly when it is spent.
 
 ---
 
 ## 2. Free-tier quota planning
 
-### 2.1 What I found (third-party sources, September 2026, *verify in AI Studio*)
+### 2.1 Quota facts to verify in AI Studio
 
 | Fact | Detail |
 |---|---|
 | Limits are per **project and per model** | More keys in the same project do not add quota. Your three keys must come from three different projects (you have separate Google accounts) |
 | Daily quota resets at **midnight Pacific time** | Midnight PDT is 12:30 pm in Sri Lanka until US clocks change on 1 Nov 2026, and 1:30 pm after that *(verify)* |
-| Free Flash models | About 20 requests/day each |
-| Free Flash-Lite models | About 500 requests/day each |
+| Gemini 3.7 Flash free-tier limits | Environment-driven; verify separately for every configured key/project and do not copy a guessed number into code |
 | Free-tier content | Can be used by Google to improve its products |
 | Older articles | Quote 5 to 15 requests/minute and 500 to 1,500 per day for older models. Treat all numbers as unconfirmed |
 
-The live numbers for **your** projects are on the AI Studio rate-limit page. Check them for every key before exam day and put them in `GEMINI_MODELS` (section 3).
+The live numbers for **your** projects are on the AI Studio rate-limit page. Check them for every key before exam day and put them in `GEMINI_DAILY_LIMITS` (section 3).
 
 ### 2.2 Call budget
 
@@ -72,15 +71,15 @@ calls = candidates x ceil(written_questions_per_paper / GRADING_CHUNK_SIZE)
 
 Add about 20% for retries and a few regrades. **Rehearsal grading, prompt tests (6E) and regrades use the same daily quota**, so do not run them on the exam's grading day.
 
-| If your best free model allows | Result |
+| If the configured keys allow | Result |
 |---|---|
-| 20 calls/day per key (60 total) | One clean run of 23 to 46 calls fits, with little room to spare. Use chunk size 15 to 20 if you have many written questions |
-| 500 calls/day per key | Plenty. Quality of the lighter model must be checked on Sinhala and Singlish (6E) |
+| Configured total is only slightly above the estimated calls | Increase chunk size within the tested range and keep reserve for retries |
+| Configured total comfortably exceeds calls plus retry reserve | Run normally and still verify Sinhala/Singlish quality in task 6E |
 | Not enough | The run pauses and finishes after the next reset. If that is not acceptable, the only fix is billing on one project (Flash-Lite input costs cents for a whole exam). This is your call; the plan stays free by default |
 
 ### 2.3 Slots
 
-A **slot** is one key paired with one model. The worker keeps a small record per slot: `cooldown_until`, `disabled`, `last_call_at`, `used_today`, `limit`. It prefers the primary model, spreads calls across keys, and skips a slot whose `used_today` has reached `limit - GRADING_RESERVE`. `used_today` is rebuilt at startup by counting `call` rows in `grading_log` since the last Pacific midnight, so a restart does not forget what was used.
+A **slot** is one key for the configured Gemini 3.7 Flash model. The worker keeps `cooldown_until`, `disabled`, `last_call_at`, `used_today`, and that key's environment-provided limit. It spreads calls across keys and skips a slot whose `used_today` has reached `limit - GRADING_RESERVE`. `used_today` is rebuilt at startup by counting `call` rows in `grading_log` since the last Pacific midnight, so a restart does not forget what was used.
 
 ---
 
@@ -91,7 +90,8 @@ All of these live in the **worker's** environment (the Gemini keys must never be
 | Variable | Default | Meaning |
 |---|---|---|
 | `GEMINI_KEY_1` .. `GEMINI_KEY_3` | none | The keys. Never logged (only the label `key1`..`key3`) |
-| `GEMINI_MODELS` | none | Ordered list `model:daily_limit`, primary first, for example `<primary-model>:20` or `<primary-model>:20,<lite-model>:500`. Use the free model names shown in AI Studio *(verify)* |
+| `GEMINI_MODEL` | `gemini-3.7-flash` | The required model. Startup fails closed if it differs unless a later approved technical change updates this spec |
+| `GEMINI_DAILY_LIMITS` | none | Per-key environment configuration, for example `key1:LIMIT,key2:LIMIT,key3:LIMIT`, using the current values shown in AI Studio; no quota is assumed in code |
 | `GRADING_CHUNK_SIZE` | 10 | Questions per call, 1 to 20 |
 | `GRADING_SLOT_MIN_INTERVAL_MS` | 12000 | Minimum gap between calls on one slot (5 per minute, the lowest figure I saw) *(verify)* |
 | `GRADING_RESERVE` | 1 | Calls kept unused per slot per day |
@@ -105,7 +105,7 @@ All of these live in the **worker's** environment (the Gemini keys must never be
 | `GRADING_PROMPT_VERSION` | `g1` | Stored with every score |
 | `GEMINI_THINKING` | unset | Optional pass-through of the model's thinking setting. Test with and without *(verify)* |
 
-Already planned elsewhere: `ALERT_WEBHOOK_URL`, the Supabase keys.
+Already planned elsewhere: the Supabase keys. Operational alerts are written to the in-app `alerts` table and shown on the admin Health page; there is no Discord/Telegram webhook.
 
 ---
 
@@ -114,7 +114,7 @@ Already planned elsewhere: `ALERT_WEBHOOK_URL`, the Supabase keys.
 A job is `(attempt, chunk of question ids)`. The worker builds **items**, one per question:
 
 1. **Skip items already scored** for this job (`question_scores.job_id = job.id`). This makes Resume cheap and safe.
-2. **Question text:** convert `questions.body_html` to plain text. Use `sanitize-html` with no allowed tags, turn `<li>` into `- `, `<p>` and `<br>` into newlines, decode entities, collapse blank lines, cap at 2,000 characters.
+2. **Question text:** convert `questions.body_html` to plain text. Use `sanitize-html` with no allowed tags, turn `<li>` into `- `, `<p>` and `<br>` into newlines, decode entities, collapse blank lines, cap at 2,000 characters. If the question has an image, include its administrator-written alt text as `question_image_description`; never send a private Storage URL.
 3. **Candidate answer:** `answers.answer_text` exactly as typed, trimmed. Over `GRADING_MAX_ANSWER_CHARS`: cut it and set `truncated = true` (later forces review).
 4. **Key fields:** `model_answer`, `grading_notes`, `calibration` from `answer_keys`.
 5. **Item ids** are `"1"`, `"2"`, ... within the call, not UUIDs, so the model cannot mangle them. The worker keeps the map back to question ids.
@@ -243,7 +243,6 @@ Marks: `raw` = model value; `clamped` = value outside 0..max (clamped); then rou
 | `clamped` | the model's marks were outside 0..max |
 | `truncated_answer` | the answer was cut |
 | `empty_reason` | no reason given |
-| `fallback_model` | graded by a model other than the primary |
 
 ### 6.3 What is stored
 
@@ -273,7 +272,7 @@ Rows are written with `ON CONFLICT DO NOTHING` (Appendix A index), then the job 
 
 ### 7.1 Startup
 
-1. Load and validate config. At least one key and one model are required; log labels only.
+1. Load and validate config. At least one key, its daily limit, and `GEMINI_MODEL=gemini-3.7-flash` are required; log labels only.
 2. **Single-instance guard** (Section 6 §5.4). Read `system_health('worker')`. If the row is missing, `status = 'down'`, or `last_heartbeat_at` is 60 s old or more: continue. Otherwise (a different `detail.instance` with a fresh heartbeat): re-read the row every 5 s for up to 65 s. If `last_heartbeat_at` never changes, the other worker is dead: take over. If it advances, **exit with code 3**. On SIGTERM or SIGINT write `status = 'down'` and exit 0. This still keeps a laptop worker off the shared database, because its heartbeat keeps advancing.
 3. Build the slots, rebuild `used_today` from `grading_log` since the last Pacific midnight (section 7.7).
 4. Reset stuck jobs (`running` with `locked_at` older than 2 minutes back to `pending`), then start the timers: heartbeat (30 s), key check (5 min, task 6A.9), scheduler and purge (Section 6 spec).
@@ -297,7 +296,7 @@ apply outcome (7.4)
 
 ### 7.3 Choosing a slot
 
-Eligible = not disabled, `cooldown_until` passed, `now - last_call_at >= GRADING_SLOT_MIN_INTERVAL_MS`, and `used_today < limit - GRADING_RESERVE`. Prefer the primary model; among equals pick the lowest `used_today / limit`. If none is eligible but one only needs to wait for its interval, wait.
+Eligible = not disabled, `cooldown_until` passed, `now - last_call_at >= GRADING_SLOT_MIN_INTERVAL_MS`, and `used_today < limit - GRADING_RESERVE`. Pick the lowest `used_today / limit`; every slot uses Gemini 3.7 Flash. If none is eligible but one only needs to wait for its interval, wait.
 
 ### 7.4 Outcomes and actions
 
@@ -344,7 +343,7 @@ Every 30 s write `system_health('worker')`: `status`, `last_heartbeat_at`, and `
 ```json
 { "instance": "<uuid>", "version": "...",
   "queue": { "pending": 12, "running": 2, "failed": 0 },
-  "slots": [ { "key": "key1", "model": "...", "used": 12, "limit": 20, "cooldown_until": null, "disabled": false } ] }
+  "slots": [ { "key": "key1", "model": "gemini-3.7-flash", "used": 12, "limit": "<configured>", "cooldown_until": null, "disabled": false } ] }
 ```
 The grading progress page reads this to show per-slot usage and an estimate of the remaining time. No extra table is needed.
 
@@ -354,7 +353,7 @@ Events: `worker_start`, `call` (HTTP 200 reached the model; counts toward the da
 
 ### 7.10 Alerts
 
-Dedup keys (so a 2-second loop cannot flood the webhook): `key_disabled:{label}`, `keys_exhausted:{run}`, `model_not_found`, `jobs_failed:{run}`, `blocked:{run}`, and `run_done:{run}` (info). Worker-level keys (Section 6 §6): `worker_started` (info), `guard_exit` (critical), `supabase_unreachable` (critical, after 5 minutes of failed database calls). The webhook wording and formats are in the Section 6 (infra) spec.
+Dedup keys (so a 2-second loop cannot flood the in-app alert list): `key_disabled:{label}`, `keys_exhausted:{run}`, `model_not_found`, `jobs_failed:{run}`, `blocked:{run}`, and `run_done:{run}` (info). Worker-level keys (Section 6 §6): `worker_started` (info), `guard_exit` (critical), `supabase_unreachable` (critical, after 5 minutes of failed database calls). Alerts are database rows shown on the Health page; no third-party chat service is used.
 
 ---
 
@@ -495,7 +494,7 @@ Run `002_grading.sql` (Appendix A) after `001_initial.sql`, and add smoke test b
 | 8.68 | `429` classification passes against the saved real fixtures (RPM and, if captured, daily) |
 | 8.69 | An invalid key becomes `disabled`, a critical alert is sent, grading continues on the other keys |
 | 8.70 | `404` model-not-found pauses the run with a critical alert and no key rotation |
-| 8.71 | All slots used up: run `paused` with `resume_at`, webhook sent; after the cooldown it resumes by itself |
+| 8.71 | All slots used up: run `paused` with `resume_at`, in-app alert created; after the cooldown it resumes by itself |
 | 8.72 | All keys disabled: run `paused` and does **not** resume by itself |
 | 8.73 | A response missing 2 of 10 items saves 8 scores and re-queues exactly those 2 |
 | 8.74 | Invalid JSON or a `MAX_TOKENS` cut-off re-queues the chunk as two half-size jobs |

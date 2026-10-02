@@ -16,9 +16,9 @@ Covers the look of the whole platform: tokens, type, layout rules, the component
 1. **2D.4 Save indicator says "green/yellow/orange states".** That contradicts the neutral rule and makes save state depend on colour. New rule: save state is shown in words and an icon (§4.5). Colour is only a secondary cue, and only for the offline state.
 2. **3C.2 badges are red and amber by threshold.** This is fine because it is the admin side, but the badge must also show the number and a word or icon, not colour alone (§4.10 and §4.11).
 3. **4B.4 camera banner and 3A.10 fullscreen overlay need a style.** Both are warnings the candidate must act on. They use the Warning signal at low weight (§4.6 and §4.8), not red, so candidates don't panic over a server-side fault.
-4. **The logo file is 201×187 px.** That is fine up to about 90 px high on a high-density screen, but it will blur if enlarged. An SVG would be better (§2).
+4. **The available logo is PNG only (201×187 px).** Use the supplied PNG assets; SVG is not a prerequisite. Keep it near 90 px high or smaller so it remains sharp (§2).
 
-5. **Review fixes (round 2).** The Offline save-indicator words now say that answers must be reconnected to be saved (§4.5). The fullscreen overlay leaves the exam strip uncovered so the timer stays visible (§4.8). The toast wording and test numbering now match 2C and the plan (§4.14, §7.4). The editor spec says no images and how font size is built (§4.15).
+5. **Current question-image decision.** Both MCQ and written questions may have one optional uploaded image. It is stored separately from rich text and displayed between the question text and answer controls (§4.15 and Sections 2B/2C).
 
 ---
 
@@ -200,11 +200,11 @@ An inline strip under the exam strip, full width, `--surface` with a 4px left ru
 
 | Variant | Use | Colour |
 |---|---|---|
-| Notice | Time extended, admin broadcast | `--ink` rule, info icon |
+| Notice | Time extended | `--ink` rule, info icon |
 | Warning | Camera disconnected (4B.4), connection lost | `--warn` |
 | Blocking | Fullscreen overlay (see 4.8) | `--ink` |
 
-A banner never covers the question. A new broadcast banner stays until dismissed (there is a Dismiss button, 44 px). Warning banners cannot be dismissed while the condition lasts. Accessibility: `role="status"` for Notice and `role="alert"` for Warning, announced once.
+A banner never covers the question. Warning banners cannot be dismissed while the condition lasts. Accessibility: `role="status"` for Notice and `role="alert"` for Warning, announced once. Exam-team announcements use the top-right toast queue in §4.14, not this persistent banner.
 
 ### 4.7 Dialog
 
@@ -237,7 +237,7 @@ Shows the number and a word, for example "3 violations". At or above `ceil(flag_
 
 ### 4.12 Video tile (4C.2)
 
-A 4:3 video, with below it: the MER code (bold), name, status badge, violation badge, progress ("Q 7/20" or "14 answered"), and a speaker toggle (`aria-pressed`, 44 px). No coloured border on the tile. A flagged candidate is marked by the violation badge and a "Flagged" word only. Missing video shows a neutral placeholder with the words "No camera". Tiles are focusable, and Enter opens the candidate details.
+A 4:3 video, with below it: the MER code (bold), name, status badge, violation badge, dynamic progress (for example "Question 7 of {total}" or "{answered} answered"), and a speaker toggle (`aria-pressed`, 44 px). Only one speaker toggle may be active: activating another candidate first mutes/unsubscribes the previous audio. No coloured border on the tile. A flagged candidate is marked by the violation badge and a "Flagged" word only. Missing video shows a neutral placeholder with the words "No camera". Tiles are focusable, and Enter opens the candidate details.
 
 ### 4.13 Data table (admin)
 
@@ -245,7 +245,7 @@ A 4:3 video, with below it: the MER code (bold), name, status badge, violation b
 
 ### 4.14 Toast (admin)
 
-Bottom-right, one line, a 6-second timeout except alerts, which stay until dismissed. `role="status"`. Used for the "reached the flag threshold" message (3C.2) and for save confirmations. Never used for anything a candidate must read, **except the one candidate warning in §4.14a**.
+Admin toasts appear bottom-right. Candidate exam-team announcements appear top-right, allow wrapped/scrollable text up to 5,000 characters without covering the answer controls, and auto-hide after 5 seconds. Multiple announcements are queued and shown in sent order, one at a time. `role="status"` announces each once. Admin threshold/save toasts use a 6-second timeout; operational alerts remain until dismissed. The tab/focus warning is the separate candidate warning in §4.14a.
 
 ### 4.14a Candidate warning toast
 
@@ -253,7 +253,7 @@ Shown to a candidate when a tab switch or focus loss was recorded (Section 2B §
 
 ### 4.15 Rich-text editor (Tiptap, 1E.2)
 
-Admin only. The toolbar buttons are 44 px with labels in `aria-label` and `title`. The content area uses the question type scale. The allowed tags are the contract's allowlist (Section 3), and the toolbar must not offer tags outside it. **No images** (the allowlist has no `<img>`; decided). Tiptap has no built-in font size: use the `TextStyle` extension with a small custom `fontSize` extension that writes `<span style="font-size: …px">`, which is the only style the sanitizer keeps.
+Admin only. The toolbar buttons are 44 px with labels in `aria-label` and `title`. The content area uses the question type scale. The allowed tags are the contract's allowlist (Section 3), and the toolbar must not offer tags outside it. Tiptap has no inline-image tool: the optional question image is a separate **Add image** control with upload/select, required alt text, preview, replace and remove actions. This keeps untrusted `<img>` markup out of `body_html`. Tiptap has no built-in font size: use the `TextStyle` extension with a small custom `fontSize` extension that writes `<span style="font-size: …px">`, which is the only style the sanitizer keeps.
 
 ### 4.16 Empty, loading and error states
 
@@ -342,14 +342,14 @@ Tailwind (as the plan assumes) with the tokens mapped in `tailwind.config`, so c
 | 9 | 1E.2 | Toolbar and allowlist rule from §4.15 |
 | 10 | 2D.9 | Reference §1.4 breakpoints and the 44 px rule |
 
-### 7.4 New tests (continue after the last number in Phase 8, which is 8.96 at the time of writing; numbers to be confirmed when merged)
+### 7.4 New tests (start at 8.97; reserve these IDs when the implementation plan is updated)
 
-| Test | What to check |
-|---|---|
-| Contrast scan | Automated contrast check on every built screen: no failures at AA |
-| Keyboard only | Every candidate screen completed with the keyboard alone, including the fullscreen overlay |
-| Zoom 200% | The exam screen at 200% zoom keeps the timer, save state and Next button reachable |
-| Sinhala rendering | Real Sinhala question and answer render with correct line height, no clipped marks, in the editor, exam screen, review page and PDF |
-| Colour-blind check | Every status is understandable in greyscale |
-| Reduced motion | No transitions with the OS setting on |
-| Tablet touch | All targets 44 px or more on a 768 px tablet in both orientations |
+| ID | Test | What to check |
+|---|---|---|
+| 8.97 | Contrast scan | Automated contrast check on every built screen: no failures at AA |
+| 8.98 | Keyboard only | Every candidate screen completed with the keyboard alone, including the fullscreen overlay |
+| 8.99 | Zoom 200% | The exam screen at 200% zoom keeps the timer, save state and Next button reachable |
+| 8.100 | Sinhala rendering | Real Sinhala question and answer render with correct line height, no clipped marks, in the editor, exam screen, review page and print view |
+| 8.101 | Colour-blind check | Every status is understandable in greyscale |
+| 8.102 | Reduced motion | No transitions with the OS setting on |
+| 8.103 | Tablet touch | All targets 44 px or more on a 768 px tablet in both orientations |

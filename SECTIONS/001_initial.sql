@@ -1,6 +1,6 @@
 -- =====================================================================
 -- 001_initial.sql  —  Exam platform: consolidated initial migration
--- Target: a FRESH Supabase project (Postgres 15+).
+-- Target: a FRESH Supabase project (current project: PostgreSQL 17.11).
 -- Run once in the Supabase SQL editor, or place in supabase/migrations/.
 -- Order: extensions -> tables -> indexes -> functions/triggers
 --        -> RLS/policies -> views -> realtime/storage -> seed -> hardening
@@ -48,7 +48,7 @@ create table public.exams (
   navigation_mode     text not null default 'free' check (navigation_mode in ('free', 'sequential')),
   questions_per_paper int  check (questions_per_paper is null or questions_per_paper > 0),
   shuffle             boolean not null default false,
-  flag_threshold      int  not null default 10 check (flag_threshold > 0),
+  flag_threshold      int  not null default 10 check (flag_threshold between 1 and 100),
   is_practice         boolean not null default false,
   created_by          uuid references public.admin_profiles (id) on delete set null,
   created_at          timestamptz not null default now(),
@@ -70,8 +70,22 @@ create table public.questions (
   position   int  not null,                    -- admin ordering; not unique so drag-and-drop reorders are simple
   type       text not null check (type in ('mcq', 'written')),
   body_html  text not null,                    -- sanitized server-side (sanitize-html) before insert
+  image_path text,                             -- path in private 'question-images' bucket
+  image_alt_text text,                         -- required when an image is present
+  image_mime text,
+  image_size_bytes int,
   marks      numeric(5,2) not null default 1 check (marks > 0),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint questions_image_all_or_none check (
+    num_nonnulls(image_path, image_alt_text, image_mime, image_size_bytes) = 0
+    or (
+      num_nonnulls(image_path, image_alt_text, image_mime, image_size_bytes) = 4
+      and btrim(image_path) <> ''
+      and btrim(image_alt_text) <> ''
+      and image_mime in ('image/jpeg', 'image/png', 'image/webp')
+      and image_size_bytes between 1 and 5242880
+    )
+  )
 );
 
 create table public.mcq_options (
@@ -269,7 +283,7 @@ create table public.admin_actions (
 create table public.broadcasts (
   id       uuid primary key default gen_random_uuid(),
   exam_id  uuid not null references public.exams (id) on delete cascade,
-  message  text not null,
+  message  text not null check (char_length(btrim(message)) between 1 and 5000),
   sent_at  timestamptz not null default now()
 );
 
@@ -506,7 +520,7 @@ begin
 end $$;
 
 -- 3.7 save_answer(): the single write path for answers. Enforces, atomically and with the DATABASE clock:
---     attempt in progress, exam live and not force-ended, deadline + 15 s grace, question belongs to the
+--     attempt in progress; normal live deadline or the 15 s force-end collection window; question belongs to the
 --     paper, sequential position guard (only the CURRENT question), option belongs to the question,
 --     and "only a higher revision overwrites".
 --     Returns: saved | stale_revision | closed | not_found | not_in_paper | wrong_position | bad_option
@@ -529,10 +543,16 @@ begin
   select * into v_exam from public.exams where id = v_attempt.exam_id;
 
   if v_attempt.status <> 'in_progress'
-     or v_exam.status <> 'live'
-     or v_exam.force_ended_at is not null
      or v_exam.ends_at is null
-     or now() > v_exam.ends_at + make_interval(mins => v_attempt.extra_minutes) + interval '15 seconds'
+     or not (
+       (v_exam.status = 'live'
+        and v_exam.force_ended_at is null
+        and now() <= v_exam.ends_at + make_interval(mins => v_attempt.extra_minutes) + interval '15 seconds')
+       or
+       (v_exam.status = 'ended'
+        and v_exam.force_ended_at is not null
+        and now() <= v_exam.force_ended_at + interval '15 seconds')
+     )
   then
     return 'closed';
   end if;
@@ -742,10 +762,25 @@ insert into storage.buckets (id, name, public)
 values ('snapshots', 'snapshots', false)
 on conflict (id) do nothing;
 
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'question-images', 'question-images', false, 5242880,
+  array['image/jpeg', 'image/png', 'image/webp']
+)
+on conflict (id) do update
+set public = false,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
 create policy "admins read snapshots" on storage.objects
   for select to authenticated
   using (bucket_id = 'snapshots' and public.is_admin());
--- Uploads and deletes happen through the API / worker (service role).
+
+create policy "admins read question images" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'question-images' and public.is_admin());
+-- Uploads and deletes happen through the API / worker (service role). Candidates receive
+-- question images only through an authenticated API route that verifies attempt membership.
 
 -- =====================================================================
 -- 7. SEED

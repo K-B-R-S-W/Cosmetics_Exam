@@ -14,7 +14,7 @@ Covers: the EC2 box (t3.small), LiveKit and Caddy, the worker service, environme
      - If the value advances, another worker is alive: exit with code 3.
    - A graceful stop (SIGTERM) also writes `status = 'down'` to the row (the table only allows `ok`, `degraded` or `down`), and the guard treats `down` as "not alive", so planned restarts take no wait.
    - Test 8.87 covers this.
-2. **`pg_dump` version mismatch.** Ubuntu 24.04 installs `postgresql-client` 16. `pg_dump` refuses to dump a server newer than itself. If your Supabase project runs Postgres 17, the backup fails with "server version mismatch". Check the version in the dashboard, and if needed install `postgresql-client-17` from the PostgreSQL apt repository (§8).
+2. **`pg_dump` version mismatch.** The current Supabase server is PostgreSQL **17.11**. Install and verify PostgreSQL client 17 (or newer); an older `pg_dump` may refuse the backup. Record both `pg_dump --version` and `select version()` in the rehearsal evidence (§8).
 3. **`infra/livekit/.env` was missing.** `docker-compose.yml` reads `LIVEKIT_HOST` and `ACME_EMAIL` from it, but no template existed. Added `livekit.env.example`.
 4. **No deploy or check script.** Added `deploy-worker.sh` and `check-stack.sh`.
 5. **Memory is tight on 2 GB.** The limits add up to LiveKit 900 + Caddy 200 + Redis 100 + worker 400 = 1.6 GB, before the OS and Docker. The 2 GB swap file covers spikes, but heavy swapping during an exam would stall the SFU. See §9 for what to watch and what to cut first.
@@ -28,7 +28,7 @@ Covers: the EC2 box (t3.small), LiveKit and Caddy, the worker service, environme
 | Next.js app (candidate + admin + API) | Vercel | Git push |
 | Postgres, auth, Realtime, `snapshots` bucket | Supabase | — |
 | LiveKit, Caddy, Redis | EC2, Docker, host networking, `/opt/exam-livekit` | `docker compose up -d` |
-| Worker (scheduler, disconnect rules, grading, heartbeat, key check, purge) | EC2, systemd, `/opt/exam-worker` | `exam-worker.service` |
+| Worker (scheduler, disconnect rules, grading, heartbeat, key check, snapshot retention, unattached-question-image cleanup) | EC2, systemd, `/opt/exam-worker` | `exam-worker.service` |
 | Gemini keys | `/etc/exam-worker.env` only | — |
 
 Repo layout (replaces §14.6 for these folders):
@@ -61,8 +61,8 @@ Never commit `livekit.yaml`, `.env` files, or `/etc/exam-worker.env`.
 
    Check these against the current LiveKit deployment docs *(verify)*. Do **not** open 7880 or 6379. LiveKit signalling and Redis listen on `127.0.0.1` only.
 4. **SSH from your IP only:** if your home or office IP changes, you are locked out. Keep the AWS console open as a fallback (edit the rule, or use EC2 Instance Connect).
-5. **DuckDNS:** create a subdomain at duckdns.org and point it at the Elastic IP. The IP never changes, so you set it once:
-   `curl "https://www.duckdns.org/update?domains=YOURNAME&token=YOUR_TOKEN&ip=ELASTIC_IP"` (it answers `OK`).
+5. **DuckDNS:** create `Cosmetics.duckdns.org` and point it at the Elastic IP. Creation and DNS pointing are deployment steps; the IP then remains stable:
+   `curl "https://www.duckdns.org/update?domains=Cosmetics&token=YOUR_TOKEN&ip=ELASTIC_IP"` (it answers `OK`).
 6. **CloudWatch:** enable the `CPUCreditBalance` and `CPUUtilization` graphs for the instance. A t3 earns credits at a baseline of 40% of two vCPUs and spends them above that *(verify)*. Check the instance's credit mode: **unlimited** keeps performance but can add charges, **standard** throttles when credits run out.
 
 ### Connecting with Tabby
@@ -74,7 +74,7 @@ New profile → SSH → host = Elastic IP, user = `ubuntu`, authentication = the
 ## 3. Prepare the box
 
 1. `git clone` the repo into `/home/ubuntu/exam-platform`.
-2. `sudo bash infra/ec2/setup-ec2.sh`. It installs Node 22 LTS, Docker, Chrony (time sync), `postgresql-client`, rclone, unattended security updates **without automatic reboot**, a 2 GB swap file, a no-login `exam` user, and the folders `/opt/exam-worker`, `/opt/exam-livekit`, `/var/backups/exam`. It is safe to re-run. The box stays on UTC on purpose; the app converts Colombo time.
+2. `sudo bash infra/ec2/setup-ec2.sh`. It installs Node 22 LTS, Docker, Chrony (time sync), the available PostgreSQL client, rclone, unattended security updates **without automatic reboot**, a 2 GB swap file, a no-login `exam` user, and the folders `/opt/exam-worker`, `/opt/exam-livekit`, `/var/backups/exam`. Before backups, install PostgreSQL client 17 as described in §8 and confirm `pg_dump --version`; the generic Ubuntu client is not accepted as proof. The box stays on UTC on purpose; the app converts Colombo time.
 3. Run `bash infra/ec2/check-stack.sh`. Right now it should report the worker and containers as not running. Everything else should be OK.
 
 ---
@@ -90,7 +90,7 @@ sudo cp infra/livekit/livekit.env.example   /opt/exam-livekit/.env
 ```
 
 Edit both copies:
-- `.env`: set `LIVEKIT_HOST` (your DuckDNS name) and `ACME_EMAIL`.
+- `.env`: set `LIVEKIT_HOST=Cosmetics.duckdns.org` and `ACME_EMAIL`.
 - `livekit.yaml`: replace `REPLACE_API_KEY: REPLACE_API_SECRET` with a pair from `docker run --rm livekit/livekit-server generate-keys`. Then `sudo chmod 600 /opt/exam-livekit/livekit.yaml`.
 
 Put the same key and secret in the Vercel variables `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
@@ -105,12 +105,12 @@ sudo docker compose logs caddy | tail -30     # look for "certificate obtained"
 
 - First start takes a minute while Caddy gets the certificate. Ports 80 and 443 must be reachable from the internet and the DuckDNS name must already resolve to the Elastic IP.
 - If the log shows rate-limit errors from Let's Encrypt, stop and wait. Do not keep restarting. The `caddy_data` volume keeps the certificate between restarts, so **do not delete volumes** (`docker compose down -v`).
-- `curl -I https://YOUR.duckdns.org` should answer (a LiveKit status or `404`/`200` is fine, a TLS error is not).
+- `curl -I https://Cosmetics.duckdns.org` should answer (a LiveKit status or `404`/`200` is fine, a TLS error is not).
 - The real test is a browser: the candidate pre-exam check must publish video to the server and the admin grid must show the tile.
 
 ### 4.3 TURN and strict networks
 
-TURN/UDP on 3478 is on. TURN/TLS (port 5349 or 443 with its own certificate) is **not**. Candidates behind a firewall that blocks all UDP fall back to ICE/TCP on 7881. A network that blocks both will fail to publish video. In that case the exam still works without video (the exam does not depend on LiveKit), `CAMERA_LOST` is logged, and the candidate sees the warning banner. Test one candidate on mobile data in the rehearsal. If strict networks turn out to be common, TURN/TLS becomes a follow-up task.
+TURN/UDP on 3478 is on. TURN/TLS (port 5349 or 443 with its own certificate) is **not yet proven**. Candidates behind a firewall that blocks all UDP fall back to ICE/TCP on 7881. Rehearsal must test normal Wi-Fi, mobile data, a restrictive network, ICE selection, TURN fallback, TLS, reconnect, camera/microphone recovery, and candidate/admin Realtime behavior. If a network blocks both UDP and ICE/TCP, enable and verify TURN/TLS before declaring LiveKit production-ready; video failure must not stop the exam itself.
 
 ### 4.4 Pinning
 
@@ -126,11 +126,11 @@ On EC2 the instance only sees its private address. `use_external_ip: true` makes
 
 ### 5.1 Environment file
 
-`sudo nano /etc/exam-worker.env`, paste `worker.env.example`, fill in the values, then `sudo chmod 600 /etc/exam-worker.env`. Set `GEMINI_MODELS=gemini-3.7-flash:<daily limit per key from your AI Studio page>`.
+`sudo nano /etc/exam-worker.env`, paste `worker.env.example`, fill in the values, then `sudo chmod 600 /etc/exam-worker.env`. Keep `GEMINI_MODEL=gemini-3.7-flash` and set each key's current free-tier limit in `GEMINI_DAILY_LIMITS`; no quota is hardcoded and no fallback model is configured.
 
 ### 5.2 Deploy and update
 
-`bash infra/ec2/deploy-worker.sh` builds the worker, copies it to `/opt/exam-worker`, installs production dependencies, installs the systemd unit, and restarts the service. Use the same command for every update.
+`bash infra/ec2/deploy-worker.sh` builds the worker as a self-contained Node bundle (use `esbuild`, `tsup`, or an equivalently verified bundler), copies the bundle and required runtime files to `/opt/exam-worker`, installs the systemd unit, and restarts the service. Shared TypeScript imported from outside the worker folder must be included in the bundle. Deployment must run the built `dist/index.js` in a clean staging directory before restarting systemd, proving it has no undeployed source-file dependency.
 
 ### 5.3 The service file
 
@@ -162,12 +162,7 @@ Worker logs never contain answers, prompts or keys (Section 5 §7.9). Keep it th
 
 ## 6. Alerts
 
-`ALERT_WEBHOOK_URL` goes in the worker environment (and optionally Vercel). It is either a Discord webhook URL or a Telegram `sendMessage` URL with the chat in the query string:
-
-- Discord: `https://discord.com/api/webhooks/<id>/<token>`. The worker POSTs `{ "content": "<text>" }`.
-- Telegram: `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<CHAT_ID>`. The worker POSTs `{ "text": "<text>" }`.
-
-`worker/src/alerts.ts` picks the format from the host name. Anything else is treated as a plain JSON webhook with `{ "text": ... }`. Sending never blocks the worker: a 5 s timeout, one retry, then log and move on. A failed alert is logged to the journal, never thrown.
+Operational alerts are rows in the Supabase `alerts` table and appear on the super-admin Health page. The worker inserts/upserts them using the dedup key; the web app reads them through authenticated admin UI. There is no Discord, Telegram, or generic chat webhook configuration.
 
 **Message format:** `[SEVERITY] Exam platform — <what happened>. <what to do>.` Severity is `INFO`, `WARNING` or `CRITICAL`. Never include candidate names, answers or keys. Key labels (`key2`) are fine.
 
@@ -175,7 +170,7 @@ Worker logs never contain answers, prompts or keys (Section 5 §7.9). Keep it th
 |---|---|---|
 | `key_disabled:{label}` | CRITICAL | `{label} was rejected by Gemini. Grading continues on the other keys. Replace the key in /etc/exam-worker.env and restart the worker.` |
 | `keys_exhausted:{run}` | WARNING | `Gemini quota used up. Grading paused, will resume at {resume_at}.` |
-| `model_not_found` | CRITICAL | `The Gemini model name was not found. Grading paused. Check GEMINI_MODELS.` |
+| `model_not_found` | CRITICAL | `Gemini 3.7 Flash was not found. Grading paused. Check GEMINI_MODEL.` |
 | `jobs_failed:{run}` | WARNING | `{n} grading jobs failed. Check the results page.` |
 | `blocked:{run}` | WARNING | `{n} answers were blocked by Gemini. Override those marks by hand.` |
 | `run_done:{run}` | INFO | `Grading finished: {candidates} candidates, {calls} calls, {review} need review, {failed} failed.` |
@@ -191,18 +186,18 @@ Worker-level alerts (add to Section 5 §7.10 and 6A.7):
 
 **Who watches the worker?** If the worker is dead, it cannot alert. Three layers:
 1. The super admin health page (5C.2) shows the worker as stale when `last_heartbeat_at` is over 90 s old. Keep it open during the exam.
-2. Use a free external uptime monitor (UptimeRobot or similar) on the Vercel health route so that you get an email or message if the app itself is down *(verify the free plan)*.
+2. Use a free external uptime monitor (UptimeRobot or similar) on the Vercel health route so the owner receives an availability notification if the app itself is down *(verify the free plan)*.
 3. For the worker, the Vercel health route should return a non-200 status when the worker heartbeat is stale, so that the same monitor catches a dead worker. Add this to 5C.2.
 
-Test the webhook once during setup by sending a manual message with `curl`, and run the key-break test (8.69) in the rehearsal to see a real alert arrive.
+During setup, insert a harmless test alert and confirm it appears and resolves in the Health page; run the key-break test in rehearsal to see a real in-app alert arrive.
 
 ---
 
 ## 7. Supabase and Vercel settings
 
 **Supabase**
-- A fresh project, then `001_initial.sql`, `002_grading.sql`, `001_smoke_test.sql` (already done by you).
-- Create the private `snapshots` bucket if the migration did not create it (check it exists).
+- The latest schema delta has **not** been run on Supabase. After implementation and local verification, apply the reviewed migration path (fresh project: `001_initial.sql` then `002_grading.sql`; existing project: the new delta migration), then run `001_smoke_test.sql`.
+- Confirm both private buckets exist: `snapshots` and `question-images`. Verify the 5 MB/MIME restrictions and candidate image authorization path.
 - Create the admin users and the `admin_profiles` rows (task 1A.6).
 - **Free projects pause after inactivity** *(verify)*. Open the dashboard the week before and again the day before the exam. Rehearsal days count as activity, but do not rely on that.
 - Use the **session pooler** connection string for backups (§8), not the direct connection.
@@ -211,7 +206,7 @@ Test the webhook once during setup by sending a manual message with `curl`, and 
 - Set the variables in `web.env.example` for **Production only**. `GEMINI_*` must not exist on Vercel.
 - `NEXT_PUBLIC_*` values are baked in at build time. After changing one, redeploy.
 - `SESSION_SECRET` and `NIC_PEPPER` must **never change** after candidates are imported (the pepper) or during an exam (the session secret logs everyone out). Store both in a password manager now.
-- `LIVEKIT_URL` is what the token route returns to the browser. It must be `wss://<your DuckDNS name>`.
+- `LIVEKIT_URL` is what the token route returns to the browser. It must be `wss://Cosmetics.duckdns.org`.
 - Hobby plan limits and terms *(verify)*. If Vercel is a problem on exam day, the fallback is to host the app on the EC2 behind Caddy. That fallback has never been tested, so decide in the rehearsal whether to keep it.
 
 **Rate limit and the shared IP.** All 23 candidates sit behind one office IP. The per-IP login limit (counting failed attempts only, task 2A.3) must be well above what 23 people can produce in 10 minutes (suggest about 200), while the per-MER limit stays strict (suggest about 5). Check the numbers before the rehearsal.
@@ -223,14 +218,14 @@ Test the webhook once during setup by sending a manual message with `curl`, and 
 `backup-db.sh` dumps the `public` schema in custom format, keeps the newest 14 dumps locally, and optionally copies to Google Drive.
 
 1. Get the **session pooler** URI from the Supabase dashboard (Connect → Session pooler). Put it in `/etc/exam-backup.env` as `SUPABASE_DB_URL=...` (and `RCLONE_REMOTE=gdrive:exam-backups` if you set up rclone), `chmod 600`, owner root.
-2. If you get "server version mismatch": check the Postgres major version in Supabase, then install the matching client:
-   `sudo apt-get install -y postgresql-common && sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh && sudo apt-get install -y postgresql-client-17` (use your version) *(verify)*.
+2. Install PostgreSQL client 17, run `pg_dump --version`, and verify it is compatible with the current PostgreSQL 17.11 server:
+   `sudo apt-get install -y postgresql-common && sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh && sudo apt-get install -y postgresql-client-17` *(verify repository instructions during deployment)*.
 3. Test once: `sudo bash -c 'set -a; . /etc/exam-backup.env; set +a; bash /home/ubuntu/exam-platform/infra/ec2/backup-db.sh'`.
 4. Nightly cron during the exam period: `sudo crontab -e` → `0 20 * * * bash -c 'set -a; . /etc/exam-backup.env; set +a; bash /home/ubuntu/exam-platform/infra/ec2/backup-db.sh' >> /var/log/exam-backup.log 2>&1` (20:00 UTC is 01:30 in Colombo).
 5. **Take a manual backup** right before the exam, right after the exam, and before the cleanup script (8.30).
 6. **Restore drill (once, in the rehearsal):** restore a dump into a scratch Supabase project with `pg_restore --no-owner --dbname=<url> file.dump` and open the app against it. A backup that was never restored is not known to work.
-7. The dump covers the database only. **Snapshot images** are in the storage bucket and are not included. That is acceptable, because they are deleted after 14 days anyway.
-8. Free Supabase projects have no point-in-time recovery *(verify)*. These dumps are your only copy.
+7. The dump covers the database only. `snapshots` and `question-images` objects are not inside it. Snapshot loss is acceptable after the 14-day retention window; **question images are exam source material and must be backed up separately**. During implementation, configure a private Storage/S3 export for `question-images`, restore it into the scratch project, and verify every restored `questions.image_path` resolves before the rehearsal is accepted.
+8. Free Supabase projects have no point-in-time recovery *(verify)*. Database dumps plus the separate question-image export are the recovery set.
 
 ---
 
@@ -306,7 +301,7 @@ Do not run `npm run build` on the box while an exam is live. Deploys happen the 
 | 7 | Vercel down or slow | Candidates keep their local queue and the exam clock is server-side. Wait; announce by phone or WhatsApp. If it stays down, consider the EC2 fallback only if it was tested. |
 | 8 | Many candidates lose login at once | Someone changed `SESSION_SECRET` or redeployed with a different one. Restore the old value and redeploy. |
 | 9 | Grading paused (`keys_exhausted`) | It resumes by itself at the stated time. If urgent, add a key. Do not restart the worker. |
-| 10 | Grading paused (`model_not_found` or all keys disabled) | Fix `GEMINI_MODELS` or the keys in `/etc/exam-worker.env`, restart the worker, then press **Resume** in the admin UI. These do not auto-resume. |
+| 10 | Grading paused (`model_not_found` or all keys disabled) | Fix `GEMINI_MODEL`, `GEMINI_DAILY_LIMITS`, or the keys in `/etc/exam-worker.env`, restart the worker, then press **Resume** in the admin UI. These do not auto-resume. |
 | 11 | Certificate expired or HTTPS fails | `sudo docker compose logs caddy`. Usually DNS or port 80/443. Do not delete volumes. |
 | 12 | Disk full | `df -h`; `sudo journalctl --vacuum-size=200M`; remove old dumps in `/var/backups/exam`. |
 
@@ -320,13 +315,13 @@ Do not run `npm run build` on the box while an exam is live. Deploys happen the 
 | 2 | 0.8 / §14.6 | Repo layout: add the `infra/ec2` and `infra/env` folders as in §1 above. |
 | 3 | 4D.1–4D.6 (EC2 and LiveKit setup tasks; 4D.3 and 4D.4 are the compose and Caddy files) | Point them to Section 6 §2–§4 and to the files in `infra/`. Add: Elastic IP, DuckDNS, security group, `check-stack.sh`. 4A.2 (LiveKit Cloud) stays for local development only. |
 | 4 | 6A.1 and Section 5 §7.1 step 2 | Replace the guard with §5.4 (wait and re-read up to 65 s, `down` status on SIGTERM). |
-| 5 | 6A.7 and Section 5 §7.10 | Add the webhook formats and the worker-level alerts from §6. |
+| 5 | 6A.7 and Section 5 §7.10 | Add the in-app database alert format and worker-level alerts from §6; remove Discord/Telegram webhook configuration. |
 | 6 | 5C.2 (health route) | Return a non-200 status when the worker heartbeat is over 90 s old, so an external uptime monitor sees a dead worker. |
 | 7 | 2A.3 (rate limit) | Already says the 23 candidates share one IP. Just check the numbers: per-IP about 200 failures per 10 minutes, per-MER about 5. Test 8.16 covers it. |
 | 8 | 8.12 | The runbook is §10 of this file. Replace §18 references. Add the failure playbook §11. |
-| 9 | New task 8.97 | Restore drill (§8 item 6). |
-| 10 | New task 8.98 | Capacity check (§9) with all candidates connected, record the numbers. |
-| 11 | Phase 4 Done-when | Add: video from one candidate on mobile data reaches the admin grid. |
+| 9 | Test 8.93 | Restore drill (§8 item 6). |
+| 10 | Test 8.94 | Capacity check (§9) with all candidates connected, record the numbers. |
+| 11 | Phase 4 Done-when | Add: the complete Wi-Fi/mobile/restrictive-network LiveKit matrix in test 8.95 passes, including ICE, TURN, TLS and recovery evidence. |
 | 12 | Phase 8 Done-when | Add: restore drill passed; capacity numbers recorded; alert test message received. |
 
 ---
@@ -338,10 +333,10 @@ Do not run `npm run build` on the box while an exam is live. Deploys happen the 
 | 8.87 | **Guard after crash:** `sudo kill -9` the worker. systemd restarts it. The new instance waits (at most 65 s), sees the heartbeat is not advancing, takes over, and grading and the scheduler continue. Exit code is not 3. |
 | 8.88 | **Guard after graceful restart:** `systemctl restart exam-worker` starts without waiting (the old instance wrote `status = 'down'`). |
 | 8.89 | **Guard against a live second worker:** start a second worker by hand while the service runs. The second one exits with code 3 after the wait. The service keeps running. |
-| 8.90 | **Alert delivery:** `curl` the webhook manually, then trigger one real alert (break one key). The message reaches the phone, with no keys or names in it. |
+| 8.90 | **Alert delivery:** create and resolve a harmless in-app alert, then trigger one real alert (break one key). It reaches the Health page with no key values or candidate names. |
 | 8.91 | **Dead worker visible:** stop the worker. Within 90 s the health page shows it stale and the health route returns non-200. |
 | 8.92 | **Reboot recovery:** `sudo reboot` the box. LiveKit, Caddy, Redis (`restart: unless-stopped`) and the worker (systemd enabled) all come back with no manual step. Certificate still valid. |
 | 8.93 | **Restore drill:** restore the latest dump into a scratch project; the app lists exams and candidates there. |
 | 8.94 | **Capacity:** all candidates connected for 30 minutes, three admins subscribed, numbers from §9 recorded, no swap thrash. |
-| 8.95 | **Mobile-data publisher:** one candidate on mobile data publishes video; admin sees the tile. |
+| 8.95 | **LiveKit network matrix:** publish and monitor on normal Wi-Fi, mobile data, and a restrictive network; record ICE candidate selection, TURN fallback, TLS, reconnect, camera/microphone recovery, and candidate/admin Realtime recovery. Do not mark LiveKit production-ready until every required path passes or a documented TURN/TLS fix is retested. |
 | 8.96 | **Shared-IP login:** 23 logins from one IP within two minutes all succeed; 6 wrong attempts on one MER are limited. |

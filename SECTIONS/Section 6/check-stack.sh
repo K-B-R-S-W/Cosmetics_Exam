@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # infra/ec2/check-stack.sh -- quick health check of the EC2 box. Run before and during the exam: bash check-stack.sh
-# Optional: LIVEKIT_HOST=examlk.duckdns.org bash check-stack.sh
+# Optional: LIVEKIT_HOST=Cosmetics.duckdns.org bash check-stack.sh
 set -uo pipefail
 ok(){ echo "  OK   $*"; }; bad(){ echo "  FAIL $*"; FAILED=1; }
 FAILED=0
