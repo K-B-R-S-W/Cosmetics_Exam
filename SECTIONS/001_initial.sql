@@ -48,7 +48,7 @@ create table public.exams (
   navigation_mode     text not null default 'free' check (navigation_mode in ('free', 'sequential')),
   questions_per_paper int  check (questions_per_paper is null or questions_per_paper > 0),
   shuffle             boolean not null default false,
-  flag_threshold      int  not null default 5 check (flag_threshold > 0),
+  flag_threshold      int  not null default 10 check (flag_threshold > 0),
   is_practice         boolean not null default false,
   created_by          uuid references public.admin_profiles (id) on delete set null,
   created_at          timestamptz not null default now(),

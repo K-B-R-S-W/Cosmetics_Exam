@@ -9,7 +9,7 @@
 | # | Decision | Where it came from |
 |---|---|---|
 | 1 | **One absence counts once.** A tab switch during a disconnect is one violation, not two. | You, this chat |
-| 2 | **Default flag threshold = 5**, and admins can set any whole number from 1 to 100 per exam, including while the exam is live. | You, this chat |
+| 2 | **Default flag threshold = 10** (raised from 5 so a reload, which logs two counted events, does not flag a candidate on its own), and admins can set any whole number from 1 to 100 per exam, including while the exam is live. | You, this chat |
 | 3 | Snapshot retention is 14 days. Waiting-room incidents do not count. | Earlier rounds (already in the plan) |
 
 **Defaults I chose that you did not decide.** Each is one line in `lib/proctoring-rules.ts`, so changing it later is cheap. Please confirm or change them:
@@ -121,6 +121,19 @@ Change `POST /api/events`:
 
 ---
 
+### 3.7 Candidate warning (new)
+
+Decided: no automatic penalty. The system records, warns the candidate, and shows the log to the admins, who decide what to do in the office.
+
+- **When:** an attention incident that contains `TAB_HIDDEN` or `FOCUS_LOST` (as the primary type or in `merged_types`) **closes**, while the attempt is `in_progress`. That is the moment the candidate is back on the page, so it is the first moment a message can be seen.
+- **Not shown** for an incident dropped under section 3.3 (shorter than 1 s, or focus back within 1 s), because nothing was recorded. Not shown in the waiting room (nothing counts there). Not shown for `FULLSCREEN_EXIT` alone, because the blocking overlay already tells the candidate. Not shown for the other types.
+- **What:** the client shows the candidate warning toast (Section 2A §4.14a, text in Section 2B §8.7), independent of whether the send to the server has succeeded yet. One toast per incident. A new one replaces one still showing.
+- **Admin side:** nothing new. The incident is already sent through `POST /api/events` and appears in the admin's violation timeline for that candidate (7.2). The admin's tile badge updates through Realtime.
+- **Tunable:** `WARNING_TOAST_MS` = 10000 (section 8).
+- **Known cost:** the notification shade and edge panels can still produce a recorded incident after the 1 s grace (section 3.3). The candidate will see the toast for those, and the admin can dismiss the event (7.4). Tune the grace in the tablet rehearsal.
+
+---
+
 ## 4. Counting (server)
 
 ### 4.1 Decision order in `POST /api/events`
@@ -140,7 +153,7 @@ Everything else is `false`. `COUNTING_TYPES` lives in `lib/proctoring-rules.ts`,
 
 ### 4.2 Threshold
 
-- `exams.flag_threshold`, default **5**, whole number **1 to 100** (already in the schema and in the exam create and update contract).
+- `exams.flag_threshold`, default **10**, whole number **1 to 100** (already in the schema and in the exam create and update contract).
 - A candidate is **red** when `violation_count >= flag_threshold`.
 - The threshold can be edited **while the exam is live** (the exam update route already allows `title` and `flag_threshold` after the start). Every tile recolours at once, because the colour is calculated in the browser from the exam row and the candidate's `violation_count`.
 - Changes are written to `admin_actions` with the old and new value.
@@ -193,8 +206,8 @@ The SQL for both parts is in Appendix A.
 ### 7.1 Tile colours and the threshold control
 
 - **Red:** `violation_count >= flag_threshold`.
-- **Amber:** `violation_count >= ceil(flag_threshold / 2)` and below red. This is a display rule only (3 of 5 by default).
-- **Threshold control (new task 3C.5):** a small number field on the live grid header (1 to 100) that saves through the existing exam update route. The exam form (1D.2) keeps the same field for before the exam. The default for a new exam is 5.
+- **Amber:** `violation_count >= ceil(flag_threshold / 2)` and below red. This is a display rule only (5 of 10 by default).
+- **Threshold control (new task 3C.5):** a small number field on the live grid header (1 to 100) that saves through the existing exam update route. The exam form (1D.2) keeps the same field for before the exam. The default for a new exam is 10.
 - **Toast:** when a tile turns red from a Realtime update, show a short toast with the candidate's MER code. This is client-side only.
 
 ### 7.2 Violation timeline (3C.1, 3C.4)
@@ -239,7 +252,8 @@ Client values live in `lib/proctoring-config.ts`. Counting rules live in `lib/pr
 
 | Name | Default | Used for |
 |---|---|---|
-| `flag_threshold` (database, per exam) | 5 | Red tile |
+| `flag_threshold` (database, per exam) | 10 | Red tile |
+| `WARNING_TOAST_MS` | 10000 | How long the candidate warning toast stays |
 | `FOCUS_GRACE_MS` | 1000 | `FOCUS_LOST` debounce |
 | `MIN_INCIDENT_MS` | 1000 | Drop very short `TAB_HIDDEN`-only incidents |
 | `CHECK_INTERVAL_MS` | 1000 | Focus and viewport polling |
@@ -288,7 +302,7 @@ Client values live in `lib/proctoring-config.ts`. Counting rules live in `lib/pr
 | 3C.2 | Red is `violation_count >= flag_threshold`; add the amber rule. |
 | ➕ 3C.5 | New: threshold control on the live grid and the red-tile toast. |
 | ➕ 3B.7 | New: `app/api/admin/events/[id]/route.ts` (PATCH, section 7.4). |
-| 1D.2 | Note that the threshold default is 5 and the range is 1 to 100. |
+| 1D.2 | Note that the threshold default is 10 and the range is 1 to 100. |
 | 4B.4 | Note that a LiveKit-only loss is logged with `meta.source = 'livekit'` and does not count. |
 | 7.4 | Add the two CSV columns. |
 
@@ -318,7 +332,7 @@ See Appendix A.
 | 8.57 | `COPY`, `PASTE`, `CONTEXT_MENU`: logged, `counts = false`, and the same type within 3 s is one event. |
 | 8.58 | Camera: unplug it (counts) versus kill LiveKit (does not count). |
 | 8.59 | Reload during the exam: `RELOAD` logged and counted. A fresh login after a kick is not a `RELOAD`. |
-| 8.60 | Change `flag_threshold` from 5 to 3 while live: tiles at 3 or 4 recolour immediately. |
+| 8.60 | Change `flag_threshold` from 10 to 3 while live: tiles at 3 or 4 recolour immediately. |
 | 8.61 | Dismiss an incident with a note: `violation_count` drops by 1. Restore it: it goes back up. Both appear in the audit log. |
 | 8.62 | Wi-Fi drop of 3 minutes with a tab switch 60 s in, **both orders** (event arrives before and after the flip): net `violation_count` is 1 each time. |
 | 8.63 | Smoke-test additions 11a to 11c (Appendix A.3) pass. |

@@ -228,7 +228,7 @@ Request:
 `mer_code`: 1 to 32 chars, trimmed, uppercased. `nic`: 1 to 20 chars, normalized by the 1C.1 utility.
 
 Steps, in order:
-1. **Rate limit** (failed attempts only, last 10 minutes): 5 per MER, 50 per IP. Over the limit returns `429 rate_limited` with `retry_after_s`. The IP limit is high on purpose: all 23 people share one office network.
+1. **Rate limit** (failed attempts only, last 10 minutes): 5 per MER, about 200 per IP (Section 6 §7; plan 2A.3). Over the limit returns `429 rate_limited` with `retry_after_s`. The IP limit is high on purpose: all 23 people share one office network.
 2. Find the active candidate by `mer_code`. Always run one argon2 verify, even for an unknown MER (against a dummy hash), so response time does not reveal which MER codes exist.
 3. Failure: insert `login_attempts (success=false)` and return `401 invalid_credentials`. The same code covers unknown MER, wrong ID, and inactive candidate.
 4. Success: insert `login_attempts (success=true)`.
@@ -381,7 +381,7 @@ Request:
   ]
 }
 ```
-- `reason`: `manual` (default) or `auto`. `forced` is admin-only and is rejected with `400`.
+- `reason`: `manual` (default) or `auto`. `forced` is admin-only and is rejected with `400`. (The worker also writes `auto` when a deadline passes with no submit; see §7.)
 - `pending_answers` (optional, at most 50): answers the client has not been able to send yet. The route calls `save_answer` for each, then submits. This is the final flush in **one** request, which is much more reliable than N requests on a slow network at the deadline. In sequential mode only the current question can be saved, and the others come back as `wrong_position` in `save_results`.
 - Guard: the attempt must be `in_progress`. An `acknowledged` or `not_started` attempt gets `409 not_started` (the DB function would allow it, see section 0, item 3).
 - Then `rpc('submit_attempt', { p_attempt_id, p_reason })`. It has no deadline check on purpose: a submit that lands just after the deadline still closes the attempt.
@@ -488,7 +488,7 @@ Exam status moves: `draft` ↔ `scheduled` (admin, by PATCH), `draft/scheduled` 
   "navigation_mode": "sequential",
   "questions_per_paper": 20,
   "shuffle": true,
-  "flag_threshold": 5,
+  "flag_threshold": 10,
   "is_practice": false
 }
 ```
@@ -547,7 +547,7 @@ Admin only. This is the only route that returns answer keys together with questi
   "answer_key": { "model_answer": null, "grading_notes": null, "calibration": [] }
 }
 ```
-- `marks`: above 0, at most 999.99 (the column is `numeric(5,2)`). `position` defaults to the end.
+- `marks`: **optional**. When the admin leaves it out it is saved as `1` (the column default, and grading needs a number). When given: above 0, at most 999.99 (the column is `numeric(5,2)`). `position` defaults to the end.
 - `mcq`: 2 to 10 options and exactly one `is_correct`. Labels (`a`, `b`, `c`…) are assigned by the server from the order.
 - `written`: no `options`. `answer_key.model_answer` is optional here.
 - The server writes `questions`, then `mcq_options`, then `answer_keys`, in that order. The order is chosen so that saving the same question again repairs any partial failure (there is no multi-table transaction in the JS client; if you want one, move this into a `save_question()` database function later).
@@ -591,7 +591,7 @@ The worker's scheduled start must use the same conditional update, so the two ca
 `{ "minutes": 10, "attempt_id": "<uuid, optional>" }` with `minutes` from 1 to 120.
 - Without `attempt_id`: `ends_at += minutes` for everyone. Exam must be `live`, not force-ended, and `now < ends_at` (`409 deadline_passed` otherwise: candidate screens lock at the deadline, so extending after the fact is refused). Publishes `time_updated`.
 - With `attempt_id`: `extra_minutes += minutes` for that person. The attempt must be `acknowledged` or `in_progress` and its own deadline must not have passed. Publishes `attempt_changed`.
-- Both updates are **compare-and-set**: read the current value, then `update ... where ends_at = <value read>` (or `extra_minutes = <value read>`), retry up to 3 times if no row matched. This stops two admins extending at the same moment from overwriting each other.
+- Both updates are **compare-and-set**: read the current value, then `update ... where ends_at = <value read>` (or `extra_minutes = <value read>`), retry up to 3 times if no row matched. This stops two admins extending at the same moment from overwriting each other. If all three tries lose the race, the route returns `409 concurrent_update` and changes nothing; the admin page tells the admin to check the time shown and try again.
 - `200 { "ends_at": "<iso>" }` or `200 { "attempt": { "id", "extra_minutes", "deadline" } }`.
 
 **`POST /api/admin/exams/[id]/force-end`**
@@ -610,7 +610,7 @@ Empty body. Revokes every active session of that attempt's candidate (`revoked_a
 `200 { "revoked_sessions": 1, "livekit_removed": true }`.
 
 **`POST /api/admin/exams/[id]/broadcast`**
-`{ "message": "Five minutes left." }` (1 to 300 chars, plain text). Exam must be `scheduled` or `live`. Inserts a `broadcasts` row, publishes `message`. `200 { "id": "<uuid>" }`. The text reaches candidates through `broadcast` in the state response, not through the Broadcast payload (section 6).
+`{ "message": "Five minutes left." }` (1 to 300 chars, plain text). At most **10 broadcasts per exam** (`409 broadcast_limit`; the plan's 5A.5 limit, which the contract had left out). Exam must be `scheduled` or `live`. Inserts a `broadcasts` row, publishes `message`. `200 { "id": "<uuid>" }`. The text reaches candidates through `broadcast` in the state response, not through the Broadcast payload (section 6).
 
 ### 4.5 Operations (super admin)
 
@@ -635,13 +635,13 @@ Empty body. Revokes every active session of that attempt's candidate (`revoked_a
 **`POST /api/admin/snapshots/purge`** (NEW, task 7.7)
 `{ "older_than_days": 30, "exam_id": "<uuid, optional>", "dry_run": false, "confirm": true }`.
 - `older_than_days` defaults to `SNAPSHOT_RETENTION_DAYS`. `0` deletes everything (post-exam cleanup) and then needs `confirm: true`.
-- Finds `violation_events` with a `snapshot_path` older than the cutoff, removes the files from Storage in batches of 100, then sets `snapshot_path = null`. The event rows themselves stay.
+- Finds `violation_events` with a `snapshot_path` older than the cutoff, removes the files from Storage in batches of 100, then sets `snapshot_path = null` and `meta.snapshot_deleted_at = now()` (use `coalesce(meta, '{}'::jsonb)` first). The marker lets the admin timeline say "Snapshot deleted" instead of guessing from the event's age. The event rows themselves stay.
 - `200 { "deleted": 412, "failed": 0, "dry_run": false }`. The worker runs the same shared function once a day.
 
 ### 4.6 Grading
 
 **`POST /api/admin/exams/[id]/grade`**
-Empty body. Preconditions (each its own `409`):
+Body is optional: `{ "mcq_only": true }` rescores the multiple-choice questions and recomputes results **without creating any Gemini jobs** (step 2 skips the written bullets, the run is `kind='full'` and is `done` at once). It exists for the case where an examiner corrects an MCQ answer key after grading: without it the only way to rescore MCQs would be to run the whole grading again and spend the Gemini quota on every written answer a second time. Without a body the route behaves as below. Preconditions (each its own `409`):
 - `exam_not_finalized`: status must be `finalized`.
 - `grading_in_progress`: no run in `running` or `paused` (`details.run_id`).
 - `missing_answer_keys`: every question that appears in any paper has a key (MCQ: `correct_option_id`; written: non-empty `model_answer`). `details.question_ids` lists the gaps.
@@ -691,7 +691,7 @@ There is no "undo override": override again with the value you want. A regrade n
 
 **`GET /api/admin/results/export?exam_id=`**
 Returns `text/csv; charset=utf-8` with a UTF-8 BOM (so Excel opens Sinhala names correctly) and `Content-Disposition: attachment; filename="results-<exam-slug>-<yyyy-mm-dd>.csv"`.
-Columns: `mer_code, full_name, outlet, attempt_status, submit_reason, violation_count, violations_logged, questions_received, mcq_marks, written_marks, total_marks, total_percent, needs_review_count, unscored_count`.
+Columns: `mer_code, full_name, outlet, attempt_status, submit_reason, violations_counted, violations_logged, questions_received, mcq_marks, written_marks, total_marks, total_percent, needs_review_count, unscored_count`.
 - `questions_received`: the admin-order question numbers (position + 1) of the questions on that candidate's paper, joined with `;`.
 - Every assigned candidate is a row, including people who did not join (empty marks).
 - Any cell that starts with `=`, `+`, `-` or `@` gets a leading `'` so Excel cannot run it as a formula.
@@ -731,7 +731,7 @@ The admin pages read these straight from Supabase with the admin's own login (ro
 | Alerts, worker health, key states | `alerts`, `system_health`, `api_key_state` (super admin) | Realtime on `alerts` |
 | Broadcast history | `broadcasts` | none |
 
-Candidate status badges (4C.5) are derived on the page: **Not joined** = attempt `not_started` and no LiveKit participant; **Ready** = `acknowledged` and a LiveKit participant present; **In exam** = `in_progress` with `last_seen_at` under 30 s; **Offline** = `in_progress` with `last_seen_at` over 30 s; **Submitted** = `submitted` or `finalized`; **Camera Off** = `in_progress` with no live video track.
+Candidate status words (4C.5) are derived on the page. The rules and their order are in Section 2C §7.2; in short: **Submitted** = `submitted` or `finalized`; **Not joined** = `not_started`; **Offline** = `acknowledged` or `in_progress` with `last_seen_at` older than 25 s (display only; the logged `DISCONNECTED` event starts at 30 s, Section 4); **Camera off** = heartbeat fine but no video track from LiveKit participant `c_{attempt_id}` for 10 s; **In exam** = `in_progress`; **Ready** = `acknowledged`. Only Camera off needs LiveKit; the rest come from `attempts`.
 
 ---
 
@@ -760,7 +760,7 @@ These are worker-side behaviours the contracts above depend on. The proctoring s
 | Behaviour | Rule |
 |---|---|
 | Scheduled start | Every 30 s: for exams `scheduled` with `scheduled_start_at <= now()`, run the **same conditional update as the Start route** |
-| Exam end and finalize | As 2F.5: force-submit each attempt after its own `grace_deadline` (`'forced'`), mark `ended` after the last one, then `finalized` (attempts `submitted` → `finalized`) |
+| Exam end and finalize | As 2F.5: submit each attempt after its own `grace_deadline` with reason **`'auto'`** (time ran out; `'forced'` is only for the admin's End exam and Submit-for-candidate, so the candidate's Done page and the results summary can tell them apart), mark `ended` after the last one, then `finalized` (attempts `submitted` → `finalized`) |
 | `DISCONNECTED` events | **Two-pass rule (send-on-end model).** **Pass 1 (30s):** every 30 s, for `in_progress` attempts with `last_seen_at` older than 30 s, insert `DISCONNECTED` with `counts = false`, `meta.last_seen_at` = the attempt's current `last_seen_at` (exact timestamptz string from the DB), and no `meta.count_reason`. Skip if the attempt's most recent `DISCONNECTED`/`RECONNECTED` is already a `DISCONNECTED`. **Pass 2:** every 30 s, call `resolve_disconnects()` (RPC, `revoke execute from public, anon, authenticated; grant to service_role`). This function runs two guarded statements: **(1) Mark overlaps** — rows where a focus-type event's interval (using `coalesce(f.duration_ms, 0)`) starts inside the gap get `count_reason = 'overlap'`. The interval rule (Section 4 §5): only the lower bound matters (`incident_end >= gap_start - 10s`); the old upper-bound check on `f.occurred_at` is removed, so an incident starting anywhere inside the gap counts as overlap. **(2) Flip remaining** — unmatched rows get `counts = true, count_reason = 'long_gap'`. Both include `a.status = 'in_progress'`, `coalesce(f.duration_ms, 0)`, `count_reason IS NULL` guard, and `timestamptz` casts. The trigger handles +1/-1. If a late focus event arrives after a flip, the events route calls `reverse_disconnects_for_incident(event_id)` — only touches `long_gap` rows. The heartbeat route sets `count_reason = 'short_gap'` (uses `coalesce(meta, '{}'::jsonb)` and `IS NULL` guard). **Worker reversal safety net:** after Pass 2, call `reverse_disconnects_for_incident()` for any attention incidents inserted in the last 5 minutes (idempotent) |
 | Key check | Every 5 minutes, per key: call the model-listing endpoint, then write `api_key_state` (`active`, or `disabled` with `last_error` on 400/403). This is the only place Gemini keys are used outside grading |
 | Grading jobs | See Section 5 §7. When the last job of an attempt finishes, call `recomputeResults(attemptId)`. The worker auto-resumes pauses it caused itself (`keys_exhausted`) |
