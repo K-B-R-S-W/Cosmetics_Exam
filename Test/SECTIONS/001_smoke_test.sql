@@ -5,6 +5,125 @@
 -- =====================================================================
 begin;
 
+-- Data API privileges are asserted by role name so these checks do not depend on
+-- whichever role happens to run the SQL editor transaction.
+do $$
+declare
+  t text;
+  p text;
+  f text;
+  expected_authenticated_select boolean;
+  base_tables constant text[] := array[
+    'admin_profiles', 'candidates', 'exams', 'exam_candidates', 'questions', 'mcq_options',
+    'answer_keys', 'attempts', 'attempt_questions', 'sessions', 'answers', 'violation_events',
+    'grading_runs', 'grading_jobs', 'question_scores', 'results', 'api_key_state',
+    'grading_log', 'login_attempts', 'alerts', 'system_health', 'admin_actions',
+    'broadcasts', 'broadcast_recipients'
+  ];
+  views constant text[] := array['current_scores', 'attempt_progress', 'attempt_deadlines'];
+  sequences constant text[] := array['grading_log_id_seq', 'login_attempts_id_seq', 'admin_actions_id_seq'];
+  service_functions constant text[] := array[
+    'public.resolve_disconnects()',
+    'public.reverse_disconnects_for_incident(uuid)',
+    'public.attempt_deadline(uuid)',
+    'public.generate_paper(uuid)',
+    'public.save_answer(uuid,uuid,text,uuid,boolean,integer)',
+    'public.advance_position(uuid,integer,uuid,text,uuid,integer)',
+    'public.submit_attempt(uuid,text)',
+    'public.create_broadcast(uuid,text,text,uuid[])',
+    'public.claim_broadcast(uuid,uuid,uuid)'
+  ];
+begin
+  assert not has_schema_privilege('anon', 'public', 'USAGE'),
+    'grant 0a: anon must not have public schema usage';
+  assert has_schema_privilege('authenticated', 'public', 'USAGE'),
+    'grant 0b: authenticated needs public schema usage';
+  assert has_schema_privilege('service_role', 'public', 'USAGE'),
+    'grant 0c: service_role needs public schema usage';
+
+  foreach t in array (base_tables || views) loop
+    assert not has_table_privilege('anon', format('public.%I', t), 'SELECT'),
+      'grant 1a: anon SELECT leaked on ' || t;
+    assert not has_table_privilege('anon', format('public.%I', t), 'INSERT'),
+      'grant 1b: anon INSERT leaked on ' || t;
+
+    expected_authenticated_select := t = any(array[
+      'admin_profiles', 'attempts', 'violation_events', 'grading_jobs',
+      'grading_log', 'alerts', 'exams'
+    ]);
+    assert has_table_privilege('authenticated', format('public.%I', t), 'SELECT') = expected_authenticated_select,
+      'grant 1c: unexpected authenticated SELECT on ' || t;
+    foreach p in array array['INSERT', 'UPDATE', 'DELETE'] loop
+      assert not has_table_privilege('authenticated', format('public.%I', t), p),
+        'grant 1d: authenticated ' || p || ' leaked on ' || t;
+    end loop;
+  end loop;
+
+  foreach t in array base_tables loop
+    foreach p in array array['SELECT', 'INSERT', 'UPDATE', 'DELETE'] loop
+      assert has_table_privilege('service_role', format('public.%I', t), p),
+        'grant 2a: service_role lacks ' || p || ' on ' || t;
+    end loop;
+  end loop;
+  foreach t in array views loop
+    assert has_table_privilege('service_role', format('public.%I', t), 'SELECT'),
+      'grant 2b: service_role lacks SELECT on ' || t;
+  end loop;
+
+  foreach t in array sequences loop
+    assert not has_sequence_privilege('anon', format('public.%I', t), 'USAGE'),
+      'grant 3a: anon sequence access leaked on ' || t;
+    assert not has_sequence_privilege('authenticated', format('public.%I', t), 'USAGE'),
+      'grant 3b: authenticated sequence access leaked on ' || t;
+    assert has_sequence_privilege('service_role', format('public.%I', t), 'USAGE'),
+      'grant 3c: service_role lacks sequence USAGE on ' || t;
+    assert has_sequence_privilege('service_role', format('public.%I', t), 'SELECT'),
+      'grant 3d: service_role lacks sequence SELECT on ' || t;
+  end loop;
+
+  assert has_function_privilege('authenticated', 'public.is_admin()', 'EXECUTE'),
+    'grant 4a: authenticated needs is_admin';
+  assert has_function_privilege('authenticated', 'public.is_super_admin()', 'EXECUTE'),
+    'grant 4b: authenticated needs is_super_admin';
+  foreach f in array service_functions loop
+    assert not has_function_privilege('anon', f, 'EXECUTE'),
+      'grant 4c: anon function access leaked on ' || f;
+    assert not has_function_privilege('authenticated', f, 'EXECUTE'),
+      'grant 4d: authenticated function access leaked on ' || f;
+    assert has_function_privilege('service_role', f, 'EXECUTE'),
+      'grant 4e: service_role lacks function access on ' || f;
+  end loop;
+end $$;
+
+-- A few behavioral checks complement the ACL assertions above.
+set local role anon;
+do $$
+begin
+  begin
+    perform 1 from public.exams limit 1;
+    assert false, 'grant 5a: anon SELECT must be denied';
+  exception when insufficient_privilege then
+    null;
+  end;
+end $$;
+reset role;
+
+set local role authenticated;
+do $$
+begin
+  begin
+    insert into public.exams (title, duration_min) values ('must fail', 1);
+    assert false, 'grant 5b: authenticated INSERT must be denied';
+  exception when insufficient_privilege then
+    null;
+  end;
+end $$;
+reset role;
+
+set local role service_role;
+select public.resolve_disconnects();
+reset role;
+
 do $$
 declare
   v_exam    uuid := gen_random_uuid();
@@ -24,8 +143,13 @@ declare
   v_claim uuid := gen_random_uuid();
   v_display boolean;
   v_announcement text;
-  v_display_seconds smallint;
+  i int;
 begin
+  assert (select column_default = '10'
+            from information_schema.columns
+           where table_schema = 'public' and table_name = 'exams' and column_name = 'flag_threshold'),
+    '0: exams.flag_threshold must default to 10';
+
   -- Live sequential exam, 3 questions in the pool, 2 per paper
   insert into public.exams (id, title, duration_min, status, started_at, ends_at, navigation_mode, questions_per_paper)
   values (v_exam, 'Smoke test', 30, 'live', now(), now() + interval '30 minutes', 'sequential', 2);
@@ -76,11 +200,11 @@ begin
   select id into v_att from public.attempts where exam_id = v_exam and candidate_id = v_cand;
   assert v_att is not null, '1: attempt should be created on assignment';
 
-  -- 1a. Announcements snapshot exact recipients, keep a per-message duration, and can be claimed once.
+  -- 1a. Announcements snapshot exact recipients and can be claimed once.
   select out_broadcast_id, out_recipient_count into v_broadcast, v_recipient_count
-    from public.create_broadcast(v_exam, ' Private message ', 60, 'custom', array[v_cand, v_cand]);
+    from public.create_broadcast(v_exam, ' Private message ', 'custom', array[v_cand, v_cand]);
   assert v_recipient_count = 1, '1a: duplicate custom recipient ids must collapse to one row';
-  assert (select message = 'Private message' and display_seconds = 60 and audience = 'custom'
+  assert (select message = 'Private message' and audience = 'custom'
             from public.broadcasts where id = v_broadcast),
     '1a: custom announcement metadata must be stored';
   assert exists (select 1 from public.broadcast_recipients where broadcast_id = v_broadcast and candidate_id = v_cand),
@@ -94,11 +218,11 @@ begin
   exception when check_violation then
     null; -- expected
   end;
-  select out_display, out_message, out_display_seconds
-    into v_display, v_announcement, v_display_seconds
+  select out_display, out_message
+    into v_display, v_announcement
     from public.claim_broadcast(v_broadcast, v_cand, v_claim);
-  assert v_display and v_announcement = 'Private message' and v_display_seconds = 60,
-    '1a: the intended candidate must claim the configured toast';
+  assert v_display and v_announcement = 'Private message',
+    '1a: the intended candidate must claim the toast';
   assert (select shown_at is not null and claim_token is not null from public.broadcast_recipients
            where broadcast_id = v_broadcast and candidate_id = v_cand),
     '1a: claiming a toast must persist shown_at and its idempotency token';
@@ -110,14 +234,28 @@ begin
   assert not v_display, '1a: an unselected candidate must not claim the toast';
 
   select out_broadcast_id, out_recipient_count into v_broadcast, v_recipient_count
-    from public.create_broadcast(v_exam, 'Everyone', 10, 'all', null);
+    from public.create_broadcast(v_exam, 'Everyone', 'all', null);
   assert v_recipient_count = 2, '1b: all must snapshot every currently assigned candidate';
   begin
-    perform public.create_broadcast(v_exam, 'Bad target', 10, 'custom', array[gen_random_uuid()]);
+    perform public.create_broadcast(v_exam, 'Bad target', 'custom', array[gen_random_uuid()]);
     assert false, '1c: an unassigned custom recipient must be rejected';
   exception when others then
     assert sqlerrm = 'invalid_recipient', '1c: expected invalid_recipient, got ' || sqlerrm;
   end;
+
+  perform public.create_broadcast(v_exam, repeat('x', 5000), 'all', null);
+  begin
+    perform public.create_broadcast(v_exam, repeat('x', 5001), 'all', null);
+    assert false, '1d: announcements above 5000 characters must be rejected';
+  exception when others then
+    assert sqlerrm = 'invalid_message', '1d: expected invalid_message, got ' || sqlerrm;
+  end;
+
+  for i in 1..11 loop
+    perform public.create_broadcast(v_exam, 'Unlimited send ' || i, 'all', null);
+  end loop;
+  assert (select count(*) from public.broadcasts where exam_id = v_exam) > 10,
+    '1e: more than 10 announcements per exam must be accepted';
 
   -- 2. Paper generation: refuses before acknowledge, then is idempotent
   begin

@@ -299,7 +299,7 @@ Request: `{ "claim_token": "<client-generated UUID v4>" }`. Immediately before d
 
 The route calls `rpc('claim_broadcast', { p_broadcast_id: id, p_candidate_id: authenticatedCandidateId, p_claim_token: claim_token })`. The database atomically sets `shown_at` and `claim_token` only for an unclaimed recipient row belonging to this candidate and sent within the last 10 minutes. The same token can replay the successful response; a different token, an unaddressed candidate, an expired announcement or an unknown id all return `200 { "display": false }` without revealing which condition applied.
 
-Success: `200 { "display": true, "announcement": { "id": "...", "message": "...", "display_seconds": 10, "sent_at": "..." } }`. The message is escaped plain text. Show it once, remove the component after `display_seconds`, leave a one-second empty gap, then claim the next queued id. There is no candidate announcement-history endpoint, reopen control or persistent indicator.
+Success: `200 { "display": true, "announcement": { "id": "...", "message": "...", "sent_at": "..." } }`. The message is escaped plain text. Show it once for a fixed 5 seconds, remove the component, leave a one-second empty gap, then claim the next queued id. There is no candidate announcement-history endpoint, reopen control or persistent indicator. The SQL signature is `claim_broadcast(uuid, uuid, uuid)` and returns only `out_display`, `out_message`, and `out_sent_at`.
 
 ### 3.8 `GET /api/exam/paper` — candidate
 Starts or resumes the paper. Calls `rpc('generate_paper', { p_attempt_id })`, which is idempotent: the first call builds the paper (question pool, shuffle, option order) and moves the attempt to `in_progress`; later calls return the saved one. Calling it before the exam is live fails, which is how "the paper is not loaded until the time" is enforced on the server.
@@ -632,17 +632,17 @@ Empty body. Revokes every active session of that attempt's candidate (`revoked_a
 Request examples:
 
 ```json
-{ "message": "Five minutes left.", "display_seconds": 10, "audience": "all" }
-{ "message": "Please reconnect your camera.", "display_seconds": 30, "audience": "custom", "candidate_ids": ["<candidate uuid>"] }
+{ "message": "Five minutes left.", "audience": "all" }
+{ "message": "Please reconnect your camera.", "audience": "custom", "candidate_ids": ["<candidate uuid>"] }
 ```
 
 - `message`: 1 to **5,000** characters after trimming, plain text.
-- `display_seconds`: optional, defaults to `10`; whole seconds from `10` through `60`.
+- Toast duration is not configurable and is absent from the request schema; if supplied, it is stripped as an unknown key under §1.1. Every candidate toast displays for a fixed **5 seconds**.
 - `audience = "all"`: `candidate_ids` must be absent. The database snapshots every candidate currently assigned to the exam.
 - `audience = "custom"`: `candidate_ids` contains at least one unique candidate id, and every id must currently be assigned to the exam. Duplicates collapse to one recipient.
 - There is **no per-exam count limit**. The exam must be `scheduled` or `live`.
 
-The route calls `create_broadcast`, which atomically inserts the announcement and exact recipient rows. Map `no_recipients` to `400 no_recipients`, `invalid_recipient` to `409 invalid_recipient`, and the other validation exceptions to `400 validation_failed`. Then write the `broadcast` admin action with audience, recipient count and duration—but not a duplicate copy of the message—publish the content-free `message` nudge, and return `200 { "id": "<uuid>", "recipient_count": 23 }`. Publish failure does not fail the send; the heartbeat is the backup. Discord and Telegram are not used.
+The route calls `create_broadcast(uuid, text, text, uuid[])`, which atomically inserts the announcement and exact recipient rows. Map `no_recipients` to `400 no_recipients`, `invalid_recipient` to `409 invalid_recipient`, and the other validation exceptions to `400 validation_failed`. Then write the `broadcast` admin action with audience and recipient count—but not a duplicate copy of the message—publish the content-free `message` nudge, and return `200 { "id": "<uuid>", "recipient_count": 23 }`. Publish failure does not fail the send; the heartbeat is the backup. Discord and Telegram are not used.
 
 ### 4.5 Operations (super admin)
 
@@ -747,21 +747,21 @@ Dismiss or restore a wrongly counted incident.
 
 ---
 
-## 5. Admin reads that do not use the API
+## 5. Admin read and live-update sources
 
-The admin pages read these straight from Supabase with the admin's own login (row-level security already limits them to admins; the three super-admin tables need a super admin). Writing always goes through section 4.
+Initial page loads, joins, view polling, review data, health data and broadcast history go through authenticated admin API routes using the server-only `service_role` client. Writing also always goes through section 4. The browser Supabase client uses the signed-in admin session only to read its own `admin_profiles` row and subscribe to the six published Realtime tables: `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams`. It has no direct DML, sequence, RPC, view, or other table access.
 
 | Data | Source | Live updates |
 |---|---|---|
-| Grid rows: status, `last_seen_at`, violation count, `current_position` | `attempts` joined with `candidates (mer_code, full_name, outlet)` | Realtime `postgres_changes` on `attempts`, filtered by `exam_id` |
-| Progress label ("Q 7/20", "14 answered") | `attempt_progress` view | **Poll every 10 s** (views are not in the Realtime publication) |
-| Violation timeline | `violation_events` by `attempt_id` | Realtime on `violation_events` (the table has no `exam_id`, so subscribe to the whole table and filter in the page) |
-| Snapshot images | `storage.from('snapshots').createSignedUrl(path, 300)` | none |
-| Exam status | `exams` | Realtime on `exams` |
-| Review screen | `current_scores`, `answers`, `attempt_questions`, `questions`, `mcq_options`, `answer_keys` | none |
-| Grading progress | `grading_runs`, `grading_jobs`, `grading_log` | Realtime on `grading_jobs` and `grading_log` |
-| Alerts, worker health, key states | `alerts`, `system_health`, `api_key_state` (super admin) | Realtime on `alerts` |
-| Broadcast history | `broadcasts` | none |
+| Grid rows: status, `last_seen_at`, violation count, `current_position` | Server route reads `attempts` joined with `candidates (mer_code, full_name, outlet)` | Browser Realtime on `attempts`, filtered by `exam_id` |
+| Progress label ("Q 7/20", "14 answered") | Server route reads `attempt_progress` | Server poll every 10 s; views are not in the Realtime publication |
+| Violation timeline | Server route reads `violation_events` by `attempt_id` | Browser Realtime on `violation_events` (the table has no `exam_id`, so filter in the page) |
+| Snapshot images | Server route creates a five-minute signed URL after authorization | none |
+| Exam status | Server route reads `exams` | Browser Realtime on `exams` |
+| Review screen | Server route reads `current_scores`, `answers`, `attempt_questions`, `questions`, `mcq_options`, `answer_keys` | none |
+| Grading progress | Server route reads `grading_runs`, `grading_jobs`, `grading_log` | Browser Realtime on `grading_jobs` and `grading_log` |
+| Alerts, worker health, key states | Super-admin route reads `alerts`, `system_health`, `api_key_state` | Browser Realtime on `alerts` |
+| Broadcast history | Server route reads `broadcasts` | none |
 
 Candidate status words (4C.5) are derived on the page. The rules and their order are in Section 2C §7.2; in short: **Submitted** = `submitted` or `finalized`; **Not joined** = `not_started`; **Offline** = `acknowledged` or `in_progress` with `last_seen_at` older than 25 s (display only; the logged `DISCONNECTED` event starts at 30 s, Section 4); **Camera off** = heartbeat fine but no video track from LiveKit participant `c_{attempt_id}` for 10 s; **In exam** = `in_progress`; **Ready** = `acknowledged`. Only Camera off needs LiveKit; the rest come from `attempts`.
 

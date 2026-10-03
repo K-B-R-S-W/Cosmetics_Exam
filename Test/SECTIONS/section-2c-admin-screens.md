@@ -301,10 +301,10 @@ In Draft the **Announcement** button is disabled and a tooltip-free line under t
 | Title | **Send announcement** |
 | Field | Textarea, plain text, with a counter **0 / 5000**. May be Sinhala, English, mixed or Singlish |
 | Recipients | Radio buttons **All assigned candidates** (default) / **Selected candidates**. Selected mode shows a searchable checkbox list with MER code and name, a selected count, and requires at least one candidate. Only candidates assigned to this exam can be selected |
-| Display time | **10 seconds** by default. Choices 10, 15, 30, 45 or 60 seconds, plus a whole-number custom seconds field constrained to 10–60 |
-| Help | **Each selected candidate sees this once as a top-right notification. It disappears after the selected time and cannot be reopened. You can send as many announcements as needed.** |
+| Display time | No control. Every candidate announcement displays for a fixed **5 seconds** |
+| Help | **Each selected candidate sees this once as a top-right notification. It disappears after 5 seconds and cannot be reopened. You can send as many announcements as needed.** |
 | Buttons | **Send message** (solid ink) / **Cancel** |
-| Previous messages | Admin-only list below the field: Colombo time, text, **All ({count})** or **Selected ({count})**, and display duration. Candidates never receive this history |
+| Previous messages | Admin-only list below the field: Colombo time, text, and **All ({count})** or **Selected ({count})**. Candidates never receive this history |
 | Errors | Validation errors are shown beside the field. An empty custom selection says **Select at least one candidate.** A stale/unassigned selection says **One or more selected candidates are no longer assigned to this exam. Refresh and try again.** There is no per-exam count limit |
 
 Publish failure never fails the send (contract 4.4): the candidate gets the message on their next 10-second heartbeat. The admin sees **Sent.**
@@ -717,7 +717,7 @@ IDs continue after Section 2B at 8.136. Each line is one test.
 **Controls**
 - **8.161** — **Start now** with a scheduled time says it will be replaced. The preview in **Extend time** shows the right new end time. Extending after the deadline is refused in words.
 - **8.162** — Two admins extend at the same moment: neither extension is lost.
-- **8.163** — More than 10 announcements can be sent. An **All** announcement reaches every currently assigned candidate; a **Selected** announcement reaches only the chosen MER codes. Durations 10 and 60 seconds are honoured, 9 and 61 are rejected, a 5,000-character Sinhala message renders safely, and each recipient sees each toast once only—even after refresh—with no candidate history or reopen control.
+- **8.163** — More than 10 announcements can be sent. An **All** announcement reaches every currently assigned candidate; a **Selected** announcement reaches only the chosen MER codes. Every toast disappears after exactly 5 seconds, a 5,000-character Sinhala message renders safely, 5,001 characters are rejected, and each recipient sees each toast once only—even after refresh—with no candidate history or reopen control.
 - **8.164** — **End exam** puts the focus on **Keep exam running**. Forcing one candidate submits only that candidate. A kicked candidate gets the session-revoked message and can sign in again.
 
 **Timeline and snapshots**

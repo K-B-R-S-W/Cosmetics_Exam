@@ -315,7 +315,7 @@ The check is a short list of steps. Each step shows a status in words and an ico
 - **Start:** when the state says `phase: live` (a Broadcast `exam_started` is only a nudge, so the page calls `/api/exam/state` and acts on the answer), the page calls `GET /api/exam/paper` and navigates to `/exam`. Show "The exam is starting…" (Notice, no countdown) while the paper loads. If the paper call returns an error (see §7.8), the page shows the matching message and keeps retrying every 5 s.
 - **Time changes:** if the admin changes the start time, the next state reply carries the new time and the countdown simply updates. A Notice says "The start time changed to {time}."
 - **Proctoring:** the proctoring hook and the 10-second heartbeat run here. The fullscreen overlay applies here too (3A.4 and 2B.3). Leaving fullscreen shows the overlay (§8.3).
-- **Announcements** addressed to this candidate appear as queued top-right toasts for their configured 10–60 second duration (§8.5).
+- **Announcements** addressed to this candidate appear as queued top-right toasts for a fixed 5 seconds each (§8.5).
 - The camera preview is 160×120, mirrored, with "Camera on" and "Microphone on" in words next to it. If a track is lost, the words change to "Camera off" with a Warning icon, and the Camera banner appears (§8.4).
 
 **States**
@@ -508,7 +508,7 @@ The last row is the platform's fault, not the candidate's: Section 4 logs it wit
 | Event | Banner text | Dismiss |
 |---|---|---|
 | Time extended (`time_updated`, or the deadline in state moved later) | Your time was extended by {n} minutes. The timer now shows your new time. | Dismiss button, also auto-hides after 30 s |
-| Message from the exam team (`state.announcements`, targeted to this candidate) | The exam team says: "{message}" | Top-right toast, automatically disappears after its server-provided `display_seconds` (10–60; default 10). Escaped plain text, at most 5,000 characters; long text wraps/scrolls without covering answer controls |
+| Message from the exam team (`state.announcements`, targeted to this candidate) | The exam team says: "{message}" | Top-right toast, automatically disappears after a fixed 5 seconds. Escaped plain text, at most 5,000 characters; long text wraps/scrolls without covering answer controls |
 | Moved to the current question (`out_of_sync`) | We moved you to question {n}. | Auto-hides after 10 s |
 | Start time changed | The start time changed to {time}. | Auto-hides after 30 s |
 

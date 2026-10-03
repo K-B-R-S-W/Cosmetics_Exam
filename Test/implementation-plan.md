@@ -19,13 +19,14 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 0.1 | Initialize Next.js + TypeScript | `apps/web/` | `npx create-next-app@latest` with App Router, TypeScript, ESLint |
 | 0.2 | Install core dependencies | `package.json` | `@supabase/supabase-js`, `@supabase/ssr`, `iron-session`, 🔧 `sanitize-html` (replaces `dompurify` — needs browser DOM on server), `@node-rs/argon2` |
 | 0.3 | Supabase project setup | Supabase dashboard | Create project, note URL + anon key + service role key |
-| 0.4 | Environment config | `.env.local`, `.env.example`, `infra/env/` | All variables from §14.1; template files in `infra/env/web.env.example` and `infra/env/worker.env.example` (Section 6 §1). 🔧² **Include `ALERT_WEBHOOK_URL`** (Telegram/Discord). 🔧⁹ **Add `SNAPSHOT_RETENTION_DAYS`** (default `14`), **`NEXT_PUBLIC_LIVEKIT_URL`**. 🔧²¹ **Add worker-only variables** (never on Vercel): `GEMINI_KEY_1`..`GEMINI_KEY_3`, `GEMINI_MODELS`, `GRADING_CHUNK_SIZE` (10), `GRADING_SLOT_MIN_INTERVAL_MS` (12000), `GRADING_RESERVE` (1), `GRADING_REQUEST_TIMEOUT_MS` (90000), `GRADING_MAX_TRIES` (4), `GRADING_PAUSE_AFTER_MIN` (15), `GRADING_MARK_STEP` (0.5), `REVIEW_CONFIDENCE` (0.6), `REVIEW_CONFIDENCE_SINGLISH` (0.75), `GRADING_MAX_ANSWER_CHARS` (6000), `GRADING_PROMPT_VERSION` (`g1`), `GEMINI_THINKING`. 🔧²² **Credentials persistence**: `SESSION_SECRET` and `NIC_PEPPER` must be stored in a password manager and must never change once candidates are imported (Section 6 §7) |
+| 0.4 | Environment config | `.env.local`, `.env.example`, `infra/env/` | All variables from §14.1; template files in `infra/env/web.env.example` and `infra/env/worker.env.example` (Section 6 §1). No Discord or Telegram webhook. 🔧⁹ **Add `SNAPSHOT_RETENTION_DAYS`** (default `14`), **`NEXT_PUBLIC_LIVEKIT_URL`**. 🔧²¹ **Add worker-only variables** (never on Vercel): `GEMINI_KEY_1`..`GEMINI_KEY_3`, `GEMINI_MODEL` (`gemini-3.7-flash`), `GEMINI_DAILY_LIMITS`, `GRADING_CHUNK_SIZE` (10), `GRADING_SLOT_MIN_INTERVAL_MS` (12000), `GRADING_RESERVE` (1), `GRADING_REQUEST_TIMEOUT_MS` (90000), `GRADING_MAX_TRIES` (4), `GRADING_PAUSE_AFTER_MIN` (15), `GRADING_MARK_STEP` (0.5), `REVIEW_CONFIDENCE` (0.6), `REVIEW_CONFIDENCE_SINGLISH` (0.75), `GRADING_MAX_ANSWER_CHARS` (6000), `GRADING_PROMPT_VERSION` (`g1`), `GEMINI_THINKING`. 🔧²² **Credentials persistence**: `SESSION_SECRET` and `NIC_PEPPER` must be stored in a password manager and must never change once candidates are imported (Section 6 §7) |
 | 0.5 | Supabase client helpers | `lib/supabase/server.ts`, `lib/supabase/client.ts` | Server client (service role), browser client (anon key for admin Realtime only) |
 | 0.6 | iron-session config | `lib/session.ts` | Session options with `secure: process.env.NODE_ENV === 'production'`, cookie name, TTL = exam duration + 2 hours |
 | 0.7 | Vercel project | Vercel dashboard | Connect repo, set env vars, confirm auto-deploy |
 | 0.8 | Git repo + structure | root | Create folder structure from §14.6; initial commit. 🔧²² Add `infra/livekit`, `infra/ec2`, and `infra/env` directories (Section 6 §1) |
 | ➕ 0.9 | Logger config | `lib/logger.ts` | 🔧 Configure logger to **never log request bodies** — NIC/ID data must not appear in logs |
 | ➕ 0.10 | Public health endpoint | `app/api/health/route.ts` | 🔧🔧⁹ Simple public endpoint for UptimeRobot. Response: `{ ok: true, time }` on success; `503 { ok: false }` on Supabase failure. No detail |
+| ➕ 0.11 | Design foundation | `styles/`, `app/layout.tsx`, `public/brand/` | Tailwind v4 CSS `@theme` tokens; global and tablet rules; Atkinson Hyperlegible + Noto Sans Sinhala via `next/font`; approved PNG logos and logo favicon; raw colours linted outside `styles/tokens.css`. Do not create `tailwind.config` |
 
 **Done when:** deployed app reads a row from Supabase and iron-session creates a test cookie on localhost.
 
@@ -44,8 +45,8 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 |---|---|---|---|
 | 1A.1 | Run migration | `supabase/migrations/001_initial.sql` | 🔧³🔧⁶🔧⁷ Save `SECTIONS/001_initial.sql` as `supabase/migrations/001_initial.sql`. Run in the Supabase SQL editor. **Requires a fresh Supabase project** (the file creates tables, publications, and a storage bucket — it is not re-runnable). **Requires Postgres 15+** (`security_invoker` views). New Supabase projects have this. The SQL has never been executed — the smoke test is the real proof. Do **not** hand-write schema from the task rows below — the file is the source of truth |
 | ➕ 1A.2b | Run grading migration | `supabase/migrations/002_grading.sql` | 🔧²¹ Save `SECTIONS/002_grading.sql` as `supabase/migrations/002_grading.sql`. Run in Supabase SQL editor after `001_initial.sql` (Section 5 §12.3). Adds `model` column to `grading_log` and `grading_jobs`, index `idx_grading_log_usage` for fast daily call budget lookups, and unique index `uq_question_scores_job_question` on `question_scores (job_id, question_id)` for idempotent AI writes |
-| 1A.2 | Run smoke test | `SECTIONS/001_smoke_test.sql` | 🔧⁶🔧⁷ Run in SQL editor after migrations. It verifies: attempt auto-creation, paper idempotency, sequential Next + idempotency, position guard, revision rule, submit + closed saves, override-wins scoring, incident counting, alert dedup, multi-chunk grading jobs, disconnect resolution/reversal (blocks 10–11), and 🔧²¹ idempotent AI score writes (block 12). Rolls itself back. **Expect the notice `SMOKE TEST PASSED`** |
-| 1A.3 | Verify RLS | Dashboard | 🔧⁶ Done in the migration: RLS on every table; admins full access; super-admin-only for `alerts`, `system_health`, `api_key_state`; `sessions` and `login_attempts` are service-role only (RLS on, no policies) |
+| 1A.2 | Run smoke test | `SECTIONS/001_smoke_test.sql` | 🔧⁶🔧⁷ Run in SQL editor after migrations. It verifies explicit Data API grants by role, denied anon/authenticated behavior, service-role RPC access, announcement limits, attempt auto-creation, paper idempotency, sequential Next + idempotency, position guard, revision rule, submit + closed saves, override-wins scoring, incident counting, alert dedup, multi-chunk grading jobs, disconnect resolution/reversal (blocks 10–11), and 🔧²¹ idempotent AI score writes (block 12). Rolls itself back. **Expect the notice `SMOKE TEST PASSED`** |
+| 1A.3 | Verify RLS and grants | Dashboard + SQL smoke test | RLS is enabled on every application table. `anon` has no public-schema access. `authenticated` has read-only access only to its own admin profile and the six Realtime tables, with admin/super-admin RLS. All writes and other reads use server routes with `service_role` |
 | 1A.4 | Verify Realtime | Dashboard → Replication | 🔧⁶ Done in the migration: `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, `exams` |
 | 1A.5 | Verify Storage | Dashboard | 🔧⁶ Done in the migration: private `snapshots` bucket + admin read policy |
 | 1A.6 | Seed admin users | Dashboard + SQL | 🔧⁶ Create users in Dashboard → Auth → Users, then `INSERT INTO admin_profiles (id, name, role) VALUES ('<uuid>', 'Name', 'super_admin')`. `api_key_state` (key1–key3) and `system_health` (worker) are seeded by the migration |
@@ -58,7 +59,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | Functions | `generate_paper(p_attempt_id)` — atomic paper creation, locks attempt row, moves to `in_progress`; `save_answer(...)` — revision check, deadline+15s, force-end, position guard, option validation, all with DB clock; `advance_position(...)` — sequential Next, idempotent via `expected_position`; `submit_attempt(p_attempt_id, p_reason)` — idempotent submit |
 | Triggers | `sync_attempt_on_assign` (🔧⁶ auto-creates attempt on `exam_candidates` insert), `bump_violation_count` (increments `attempts.violation_count` only for `counts = true` incidents), `set_updated_at` on results |
 | Views | `current_scores` (override always wins, then latest `created_at`), `attempt_progress` (for admin grid: `current_position`, `total_questions`, `answered_count`, `flagged_count`), `attempt_deadlines` (per-attempt `deadline` and `grace_deadline` for the scheduler) |
-| Hardening | Browser `anon` key revoked from all tables/sequences; exam-engine functions are service-role only |
+| Hardening | One final grants block revokes Data API defaults, sets `FOR ROLE postgres` default privileges, gives `anon` no access, gives `authenticated` only admin-profile/Realtime reads, and grants explicit table, view, sequence and RPC access to `service_role` |
 
 **Done when:** 🔧⁷🔧²¹ migrations `001_initial.sql` and `002_grading.sql` run without errors; smoke test (blocks 1–12) prints `SMOKE TEST PASSED`; Dashboard shows RLS enabled on all tables, Realtime on the 6 listed tables, and the `snapshots` bucket exists.
 
@@ -87,7 +88,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | # | Task | Files |
 |---|---|---|
 | 1D.1 | Exam list page | `app/(admin)/admin/exams/page.tsx` |
-| 1D.2 | Create/edit exam form | `app/(admin)/admin/exams/[id]/page.tsx` — includes `questions_per_paper`, `shuffle`, `flag_threshold`, schedule. 🔧 **Convert Colombo time input to UTC** before storing. 🔧³ **Add `navigation_mode` toggle** (sequential / free). Locked once exam is live. 🔧¹⁹ `flag_threshold` defaults to **5**, range **1–100** (Section 4 §4.2) |
+| 1D.2 | Create/edit exam form | `app/(admin)/admin/exams/[id]/page.tsx` — includes `questions_per_paper`, `shuffle`, `flag_threshold`, schedule. 🔧 **Convert Colombo time input to UTC** before storing. 🔧³ **Add `navigation_mode` toggle** (sequential / free). Locked once exam is live. 🔧¹⁹ `flag_threshold` defaults to **10**, range **1–100** (Section 4 §4.2) |
 | 1D.3 | Assign candidates to exam | Same page or sub-page. 🔧⁶ **Assigning a candidate auto-creates their attempt** (DB trigger on `exam_candidates`). Unassigning removes the attempt only if still `not_started`. The admin live grid shows "Not joined" for all assigned candidates before anyone logs in. 🔧⁹ **Add `app/api/admin/exams/[id]/candidates/route.ts`** (GET, POST, DELETE). 🔧¹⁰ Unassign returns `200 { removed: [...], blocked: [...] }` (not 409) — tells the admin which candidates couldn’t be removed because their attempt has started |
 | 1D.4 | Exam API routes | `app/api/admin/exams/route.ts` — 🔧⁷ **Enforce `navigation_mode` lock server-side**: the update route must reject changes to `navigation_mode` (and `questions_per_paper`, `shuffle`, `duration_min`, `scheduled_start_at`) once the exam status is `live` or later. Without this, the UI-only lock (1D.2) is cosmetic. 🔧⁹ **Add `app/api/admin/exams/[id]/route.ts`** (GET, PATCH, DELETE). `status` only changes `draft` ↔ `scheduled` here |
 
@@ -290,7 +291,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 5A.2 | Extend API | `app/api/admin/exams/[id]/extend/route.ts` — all or one; 🔧 **add minutes to `exams.ends_at`** (or `attempts.extra_minutes` for individual); publish time update. 🔧⁹🔧¹⁰ **Server-side compare-and-set with retry** — the server reads `ends_at`, adds minutes, and writes with a `WHERE ends_at = old_value` guard. If stale, it retries internally (up to 3 times). The client does NOT need to send `expected_ends_at`. This prevents two admins extending at once from losing an update, without complicating the admin page |
 | 5A.3 | Force-end API | `app/api/admin/exams/[id]/force-end/route.ts` — 🔧 **set `exams.ends_at = now()`**; 🔧³ **set `force_ended_at = now()`** (keep status as `ended`, not a new value); 🔧⁷ **call `rpc('submit_attempt', { p_reason: 'forced' })` for each in-progress attempt** (do not update the table directly); publish `exam_ended`. 🔧⁹ **Require `confirm: true`** in the request body |
 | 5A.4 | Force-submit + kick | `app/api/admin/attempts/[id]/force-submit/route.ts`, `/kick/route.ts` — 🔧⁹ Force-submit requires `confirm: true`; kick revokes sessions and removes from LiveKit |
-| 5A.5 | Broadcast API | `app/api/admin/exams/[id]/broadcast/route.ts` — save to `broadcasts`, publish to channel. 🔧¹⁰ **Limits**: message text max 500 chars; max 10 broadcasts per exam (prevent spam). Publish failure is logged but **never fails the admin action** (the 10s heartbeat is the backup) |
+| 5A.5 | Broadcast API | `app/api/admin/exams/[id]/broadcast/route.ts` — save to `broadcasts`, snapshot all/custom recipients, and publish a content-free nudge. Messages are 1–5,000 characters, sends per exam are unlimited, and candidate toasts display top-right for a fixed 5 seconds. Publish failure is logged but **never fails the admin action** (the 10s heartbeat is the backup) |
 | 5A.6 | Admin action logging | Write all actions to `admin_actions`. 🔧⁹ **Use action names from Section 3 §1.6** |
 | 5A.7 | Exam edit restrictions | UI disables fields based on exam status (draft/scheduled: full edit; live: extend/force-end only) |
 
@@ -474,7 +475,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | ➕ 8.57 | Test non-counting events | 🔧¹⁹ `COPY`, `PASTE`, `CONTEXT_MENU`: logged with `counts = false`. Same type within 3s = one event |
 | ➕ 8.58 | Test camera source | 🔧¹⁹ Unplug camera (`meta.source = 'track'`): counts. Kill LiveKit (`meta.source = 'livekit'`): does not count |
 | ➕ 8.59 | Test reload | 🔧¹⁹ Reload during exam: `RELOAD` logged and counted. Fresh login after kick is not a `RELOAD` |
-| ➕ 8.60 | Test threshold change | 🔧¹⁹ Change `flag_threshold` from 5 to 3 while live: tiles at 3 or 4 recolour immediately |
+| ➕ 8.60 | Test threshold change | 🔧¹⁹ Change `flag_threshold` from 10 to 3 while live: tiles at 3 or 4 recolour immediately |
 | ➕ 8.61 | Test dismiss/restore | 🔧¹⁹ Dismiss an incident with a note: `violation_count` drops by 1. Restore it: goes back up. Both appear in the audit log |
 | ➕ 8.62 | Test one-absence rule | 🔧¹⁹ Wi-Fi drop of 3 min with a tab switch 60s in, **both orders** (event before flip and after flip): net `violation_count` = 1 each time |
 | ➕ 8.63 | Test smoke 11a–11c | 🔧¹⁹ Smoke-test additions 11a–11c (one-absence SQL tests) pass |
@@ -615,7 +616,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | Snapshot deletion: honor consent promise | 7.7 (new task) |
 | Client-side routing + manual submit button | 2D.1, 2F.2, 8.21 |
 | LiveKit TURN hostname | 4D.2, 4D.4 |
-| `ALERT_WEBHOOK_URL` in env vars | 0.4 |
+| No Discord/Telegram webhook; Gemini model and per-key limits are explicit | 0.4 |
 | Docs out of sync warning | ⚠️ Note below |
 
 ### Round 3 Issues
@@ -728,7 +729,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | Question HTML allowlist missing | 1E.7 (allowlist added from Section 3 §4.3) |
 | Override rules: note required, attempt must be finalized | 6D.5 (rules added) |
 | Resume body undocumented | 6D.2 (`{ failed_only? }`, returns `{ resumed }`) |
-| Broadcast limits missing | 5A.5 (500 char, 10 per exam, publish failure non-blocking) |
+| Broadcast limits missing | 5A.5 (5,000 characters, unlimited sends, fixed 5-second toast, publish failure non-blocking) |
 | `recomputeResults()` shared function missing | 6D.7 (new task — `lib/grading/recompute.ts`) |
 | Per-IP login limit could lock out office | 2A.3 (per-IP threshold 50+; per-MER limit is the real protection) |
 
@@ -841,7 +842,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | No threshold control on live grid | 3C.5: number field (1-100), amber rule in 3C.2 |
 | No dismiss/restore for false positives | 3B.7 and contract §4.15: `PATCH /api/admin/events/[id]` |
 | CSV missing violation columns | 7.4: `violations_counted` + `violations_logged` |
-| 1D.2 missing threshold range | 1D.2: default 5, range 1-100 |
+| 1D.2 missing threshold range | 1D.2: default 10, range 1-100 |
 | Smoke test 10e fails with broader overlap | `001_smoke_test.sql`: delete FOCUS_LOST before 10e |
 | No SQL test for one-absence rule | `001_smoke_test.sql` test block 11 (11a-11c) |
 | Tests 8.50-8.63 missing | Implementation plan: 14 new tests for Section 4 |
@@ -891,7 +892,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | Prompt test harness & 429 fixtures | 6E.1–6E.4 (`test-prompt.ts` with 15 cases; capture real 429 error fixtures) |
 | Grading completion criteria | Phase 6 "Done when" (prompt tests pass, failover verified, auto-resume verified, crash idempotency) |
 | Unscored questions in CSV export | 7.4 (added `unscored_count` column placed after `needs_review_count`) |
-| Worker environment configuration | 0.4 (added worker-only variables: `GEMINI_KEY_1..3`, `GEMINI_MODELS`, `GRADING_*`, `REVIEW_*`) |
+| Worker environment configuration | 0.4 (added worker-only variables: `GEMINI_KEY_1..3`, `GEMINI_MODEL`, `GEMINI_DAILY_LIMITS`, `GRADING_*`, `REVIEW_*`) |
 | 002_grading.sql migration missing | 1A.2b added, 1A.2 updated (smoke block 12), Phase 1A Done-when updated |
 | 6D.8 precondition wording trap | 6D.8 clarified to "exam must be finalized, else 409 exam_not_finalized" |
 | Chunk size configurable from worker env | Contract §4.6 and plan 6B.1/6D.1 specify chunk size from worker config (default 10, `GRADING_CHUNK_SIZE`) |

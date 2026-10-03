@@ -245,7 +245,7 @@ A 4:3 video, with below it: the MER code (bold), name, status badge, violation b
 
 ### 4.14 Toast (admin)
 
-Admin toasts appear bottom-right. Candidate exam-team announcements appear top-right, allow wrapped/scrollable text up to 5,000 characters without covering the answer controls, and auto-hide after that announcement's configured duration: 10 seconds by default, with an allowed range of 10–60 seconds. Multiple announcements are queued in sent order and shown one at a time, with a one-second clear gap between them so the surface is visibly removed. The component is unmounted after its timer: there is no candidate history, Messages button, reopen action or persistent announcement indicator. `role="status"` announces each once. Admin threshold/save toasts use a 6-second timeout; operational alerts remain until dismissed. The tab/focus warning is the separate candidate warning in §4.14a.
+Admin toasts appear bottom-right. Candidate exam-team announcements appear top-right, allow wrapped/scrollable text up to 5,000 characters without covering the answer controls, and auto-hide after a fixed 5 seconds. Multiple announcements are queued in sent order and shown one at a time, with a one-second clear gap between them so the surface is visibly removed. The component is unmounted after its timer: there is no candidate history, Messages button, reopen action or persistent announcement indicator. `role="status"` announces each once. Admin threshold/save toasts use a 6-second timeout; operational alerts remain until dismissed. The tab/focus warning is the separate candidate warning in §4.14a.
 
 ### 4.14a Candidate warning toast
 
@@ -325,7 +325,7 @@ apps/web/
 ```
 
 ### 7.2 Tooling
-Tailwind (as the plan assumes) with the tokens mapped in `tailwind.config`, so classes like `text-ink` and `bg-surface` exist and raw hex cannot slip in. A lint step (a simple grep in CI) fails the build if a hex colour appears outside `tokens.css`.
+Tailwind v4 maps the tokens through CSS `@theme` in `styles/tokens.css`, so classes like `text-ink` and `bg-surface` exist without a `tailwind.config` file. A lint step fails the build if a raw hex colour appears outside `tokens.css`.
 
 ### 7.3 Edits to make in `implementation-plan.md`
 

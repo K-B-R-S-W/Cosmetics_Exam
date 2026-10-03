@@ -285,7 +285,6 @@ create table public.broadcasts (
   exam_id          uuid not null references public.exams (id) on delete cascade,
   message          text not null check (char_length(btrim(message)) between 1 and 5000),
   audience         text not null check (audience in ('all', 'custom')),
-  display_seconds  smallint not null default 10 check (display_seconds between 10 and 60),
   sent_at          timestamptz not null default now()
 );
 
@@ -395,9 +394,6 @@ begin
     and a.last_seen_at = (ve.meta->>'last_seen_at')::timestamptz;
 end $$;
 
-revoke execute on function public.resolve_disconnects() from public, anon, authenticated;
-grant  execute on function public.resolve_disconnects() to service_role;
-
 create or replace function public.reverse_disconnects_for_incident(p_event_id uuid)
 returns int language plpgsql as $$
 declare
@@ -431,10 +427,6 @@ begin
   select count(*) into v_n from upd;
   return v_n;
 end $$;
-
-revoke execute on function public.reverse_disconnects_for_incident(uuid) from public, anon, authenticated;
-grant  execute on function public.reverse_disconnects_for_incident(uuid) to service_role;
-
 
 -- 3.3 Assigning a candidate to an exam creates their (not_started) attempt, so the admin grid
 --     can show "Not joined" for everyone. Unassigning removes it only if they never started.
@@ -692,10 +684,11 @@ begin
 end $$;
 
 -- 3.10 create_broadcast(): validate and snapshot all/custom recipients atomically.
-create or replace function public.create_broadcast(
+drop function if exists public.create_broadcast(uuid, text, smallint, text, uuid[]);
+drop function if exists public.create_broadcast(uuid, text, text, uuid[]);
+create function public.create_broadcast(
   p_exam_id uuid,
   p_message text,
-  p_display_seconds smallint,
   p_audience text,
   p_candidate_ids uuid[] default null
 )
@@ -711,9 +704,6 @@ begin
   if v_exam_status not in ('scheduled', 'live') then raise exception 'invalid_status'; end if;
   if p_message is null or char_length(btrim(p_message)) not between 1 and 5000 then
     raise exception 'invalid_message';
-  end if;
-  if p_display_seconds is null or p_display_seconds not between 10 and 60 then
-    raise exception 'invalid_display_seconds';
   end if;
   if p_audience not in ('all', 'custom') then raise exception 'invalid_audience'; end if;
   if p_audience = 'all' and p_candidate_ids is not null then
@@ -734,8 +724,8 @@ begin
     end if;
   end if;
 
-  insert into public.broadcasts (exam_id, message, audience, display_seconds)
-  values (p_exam_id, btrim(p_message), p_audience, p_display_seconds)
+  insert into public.broadcasts (exam_id, message, audience)
+  values (p_exam_id, btrim(p_message), p_audience)
   returning id into v_broadcast_id;
 
   if p_audience = 'all' then
@@ -755,16 +745,16 @@ begin
 end $$;
 
 -- 3.11 claim_broadcast(): exactly-once display with safe replay of a lost HTTP response.
-create or replace function public.claim_broadcast(
+drop function if exists public.claim_broadcast(uuid, uuid, uuid);
+create function public.claim_broadcast(
   p_broadcast_id uuid,
   p_candidate_id uuid,
   p_claim_token uuid
 )
-returns table(out_display boolean, out_message text, out_display_seconds smallint, out_sent_at timestamptz)
+returns table(out_display boolean, out_message text, out_sent_at timestamptz)
 language plpgsql as $$
 declare
   v_message text;
-  v_display_seconds smallint;
   v_sent_at timestamptz;
 begin
   if p_claim_token is null then raise exception 'invalid_claim_token'; end if;
@@ -777,17 +767,17 @@ begin
      and recipient.shown_at is null
      and broadcast.id = recipient.broadcast_id
      and broadcast.sent_at >= now() - interval '10 minutes'
-  returning broadcast.message, broadcast.display_seconds, broadcast.sent_at
-       into v_message, v_display_seconds, v_sent_at;
+  returning broadcast.message, broadcast.sent_at
+       into v_message, v_sent_at;
 
   if found then
-    return query select true, v_message, v_display_seconds, v_sent_at;
+    return query select true, v_message, v_sent_at;
     return;
   end if;
 
   -- The same token may replay after a lost response; a new token may not show it again.
-  select broadcast.message, broadcast.display_seconds, broadcast.sent_at
-    into v_message, v_display_seconds, v_sent_at
+  select broadcast.message, broadcast.sent_at
+    into v_message, v_sent_at
     from public.broadcast_recipients recipient
     join public.broadcasts broadcast on broadcast.id = recipient.broadcast_id
    where recipient.broadcast_id = p_broadcast_id
@@ -796,9 +786,9 @@ begin
      and broadcast.sent_at >= now() - interval '10 minutes';
 
   if found then
-    return query select true, v_message, v_display_seconds, v_sent_at;
+    return query select true, v_message, v_sent_at;
   else
-    return query select false, null::text, null::smallint, null::timestamptz;
+    return query select false, null::text, null::timestamptz;
   end if;
 end $$;
 
@@ -807,45 +797,39 @@ end $$;
 --    Candidates use the API (service role, bypasses RLS). The browser anon key gets NOTHING.
 -- =====================================================================
 
--- 4.1 Tables with full admin access
+-- 4.1 Enable RLS on every application table. Direct authenticated access is read-only
+--     and limited to the tables needed for admin identity and Realtime subscriptions.
 do $$
 declare t text;
 begin
   foreach t in array array[
-    'candidates', 'exams', 'exam_candidates', 'questions', 'mcq_options', 'answer_keys',
-    'attempts', 'attempt_questions', 'answers', 'violation_events',
-    'grading_runs', 'grading_jobs', 'grading_log', 'question_scores', 'results',
-    'admin_actions', 'broadcasts', 'broadcast_recipients'
+    'admin_profiles', 'candidates', 'exams', 'exam_candidates', 'questions', 'mcq_options',
+    'answer_keys', 'attempts', 'attempt_questions', 'sessions', 'answers', 'violation_events',
+    'grading_runs', 'grading_jobs', 'question_scores', 'results', 'api_key_state',
+    'grading_log', 'login_attempts', 'alerts', 'system_health', 'admin_actions',
+    'broadcasts', 'broadcast_recipients'
   ] loop
     execute format('alter table public.%I enable row level security', t);
-    execute format(
-      'create policy "admins full access" on public.%I for all to authenticated
-         using (public.is_admin()) with check (public.is_admin())', t);
   end loop;
 end $$;
 
--- 4.2 Super-admin-only tables
+-- 4.2 Admin Realtime reads. All initial loads and all writes go through server routes.
 do $$
 declare t text;
 begin
-  foreach t in array array['alerts', 'system_health', 'api_key_state'] loop
-    execute format('alter table public.%I enable row level security', t);
+  foreach t in array array['attempts', 'violation_events', 'grading_jobs', 'grading_log', 'exams'] loop
     execute format(
-      'create policy "super admin only" on public.%I for all to authenticated
-         using (public.is_super_admin()) with check (public.is_super_admin())', t);
+      'create policy "admins read realtime" on public.%I for select to authenticated
+         using ((select public.is_admin()))', t);
   end loop;
 end $$;
 
--- 4.3 admin_profiles: read your own row; super admin manages all
-alter table public.admin_profiles enable row level security;
+create policy "super admins read alerts" on public.alerts
+  for select to authenticated using ((select public.is_super_admin()));
+
+-- 4.3 admin_profiles: authenticated admins may read only their own row.
 create policy "read own profile" on public.admin_profiles
   for select to authenticated using (id = auth.uid());
-create policy "super admin manages profiles" on public.admin_profiles
-  for all to authenticated using (public.is_super_admin()) with check (public.is_super_admin());
-
--- 4.4 Service-role only (RLS on, NO policies = nobody but the service role)
-alter table public.sessions       enable row level security;
-alter table public.login_attempts enable row level security;
 
 -- =====================================================================
 -- 5. VIEWS  (security_invoker so RLS applies to the caller)
@@ -922,25 +906,79 @@ on conflict (component) do nothing;
 --   values ('<auth user uuid>', 'Your Name', 'super_admin');   -- or 'admin'
 
 -- =====================================================================
--- 8. HARDENING
+-- 8. DATA API GRANTS
+--    This is the only grants block. It runs after every object exists.
 -- =====================================================================
 
--- The anon key is public (it is in the browser). It must never touch tables.
-revoke all on all tables    in schema public from anon;
-revoke all on all sequences in schema public from anon;
-alter default privileges in schema public revoke all on tables    from anon;
-alter default privileges in schema public revoke all on sequences from anon;
+revoke all on schema public from public, anon, authenticated, service_role;
+revoke all on all tables in schema public from public, anon, authenticated, service_role;
+revoke all on all sequences in schema public from public, anon, authenticated, service_role;
+revoke execute on all functions in schema public from public, anon, authenticated, service_role;
 
--- Exam-engine functions: service role only
-revoke execute on function public.generate_paper(uuid)                                   from public, anon, authenticated;
-revoke execute on function public.save_answer(uuid, uuid, text, uuid, boolean, int)      from public, anon, authenticated;
-revoke execute on function public.advance_position(uuid, int, uuid, text, uuid, int)     from public, anon, authenticated;
-revoke execute on function public.submit_attempt(uuid, text)                             from public, anon, authenticated;
-revoke execute on function public.create_broadcast(uuid, text, smallint, text, uuid[])   from public, anon, authenticated;
-revoke execute on function public.claim_broadcast(uuid, uuid, uuid)                      from public, anon, authenticated;
-grant  execute on function public.generate_paper(uuid)                                   to service_role;
-grant  execute on function public.save_answer(uuid, uuid, text, uuid, boolean, int)      to service_role;
-grant  execute on function public.advance_position(uuid, int, uuid, text, uuid, int)     to service_role;
-grant  execute on function public.submit_attempt(uuid, text)                             to service_role;
-grant  execute on function public.create_broadcast(uuid, text, smallint, text, uuid[])   to service_role;
-grant  execute on function public.claim_broadcast(uuid, uuid, uuid)                      to service_role;
+alter default privileges for role postgres in schema public revoke all on tables from public, anon, authenticated, service_role;
+alter default privileges for role postgres in schema public revoke all on sequences from public, anon, authenticated, service_role;
+alter default privileges for role postgres in schema public revoke execute on functions from public, anon, authenticated, service_role;
+
+grant usage on schema public to authenticated, service_role;
+
+grant select on table
+  public.admin_profiles,
+  public.attempts,
+  public.violation_events,
+  public.grading_jobs,
+  public.grading_log,
+  public.alerts,
+  public.exams
+to authenticated;
+
+grant execute on function public.is_admin() to authenticated;
+grant execute on function public.is_super_admin() to authenticated;
+
+grant select, insert, update, delete on table
+  public.admin_profiles,
+  public.candidates,
+  public.exams,
+  public.exam_candidates,
+  public.questions,
+  public.mcq_options,
+  public.answer_keys,
+  public.attempts,
+  public.attempt_questions,
+  public.sessions,
+  public.answers,
+  public.violation_events,
+  public.grading_runs,
+  public.grading_jobs,
+  public.question_scores,
+  public.results,
+  public.api_key_state,
+  public.grading_log,
+  public.login_attempts,
+  public.alerts,
+  public.system_health,
+  public.admin_actions,
+  public.broadcasts,
+  public.broadcast_recipients
+to service_role;
+
+grant select on table
+  public.current_scores,
+  public.attempt_progress,
+  public.attempt_deadlines
+to service_role;
+
+grant usage, select on sequence
+  public.grading_log_id_seq,
+  public.login_attempts_id_seq,
+  public.admin_actions_id_seq
+to service_role;
+
+grant execute on function public.resolve_disconnects() to service_role;
+grant execute on function public.reverse_disconnects_for_incident(uuid) to service_role;
+grant execute on function public.attempt_deadline(uuid) to service_role;
+grant execute on function public.generate_paper(uuid) to service_role;
+grant execute on function public.save_answer(uuid, uuid, text, uuid, boolean, int) to service_role;
+grant execute on function public.advance_position(uuid, int, uuid, text, uuid, int) to service_role;
+grant execute on function public.submit_attempt(uuid, text) to service_role;
+grant execute on function public.create_broadcast(uuid, text, text, uuid[]) to service_role;
+grant execute on function public.claim_broadcast(uuid, uuid, uuid) to service_role;
