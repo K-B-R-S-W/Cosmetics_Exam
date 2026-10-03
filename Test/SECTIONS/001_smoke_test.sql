@@ -9,6 +9,7 @@ do $$
 declare
   v_exam    uuid := gen_random_uuid();
   v_cand    uuid := gen_random_uuid();
+  v_cand2   uuid := gen_random_uuid();
   v_q1      uuid := gen_random_uuid();
   v_q2      uuid := gen_random_uuid();
   v_q3      uuid := gen_random_uuid();
@@ -18,6 +19,12 @@ declare
   v_second  uuid;
   v_res     text;
   v_pos     int;
+  v_broadcast uuid;
+  v_recipient_count int;
+  v_claim uuid := gen_random_uuid();
+  v_display boolean;
+  v_announcement text;
+  v_display_seconds smallint;
 begin
   -- Live sequential exam, 3 questions in the pool, 2 per paper
   insert into public.exams (id, title, duration_min, status, started_at, ends_at, navigation_mode, questions_per_paper)
@@ -36,23 +43,81 @@ begin
   exception when check_violation then
     null; -- expected
   end;
+  begin
+    update public.questions set image_alt_text = repeat('x', 501) where id = v_q2;
+    assert false, '0d: question-image alt text above 500 characters must be rejected';
+  exception when check_violation then
+    null; -- expected
+  end;
   update public.questions
      set image_path = 'questions/complete.png', image_alt_text = 'Product label',
          image_mime = 'image/png', image_size_bytes = 1024
    where id = v_q2;
   assert (select image_path from public.questions where id = v_q2) = 'questions/complete.png',
     '0b: complete question image metadata must be accepted';
+  begin
+    update public.questions set image_size_bytes = 4194305 where id = v_q2;
+    assert false, '0c: question images above 4 MiB must be rejected';
+  exception when check_violation then
+    null; -- expected
+  end;
   update public.questions
      set image_path = null, image_alt_text = null, image_mime = null, image_size_bytes = null
    where id = v_q2;
   insert into public.mcq_options (id, question_id, position, label, text_html) values (v_opt, v_q1, 0, 'a', 'Yes');
 
-  insert into public.candidates (id, mer_code, full_name, nic_hash) values (v_cand, 'SMOKE-1', 'Smoke Tester', 'x');
-  insert into public.exam_candidates (exam_id, candidate_id) values (v_exam, v_cand);
+  insert into public.candidates (id, mer_code, full_name, nic_hash) values
+    (v_cand, 'SMOKE-1', 'Smoke Tester', 'x'),
+    (v_cand2, 'SMOKE-2', 'Second Tester', 'y');
+  insert into public.exam_candidates (exam_id, candidate_id) values
+    (v_exam, v_cand), (v_exam, v_cand2);
 
   -- 1. Assigning a candidate creates their attempt
   select id into v_att from public.attempts where exam_id = v_exam and candidate_id = v_cand;
   assert v_att is not null, '1: attempt should be created on assignment';
+
+  -- 1a. Announcements snapshot exact recipients, keep a per-message duration, and can be claimed once.
+  select out_broadcast_id, out_recipient_count into v_broadcast, v_recipient_count
+    from public.create_broadcast(v_exam, ' Private message ', 60, 'custom', array[v_cand, v_cand]);
+  assert v_recipient_count = 1, '1a: duplicate custom recipient ids must collapse to one row';
+  assert (select message = 'Private message' and display_seconds = 60 and audience = 'custom'
+            from public.broadcasts where id = v_broadcast),
+    '1a: custom announcement metadata must be stored';
+  assert exists (select 1 from public.broadcast_recipients where broadcast_id = v_broadcast and candidate_id = v_cand),
+    '1a: selected candidate must receive the custom announcement';
+  assert not exists (select 1 from public.broadcast_recipients where broadcast_id = v_broadcast and candidate_id = v_cand2),
+    '1a: unselected candidate must not receive the custom announcement';
+  begin
+    update public.broadcast_recipients set shown_at = now()
+     where broadcast_id = v_broadcast and candidate_id = v_cand;
+    assert false, '1a: a half-filled announcement claim must be rejected';
+  exception when check_violation then
+    null; -- expected
+  end;
+  select out_display, out_message, out_display_seconds
+    into v_display, v_announcement, v_display_seconds
+    from public.claim_broadcast(v_broadcast, v_cand, v_claim);
+  assert v_display and v_announcement = 'Private message' and v_display_seconds = 60,
+    '1a: the intended candidate must claim the configured toast';
+  assert (select shown_at is not null and claim_token is not null from public.broadcast_recipients
+           where broadcast_id = v_broadcast and candidate_id = v_cand),
+    '1a: claiming a toast must persist shown_at and its idempotency token';
+  select out_display into v_display from public.claim_broadcast(v_broadcast, v_cand, v_claim);
+  assert v_display, '1a: retrying a lost reply with the same token must replay safely';
+  select out_display into v_display from public.claim_broadcast(v_broadcast, v_cand, gen_random_uuid());
+  assert not v_display, '1a: a new token must not show an already-claimed toast again';
+  select out_display into v_display from public.claim_broadcast(v_broadcast, v_cand2, gen_random_uuid());
+  assert not v_display, '1a: an unselected candidate must not claim the toast';
+
+  select out_broadcast_id, out_recipient_count into v_broadcast, v_recipient_count
+    from public.create_broadcast(v_exam, 'Everyone', 10, 'all', null);
+  assert v_recipient_count = 2, '1b: all must snapshot every currently assigned candidate';
+  begin
+    perform public.create_broadcast(v_exam, 'Bad target', 10, 'custom', array[gen_random_uuid()]);
+    assert false, '1c: an unassigned custom recipient must be rejected';
+  exception when others then
+    assert sqlerrm = 'invalid_recipient', '1c: expected invalid_recipient, got ' || sqlerrm;
+  end;
 
   -- 2. Paper generation: refuses before acknowledge, then is idempotent
   begin

@@ -245,7 +245,7 @@ A 4:3 video, with below it: the MER code (bold), name, status badge, violation b
 
 ### 4.14 Toast (admin)
 
-Admin toasts appear bottom-right. Candidate exam-team announcements appear top-right, allow wrapped/scrollable text up to 5,000 characters without covering the answer controls, and auto-hide after 5 seconds. Multiple announcements are queued and shown in sent order, one at a time. `role="status"` announces each once. Admin threshold/save toasts use a 6-second timeout; operational alerts remain until dismissed. The tab/focus warning is the separate candidate warning in §4.14a.
+Admin toasts appear bottom-right. Candidate exam-team announcements appear top-right, allow wrapped/scrollable text up to 5,000 characters without covering the answer controls, and auto-hide after that announcement's configured duration: 10 seconds by default, with an allowed range of 10–60 seconds. Multiple announcements are queued in sent order and shown one at a time, with a one-second clear gap between them so the surface is visibly removed. The component is unmounted after its timer: there is no candidate history, Messages button, reopen action or persistent announcement indicator. `role="status"` announces each once. Admin threshold/save toasts use a 6-second timeout; operational alerts remain until dismissed. The tab/focus warning is the separate candidate warning in §4.14a.
 
 ### 4.14a Candidate warning toast
 
@@ -253,7 +253,7 @@ Shown to a candidate when a tab switch or focus loss was recorded (Section 2B §
 
 ### 4.15 Rich-text editor (Tiptap, 1E.2)
 
-Admin only. The toolbar buttons are 44 px with labels in `aria-label` and `title`. The content area uses the question type scale. The allowed tags are the contract's allowlist (Section 3), and the toolbar must not offer tags outside it. Tiptap has no inline-image tool: the optional question image is a separate **Add image** control with upload/select, required alt text, preview, replace and remove actions. This keeps untrusted `<img>` markup out of `body_html`. Tiptap has no built-in font size: use the `TextStyle` extension with a small custom `fontSize` extension that writes `<span style="font-size: …px">`, which is the only style the sanitizer keeps.
+Admin only. The toolbar buttons are 44 px with labels in `aria-label` and `title`. The content area uses the question type scale. The allowed tags are the contract's allowlist (Section 3), and the toolbar must not offer tags outside it. Tiptap has no inline-image tool: the optional question image is a separate **Add image** control with upload/select, required alt text, preview, replace and remove actions. Alt text describes only the visual information needed to answer; it must not contain the answer or a hint, because screen readers announce it and browsers may display it when an image fails. This keeps untrusted `<img>` markup out of `body_html`. Tiptap has no built-in font size: use the `TextStyle` extension with a small custom `fontSize` extension that writes `<span style="font-size: …px">`, which is the only style the sanitizer keeps.
 
 ### 4.16 Empty, loading and error states
 

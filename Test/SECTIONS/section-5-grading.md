@@ -353,7 +353,7 @@ Events: `worker_start`, `call` (HTTP 200 reached the model; counts toward the da
 
 ### 7.10 Alerts
 
-Dedup keys (so a 2-second loop cannot flood the in-app alert list): `key_disabled:{label}`, `keys_exhausted:{run}`, `model_not_found`, `jobs_failed:{run}`, `blocked:{run}`, and `run_done:{run}` (info). Worker-level keys (Section 6 §6): `worker_started` (info), `guard_exit` (critical), `supabase_unreachable` (critical, after 5 minutes of failed database calls). Alerts are database rows shown on the Health page; no third-party chat service is used.
+Dedup keys (so a 2-second loop cannot flood the in-app alert list): `key_disabled:{label}`, `keys_exhausted:{run}`, `model_not_found`, `jobs_failed:{run}`, `blocked:{run}`, and `run_done:{run}` (info). Worker-level keys (Section 6 §6): `worker_started:{instance_id}` (an already-resolved info/history row) and `guard_exit` (critical). A Supabase outage cannot be written to the Supabase-backed alerts table while the database is unreachable: log it to the systemd journal during the outage, let the external health monitor detect the failing health route, and insert `supabase_outage:{outage_started_at}` after connectivity returns with the start, recovery time and duration. Alerts are database rows shown on the Health page; no third-party chat service is used.
 
 ---
 

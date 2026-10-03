@@ -74,7 +74,7 @@ These are gaps between the plan and the schema. Each one is fixed in the contrac
 All handlers use the **service-role** Supabase client after the auth check. The candidate and admin browsers never write to Supabase directly. (Admins do read some tables directly, see section 5.)
 
 ### 1.4 Limits and platform
-- Body limits: 64 KB by default. `POST /api/events` 200 KB. Question routes 200 KB. Candidate import 500 KB.
+- Body limits: 64 KB by default. `POST /api/events` 200 KB. Question routes 200 KB. Candidate import 500 KB. `POST /api/admin/question-images` accepts one multipart upload whose decoded file is at most **4 MiB**; reject it before buffering when `Content-Length` already exceeds the route's multipart ceiling. The 4 MiB file cap leaves room below Vercel Functions' 4.5 MB request-payload limit for multipart framing and `alt_text`.
 - `export const maxDuration = 30` on the import, grade, force-end and snapshot-purge routes *(verify the Hobby limit)*.
 - Rate limits: login (1.5) and events (30 per minute per attempt). Nothing else needs one at 23 candidates.
 - Client IP for `login_attempts` and `sessions`: first value of `x-forwarded-for`.
@@ -121,7 +121,7 @@ New or changed files compared with the plan are marked **NEW**.
 | 26 | `POST /api/admin/exams/[id]/start` | admin | 5A.1 | `exams` update |
 | 27 | `POST /api/admin/exams/[id]/extend` | admin | 5A.2 | `exams` / `attempts` update |
 | 28 | `POST /api/admin/exams/[id]/force-end` | admin | 5A.3 | `exams` update, `rpc submit_attempt` |
-| 29 | `POST /api/admin/exams/[id]/broadcast` | admin | 5A.5 | `broadcasts` insert |
+| 29 | `POST /api/admin/exams/[id]/broadcast` | admin | 5A.5 | `rpc create_broadcast` |
 | 30 | `POST /api/admin/attempts/[id]/force-submit` | admin | 5A.4 | `rpc submit_attempt` |
 | 31 | `POST /api/admin/attempts/[id]/kick` | admin | 5A.4 | `sessions` update, LiveKit |
 | 32 | `GET /api/admin/health` | super admin | 5C.2 | tables, LiveKit |
@@ -136,6 +136,7 @@ New or changed files compared with the plan are marked **NEW**.
 | 41 | `POST /api/admin/exams/[id]/regrade-question` **NEW (6D.8)** | admin | 6D.8 | `grading_runs`, `grading_jobs` insert |
 | 42 | `GET /api/question-images/[questionId]` **NEW** | candidate | 1E.2 | private Storage download |
 | 43 | `POST, DELETE /api/admin/question-images` **NEW** | admin | 1E.2 | private Storage upload/delete |
+| 44 | `POST /api/exam/announcements/[id]/claim` **NEW** | candidate | 5A.5 | `rpc claim_broadcast` |
 
 Candidate page flow and which routes each page uses:
 
@@ -145,8 +146,8 @@ Candidate page flow and which routes each page uses:
 | Confirm (name and outlet) | 4 |
 | Rules | 4, then 5 on accept |
 | Pre-exam check | 2, 14, 12 |
-| Waiting room | 7 and Broadcast, 12 (every 10 s), 13, 14 |
-| Exam | 8, 9, 10, 11, 12, 13, 7 |
+| Waiting room | 7 and Broadcast, 12 (every 10 s), 13, 14, 44 |
+| Exam | 8, 9, 10, 11, 12, 13, 7, 44 |
 | Done | 6 |
 
 ---
@@ -197,7 +198,7 @@ type StateBody = {
     deadline: string | null;   // exams.ends_at + extra_minutes; null until the exam starts
     submit_reason: 'manual' | 'auto' | 'forced' | null;
   };
-  announcements: { id: string; message: string; sent_at: string }[]; // last 10 min, oldest first
+  announcements: { id: string; sent_at: string }[]; // unclaimed rows targeted to this candidate, last 10 min, oldest first
 };
 ```
 
@@ -288,9 +289,17 @@ Response: `200 { "attempt": { "status": "acknowledged" } }`.
 Called by the done page. Sets `revoked_at` on the current session, clears the cookie. `200 { "ok": true }`. A candidate who refreshes the done page afterwards lands on login, which is fine.
 
 ### 3.7 `GET /api/exam/state` — candidate
-Returns `StateBody` (3.0): attempt joined with exam plus the last 10 minutes of announcements. It never calls `generate_paper`, so asking for state cannot start anyone's exam. Called on page load, on every Broadcast nudge, and on reconnect.
+Returns `StateBody` (3.0): attempt joined with exam plus pending announcement ids addressed to this candidate. It never calls `generate_paper`, so asking for state cannot start anyone's exam. Called on page load, on every Broadcast nudge, and on reconnect.
 
-`announcements` contains all `broadcasts` rows for the exam from the last 10 minutes, ordered by `sent_at, id`. The client keeps a set of shown ids for the session, queues unseen rows in order, shows each as a top-right toast for 5 seconds, and never treats Realtime payload text as authoritative.
+`announcements` joins `broadcast_recipients` to `broadcasts` and returns at most 50 rows where `candidate_id` is the authenticated candidate, `shown_at is null`, and `sent_at >= now() - interval '10 minutes'`, ordered by `sent_at, id`. It returns ids and times only—not message content. The client queues ids locally and uses route 44 immediately before each display. Once claims drain the first 50, the next heartbeat returns the next batch. Realtime payload text is never authoritative.
+
+### 3.7a `POST /api/exam/announcements/[id]/claim` — candidate (route 44)
+
+Request: `{ "claim_token": "<client-generated UUID v4>" }`. Immediately before displaying the next queued toast, the client creates one token and retries any lost HTTP reply with that same token.
+
+The route calls `rpc('claim_broadcast', { p_broadcast_id: id, p_candidate_id: authenticatedCandidateId, p_claim_token: claim_token })`. The database atomically sets `shown_at` and `claim_token` only for an unclaimed recipient row belonging to this candidate and sent within the last 10 minutes. The same token can replay the successful response; a different token, an unaddressed candidate, an expired announcement or an unknown id all return `200 { "display": false }` without revealing which condition applied.
+
+Success: `200 { "display": true, "announcement": { "id": "...", "message": "...", "display_seconds": 10, "sent_at": "..." } }`. The message is escaped plain text. Show it once, remove the component after `display_seconds`, leave a one-second empty gap, then claim the next queued id. There is no candidate announcement-history endpoint, reopen control or persistent indicator.
 
 ### 3.8 `GET /api/exam/paper` — candidate
 Starts or resumes the paper. Calls `rpc('generate_paper', { p_attempt_id })`, which is idempotent: the first call builds the paper (question pool, shuffle, option order) and moves the attempt to `in_progress`; later calls return the saved one. Calling it before the exam is live fails, which is how "the paper is not loaded until the time" is enforced on the server.
@@ -563,7 +572,7 @@ Admin only. This is the only route that returns answer keys together with questi
 **`PATCH /api/admin/questions/[id]`** (NEW file)
 `{ "body_html"?, "marks"?, "options"?, "image"? }`. `image` is either `null` (remove it) or the complete metadata returned by the upload route. `type` cannot change (`400 type_immutable`): delete and recreate. `options` is a full replacement list: items with an `id` are updated, items without are inserted, ids missing from the list are deleted. Same MCQ rules as create.
 
-**`POST /api/admin/question-images`** accepts `multipart/form-data` with one file plus required `alt_text`. Allow only JPEG, PNG and WebP after checking both the declared MIME type and decoded file signature; maximum 5 MB. Re-encode or reject malformed input, generate the object path server-side (`questions/{admin_id}/{uuid}.{ext}`), upload to the private `question-images` bucket, and return all metadata needed by the all-or-none database constraint. Do not trust a client path or filename. **`DELETE`** permits an authenticated admin to remove their own unattached upload or an image owned by a question they may edit. Replacing/removing an attached image deletes the old object after the question row commits, with a retryable cleanup job if deletion fails. The worker purges objects older than 24 hours that are not referenced by any `questions.image_path`, covering abandoned create forms and failed saves.
+**`POST /api/admin/question-images`** accepts `multipart/form-data` with one file plus required `alt_text` of 1–500 trimmed characters. Allow only JPEG, PNG and WebP after checking both the declared MIME type and decoded file signature; maximum **4 MiB (4,194,304 bytes)**. Re-encode or reject malformed input, generate the object path server-side (`questions/{admin_id}/{uuid}.{ext}`), upload to the private `question-images` bucket, and return all metadata needed by the all-or-none database constraint. Do not trust a client path or filename. The 4 MiB limit is deliberately below Vercel Functions' 4.5 MB request limit so multipart overhead cannot turn an otherwise valid file into a platform-level `413`. **`DELETE`** permits an authenticated admin to remove their own unattached upload or an image owned by a question they may edit. Replacing/removing an attached image deletes the old object after the question row commits, with a retryable cleanup job if deletion fails. The worker purges objects older than 24 hours that are not referenced by any `questions.image_path`, covering abandoned create forms and failed saves.
 
 **`DELETE /api/admin/questions/[id]`** (NEW)
 Draft or scheduled exams only.
@@ -620,7 +629,20 @@ Empty body. Revokes every active session of that attempt's candidate (`revoked_a
 `200 { "revoked_sessions": 1, "livekit_removed": true }`.
 
 **`POST /api/admin/exams/[id]/broadcast`**
-`{ "message": "Five minutes left." }` (1 to **5,000** characters after trimming, plain text). There is **no per-exam count limit**. Exam must be `scheduled` or `live`. Inserts a `broadcasts` row, publishes the content-free `message` nudge, and returns `200 { "id": "<uuid>" }`. Candidates fetch the authoritative announcement list from state; Discord and Telegram are not used.
+Request examples:
+
+```json
+{ "message": "Five minutes left.", "display_seconds": 10, "audience": "all" }
+{ "message": "Please reconnect your camera.", "display_seconds": 30, "audience": "custom", "candidate_ids": ["<candidate uuid>"] }
+```
+
+- `message`: 1 to **5,000** characters after trimming, plain text.
+- `display_seconds`: optional, defaults to `10`; whole seconds from `10` through `60`.
+- `audience = "all"`: `candidate_ids` must be absent. The database snapshots every candidate currently assigned to the exam.
+- `audience = "custom"`: `candidate_ids` contains at least one unique candidate id, and every id must currently be assigned to the exam. Duplicates collapse to one recipient.
+- There is **no per-exam count limit**. The exam must be `scheduled` or `live`.
+
+The route calls `create_broadcast`, which atomically inserts the announcement and exact recipient rows. Map `no_recipients` to `400 no_recipients`, `invalid_recipient` to `409 invalid_recipient`, and the other validation exceptions to `400 validation_failed`. Then write the `broadcast` admin action with audience, recipient count and duration—but not a duplicate copy of the message—publish the content-free `message` nudge, and return `200 { "id": "<uuid>", "recipient_count": 23 }`. Publish failure does not fail the send; the heartbeat is the backup. Discord and Telegram are not used.
 
 ### 4.5 Operations (super admin)
 
@@ -756,7 +778,7 @@ Candidate status words (4C.5) are derived on the page. The rules and their order
 | `exam_ended` | force-end route | none |
 | `time_updated` | extend (everyone) | none |
 | `attempt_changed` | extend (one person), force-submit, kick | `attempt_id` (only that candidate's page needs to refetch, but a refetch by anyone is harmless) |
-| `message` | announcement route | none (the text comes from `state.announcements`) |
+| `message` | announcement route | none (the client refetches targeted pending ids, then claims its own message) |
 
 - Server publishing uses the Supabase Realtime REST broadcast endpoint, or the JS client's HTTP send *(verify the current method)*. A failed publish is logged and **never** fails the admin action, because the 10 s heartbeat is the backup.
 - A client that reconnects to the channel refetches state once.

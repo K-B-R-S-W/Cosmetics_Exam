@@ -173,7 +173,7 @@ A new sub-page: `admin/exams/[id]/candidates`. Two tables stacked, with a one-li
 |---|---|
 | Type | Chosen when the question is created, shown as a label after that. Help: "The type can't be changed. To switch, delete the question and add a new one." |
 | Question text | Tiptap editor (2A 4.15). Toolbar only offers what the allowlist allows: bold, italic, underline, strike, lists, headings 2–3, sub/superscript is **not** offered, and font size through the custom extension. Max 50,000 characters |
-| Optional image | Checkbox **Add image**. When enabled: upload/select JPEG, PNG or WebP up to 5 MB; required alt text; preview plus **Replace image** and **Remove image**. Upload through the admin image route to the private `question-images` bucket. The database saves all four metadata fields together or none; a partial record is rejected |
+| Optional image | Checkbox **Add image**. When enabled: upload/select JPEG, PNG or WebP up to 4 MiB; required alt text (1–500 characters); preview plus **Replace image** and **Remove image**. Help: **Describe only what the candidate needs from the image. Do not include the answer or a hint.** Upload through the admin image route to the private `question-images` bucket. The database saves all four metadata fields together or none; a partial record is rejected |
 | Marks | Number, step 0.25, **optional**. Placeholder **1**. Help: "Leave empty for 1 mark. Candidates see this next to the question." Range above 0, up to 999.99 |
 
 **MCQ** also has:
@@ -298,12 +298,14 @@ In Draft the **Announcement** button is disabled and a tooltip-free line under t
 
 | Part | Text |
 |---|---|
-| Title | **Send a message to all candidates** |
+| Title | **Send announcement** |
 | Field | Textarea, plain text, with a counter **0 / 5000**. May be Sinhala, English, mixed or Singlish |
-| Help | **Candidates see this as a top-right notification for 5 seconds. You can send as many announcements as needed.** |
+| Recipients | Radio buttons **All assigned candidates** (default) / **Selected candidates**. Selected mode shows a searchable checkbox list with MER code and name, a selected count, and requires at least one candidate. Only candidates assigned to this exam can be selected |
+| Display time | **10 seconds** by default. Choices 10, 15, 30, 45 or 60 seconds, plus a whole-number custom seconds field constrained to 10–60 |
+| Help | **Each selected candidate sees this once as a top-right notification. It disappears after the selected time and cannot be reopened. You can send as many announcements as needed.** |
 | Buttons | **Send message** (solid ink) / **Cancel** |
-| Previous messages | A short list below the field (time in Colombo and text), read directly from `broadcasts`, so an admin does not send the same message twice |
-| Errors | Validation errors are shown beside the field; there is no per-exam count limit |
+| Previous messages | Admin-only list below the field: Colombo time, text, **All ({count})** or **Selected ({count})**, and display duration. Candidates never receive this history |
+| Errors | Validation errors are shown beside the field. An empty custom selection says **Select at least one candidate.** A stale/unassigned selection says **One or more selected candidates are no longer assigned to this exam. Refresh and try again.** There is no per-exam count limit |
 
 Publish failure never fails the send (contract 4.4): the candidate gets the message on their next 10-second heartbeat. The admin sees **Sent.**
 
@@ -715,7 +717,7 @@ IDs continue after Section 2B at 8.136. Each line is one test.
 **Controls**
 - **8.161** — **Start now** with a scheduled time says it will be replaced. The preview in **Extend time** shows the right new end time. Extending after the deadline is refused in words.
 - **8.162** — Two admins extend at the same moment: neither extension is lost.
-- **8.163** — More than 10 announcements can be sent; a 5,000-character Sinhala announcement reaches candidates intact and displays safely for 5 seconds.
+- **8.163** — More than 10 announcements can be sent. An **All** announcement reaches every currently assigned candidate; a **Selected** announcement reaches only the chosen MER codes. Durations 10 and 60 seconds are honoured, 9 and 61 are rejected, a 5,000-character Sinhala message renders safely, and each recipient sees each toast once only—even after refresh—with no candidate history or reopen control.
 - **8.164** — **End exam** puts the focus on **Keep exam running**. Forcing one candidate submits only that candidate. A kicked candidate gets the session-revoked message and can sign in again.
 
 **Timeline and snapshots**

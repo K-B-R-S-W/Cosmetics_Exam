@@ -2,7 +2,7 @@
 
 Covers: the EC2 box (t3.small), LiveKit and Caddy, the worker service, environment variables, alerts, backups, monitoring, the exam-day runbook (replaces §18 of the old plan) and a failure playbook.
 
-**Verification status.** I checked the config files by reading them, running `bash -n` on every script, and parsing the compose file. Earlier in this section's work, LiveKit started on `livekit.yaml.example`, Caddy accepted the `Caddyfile`, and `backup-db.sh` dumped the migrated schema, all in my sandbox. **None of it has run on your EC2 yet.** Items marked *(verify)* depend on AWS, LiveKit, Let's Encrypt, DuckDNS or Supabase behaviour that changes. The rehearsal (Phase 8) is the real proof.
+**Verification status.** The config files have been reviewed, every shell script has passed `bash -n`, and the compose file has been parsed. These are static/local checks only. **The stack has not run on your EC2 yet, so no earlier sandbox run is treated as current deployment evidence.** Items marked *(verify)* depend on AWS, LiveKit, Let's Encrypt, DuckDNS or Supabase behaviour that changes. The rehearsal (Phase 8) is the real proof.
 
 ---
 
@@ -61,8 +61,8 @@ Never commit `livekit.yaml`, `.env` files, or `/etc/exam-worker.env`.
 
    Check these against the current LiveKit deployment docs *(verify)*. Do **not** open 7880 or 6379. LiveKit signalling and Redis listen on `127.0.0.1` only.
 4. **SSH from your IP only:** if your home or office IP changes, you are locked out. Keep the AWS console open as a fallback (edit the rule, or use EC2 Instance Connect).
-5. **DuckDNS:** create `Cosmetics.duckdns.org` and point it at the Elastic IP. Creation and DNS pointing are deployment steps; the IP then remains stable:
-   `curl "https://www.duckdns.org/update?domains=Cosmetics&token=YOUR_TOKEN&ip=ELASTIC_IP"` (it answers `OK`).
+5. **DuckDNS:** create `cosmetics.duckdns.org` and point it at the Elastic IP. Creation and DNS pointing are deployment steps; the IP then remains stable:
+   `curl "https://www.duckdns.org/update?domains=cosmetics&token=YOUR_TOKEN&ip=ELASTIC_IP"` (it answers `OK`).
 6. **CloudWatch:** enable the `CPUCreditBalance` and `CPUUtilization` graphs for the instance. A t3 earns credits at a baseline of 40% of two vCPUs and spends them above that *(verify)*. Check the instance's credit mode: **unlimited** keeps performance but can add charges, **standard** throttles when credits run out.
 
 ### Connecting with Tabby
@@ -90,7 +90,7 @@ sudo cp infra/livekit/livekit.env.example   /opt/exam-livekit/.env
 ```
 
 Edit both copies:
-- `.env`: set `LIVEKIT_HOST=Cosmetics.duckdns.org` and `ACME_EMAIL`.
+- `.env`: set `LIVEKIT_HOST=cosmetics.duckdns.org` and `ACME_EMAIL`.
 - `livekit.yaml`: replace `REPLACE_API_KEY: REPLACE_API_SECRET` with a pair from `docker run --rm livekit/livekit-server generate-keys`. Then `sudo chmod 600 /opt/exam-livekit/livekit.yaml`.
 
 Put the same key and secret in the Vercel variables `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
@@ -105,16 +105,16 @@ sudo docker compose logs caddy | tail -30     # look for "certificate obtained"
 
 - First start takes a minute while Caddy gets the certificate. Ports 80 and 443 must be reachable from the internet and the DuckDNS name must already resolve to the Elastic IP.
 - If the log shows rate-limit errors from Let's Encrypt, stop and wait. Do not keep restarting. The `caddy_data` volume keeps the certificate between restarts, so **do not delete volumes** (`docker compose down -v`).
-- `curl -I https://Cosmetics.duckdns.org` should answer (a LiveKit status or `404`/`200` is fine, a TLS error is not).
+- `curl -I https://cosmetics.duckdns.org` should answer (a LiveKit status or `404`/`200` is fine, a TLS error is not).
 - The real test is a browser: the candidate pre-exam check must publish video to the server and the admin grid must show the tile.
 
 ### 4.3 TURN and strict networks
 
-TURN/UDP on 3478 is on. TURN/TLS (port 5349 or 443 with its own certificate) is **not yet proven**. Candidates behind a firewall that blocks all UDP fall back to ICE/TCP on 7881. Rehearsal must test normal Wi-Fi, mobile data, a restrictive network, ICE selection, TURN fallback, TLS, reconnect, camera/microphone recovery, and candidate/admin Realtime behavior. If a network blocks both UDP and ICE/TCP, enable and verify TURN/TLS before declaring LiveKit production-ready; video failure must not stop the exam itself.
+TURN/UDP on 3478 is enabled. Browser signalling uses WSS/TLS through Caddy on 443. TURN/TLS is **not enabled** in `livekit.yaml.example`; candidates behind a firewall that blocks UDP instead fall back to ICE/TCP on 7881. Rehearsal must test normal Wi-Fi, mobile data, a restrictive network, ICE selection, TURN/UDP fallback, WSS/TLS, reconnect, camera/microphone recovery, and candidate/admin Realtime behavior. If the real restrictive-network test blocks both UDP and ICE/TCP, add a second hostname and trusted certificate, enable LiveKit `turn.tls_port` (443 when there is no load balancer, per the LiveKit deployment guide), open the matching TCP security-group port, and retest TURN/TLS before declaring LiveKit production-ready. Video failure must not stop the exam itself.
 
 ### 4.4 Pinning
 
-`docker-compose.yml` pins LiveKit `v1.13.7` *(verify the tag exists on Docker Hub before the first start)*. After the first successful rehearsal, never change image tags before the real exam.
+`docker-compose.yml` pins LiveKit `v1.13.7`. On 2 Oct 2026 the exact Docker image pulled successfully and reported `livekit-server version 1.13.7`; this proves the published image/tag, not the EC2 network configuration. Pull and run the same pin during rehearsal. After the first successful rehearsal, never change image tags before the real exam.
 
 ### 4.5 `use_external_ip`
 
@@ -130,7 +130,9 @@ On EC2 the instance only sees its private address. `use_external_ip: true` makes
 
 ### 5.2 Deploy and update
 
-`bash infra/ec2/deploy-worker.sh` builds the worker as a self-contained Node bundle (use `esbuild`, `tsup`, or an equivalently verified bundler), copies the bundle and required runtime files to `/opt/exam-worker`, installs the systemd unit, and restarts the service. Shared TypeScript imported from outside the worker folder must be included in the bundle. Deployment must run the built `dist/index.js` in a clean staging directory before restarting systemd, proving it has no undeployed source-file dependency.
+`bash infra/ec2/deploy-worker.sh` builds the worker as a self-contained Node bundle (use `esbuild`, `tsup`, or an equivalently verified bundler), copies the bundle and required runtime files to `/opt/exam-worker`, installs the systemd unit, and restarts the service. Shared TypeScript imported from outside the worker folder must be included in the bundle.
+
+The worker package must define `npm run test:dist`. That test copies only `dist/` into a newly created empty temporary directory and starts `WORKER_SELF_TEST=1 node dist/index.js` there. Self-test mode must eagerly load the bundled entry point and every shared module, validate a complete set of safe placeholder configuration, make **no network calls**, print `WORKER DIST SELF-TEST PASSED`, and exit 0. A missing module, import outside `dist/`, `MODULE_NOT_FOUND`, timeout, signal, unexpected output, or non-zero exit fails. The test always removes its temporary directory. `deploy-worker.sh` runs it before copying files or restarting systemd, so a failed bundle can never replace the installed worker.
 
 ### 5.3 The service file
 
@@ -179,14 +181,14 @@ Worker-level alerts (add to Section 5 §7.10 and 6A.7):
 
 | Dedup key | Severity | When | Text |
 |---|---|---|---|
-| `worker_started` | INFO | Every start | `Worker started (instance {short id}).` Not deduped within the minute, but sent once per start. |
+| `worker_started:{instance_id}` | INFO | Every start | `Worker started (instance {short id}).` Insert it as an already-resolved history row (`resolved_at = created_at`): the per-instance key preserves each start without colliding or inflating the active-alert count. |
 | `guard_exit` | CRITICAL | Exit code 3 | `A second worker is running; this one exited.` (Sent best-effort before exiting.) |
-| `supabase_unreachable` | CRITICAL | 5 minutes of consecutive failed database calls | `The worker cannot reach Supabase. Check that the project is not paused.` |
+| `supabase_outage:{outage_started_at}` | CRITICAL | Inserted **after recovery** from 5 minutes or more of consecutive failed database calls | `Supabase was unreachable from {started_at} until {recovered_at} ({duration}). Check the systemd journal and project status.` During the outage the worker writes structured journal entries locally; it cannot insert a Supabase row while Supabase is unreachable. |
 | `heartbeat_stale` | CRITICAL | **Not sent by the worker** | See below |
 
 **Who watches the worker?** If the worker is dead, it cannot alert. Three layers:
 1. The super admin health page (5C.2) shows the worker as stale when `last_heartbeat_at` is over 90 s old. Keep it open during the exam.
-2. Use a free external uptime monitor (UptimeRobot or similar) on the Vercel health route so the owner receives an availability notification if the app itself is down *(verify the free plan)*.
+2. Use a free external uptime monitor (UptimeRobot or similar) on the Vercel health route so the owner receives an availability notification if the app or Supabase health query is down *(verify the free plan)*. This is the live notification path during a Supabase outage.
 3. For the worker, the Vercel health route should return a non-200 status when the worker heartbeat is stale, so that the same monitor catches a dead worker. Add this to 5C.2.
 
 During setup, insert a harmless test alert and confirm it appears and resolves in the Health page; run the key-break test in rehearsal to see a real in-app alert arrive.
@@ -197,7 +199,7 @@ During setup, insert a harmless test alert and confirm it appears and resolves i
 
 **Supabase**
 - The latest schema delta has **not** been run on Supabase. After implementation and local verification, apply the reviewed migration path (fresh project: `001_initial.sql` then `002_grading.sql`; existing project: the new delta migration), then run `001_smoke_test.sql`.
-- Confirm both private buckets exist: `snapshots` and `question-images`. Verify the 5 MB/MIME restrictions and candidate image authorization path.
+- Confirm both private buckets exist: `snapshots` and `question-images`. Verify the **4 MiB**/MIME restrictions and candidate image authorization path. The lower cap leaves multipart overhead below Vercel Functions' 4.5 MB payload ceiling.
 - Create the admin users and the `admin_profiles` rows (task 1A.6).
 - **Free projects pause after inactivity** *(verify)*. Open the dashboard the week before and again the day before the exam. Rehearsal days count as activity, but do not rely on that.
 - Use the **session pooler** connection string for backups (§8), not the direct connection.
@@ -206,7 +208,7 @@ During setup, insert a harmless test alert and confirm it appears and resolves i
 - Set the variables in `web.env.example` for **Production only**. `GEMINI_*` must not exist on Vercel.
 - `NEXT_PUBLIC_*` values are baked in at build time. After changing one, redeploy.
 - `SESSION_SECRET` and `NIC_PEPPER` must **never change** after candidates are imported (the pepper) or during an exam (the session secret logs everyone out). Store both in a password manager now.
-- `LIVEKIT_URL` is what the token route returns to the browser. It must be `wss://Cosmetics.duckdns.org`.
+- `LIVEKIT_URL` is what the token route returns to the browser. It must be `wss://cosmetics.duckdns.org`.
 - Hobby plan limits and terms *(verify)*. If Vercel is a problem on exam day, the fallback is to host the app on the EC2 behind Caddy. That fallback has never been tested, so decide in the rehearsal whether to keep it.
 
 **Rate limit and the shared IP.** All 23 candidates sit behind one office IP. The per-IP login limit (counting failed attempts only, task 2A.3) must be well above what 23 people can produce in 10 minutes (suggest about 200), while the per-MER limit stays strict (suggest about 5). Check the numbers before the rehearsal.
@@ -333,10 +335,10 @@ Do not run `npm run build` on the box while an exam is live. Deploys happen the 
 | 8.87 | **Guard after crash:** `sudo kill -9` the worker. systemd restarts it. The new instance waits (at most 65 s), sees the heartbeat is not advancing, takes over, and grading and the scheduler continue. Exit code is not 3. |
 | 8.88 | **Guard after graceful restart:** `systemctl restart exam-worker` starts without waiting (the old instance wrote `status = 'down'`). |
 | 8.89 | **Guard against a live second worker:** start a second worker by hand while the service runs. The second one exits with code 3 after the wait. The service keeps running. |
-| 8.90 | **Alert delivery:** create and resolve a harmless in-app alert, then trigger one real alert (break one key). It reaches the Health page with no key values or candidate names. |
+| 8.90 | **Alert delivery and database outage:** create and resolve a harmless in-app alert, then trigger one real alert (break one key). It reaches the Health page with no key values or candidate names. Separately block worker access to Supabase for over 5 minutes: structured outage entries remain in the journal, the external health check fails during the outage, and one `supabase_outage:{outage_started_at}` history row appears only after connectivity recovers. |
 | 8.91 | **Dead worker visible:** stop the worker. Within 90 s the health page shows it stale and the health route returns non-200. |
 | 8.92 | **Reboot recovery:** `sudo reboot` the box. LiveKit, Caddy, Redis (`restart: unless-stopped`) and the worker (systemd enabled) all come back with no manual step. Certificate still valid. |
 | 8.93 | **Restore drill:** restore the latest dump into a scratch project; the app lists exams and candidates there. |
 | 8.94 | **Capacity:** all candidates connected for 30 minutes, three admins subscribed, numbers from §9 recorded, no swap thrash. |
-| 8.95 | **LiveKit network matrix:** publish and monitor on normal Wi-Fi, mobile data, and a restrictive network; record ICE candidate selection, TURN fallback, TLS, reconnect, camera/microphone recovery, and candidate/admin Realtime recovery. Do not mark LiveKit production-ready until every required path passes or a documented TURN/TLS fix is retested. |
+| 8.95 | **LiveKit network matrix:** publish and monitor on normal Wi-Fi, mobile data, and a restrictive network; record ICE candidate selection, TURN/UDP fallback, WSS/TLS through Caddy, reconnect, camera/microphone recovery, and candidate/admin Realtime recovery. The current config does not claim TURN/TLS. If the restrictive network blocks both UDP and ICE/TCP, enable TURN/TLS as in §4.3 and repeat the matrix before marking LiveKit production-ready. |
 | 8.96 | **Shared-IP login:** 23 logins from one IP within two minutes all succeed; 6 wrong attempts on one MER are limited. |

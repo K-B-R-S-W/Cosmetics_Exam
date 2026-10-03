@@ -315,7 +315,7 @@ The check is a short list of steps. Each step shows a status in words and an ico
 - **Start:** when the state says `phase: live` (a Broadcast `exam_started` is only a nudge, so the page calls `/api/exam/state` and acts on the answer), the page calls `GET /api/exam/paper` and navigates to `/exam`. Show "The exam is starting…" (Notice, no countdown) while the paper loads. If the paper call returns an error (see §7.8), the page shows the matching message and keeps retrying every 5 s.
 - **Time changes:** if the admin changes the start time, the next state reply carries the new time and the countdown simply updates. A Notice says "The start time changed to {time}."
 - **Proctoring:** the proctoring hook and the 10-second heartbeat run here. The fullscreen overlay applies here too (3A.4 and 2B.3). Leaving fullscreen shows the overlay (§8.3).
-- **Announcements** from the exam team appear as queued top-right 5-second toasts (§8.5).
+- **Announcements** addressed to this candidate appear as queued top-right toasts for their configured 10–60 second duration (§8.5).
 - The camera preview is 160×120, mirrored, with "Camera on" and "Microphone on" in words next to it. If a track is lost, the words change to "Camera off" with a Warning icon, and the Camera banner appears (§8.4).
 
 **States**
@@ -508,11 +508,11 @@ The last row is the platform's fault, not the candidate's: Section 4 logs it wit
 | Event | Banner text | Dismiss |
 |---|---|---|
 | Time extended (`time_updated`, or the deadline in state moved later) | Your time was extended by {n} minutes. The timer now shows your new time. | Dismiss button, also auto-hides after 30 s |
-| Message from the exam team (`state.announcements`, each `id` shown once) | The exam team says: "{message}" | Top-right toast, automatically disappears after 5 seconds. Escaped plain text, at most 5,000 characters; long text wraps/scrolls without covering answer controls |
+| Message from the exam team (`state.announcements`, targeted to this candidate) | The exam team says: "{message}" | Top-right toast, automatically disappears after its server-provided `display_seconds` (10–60; default 10). Escaped plain text, at most 5,000 characters; long text wraps/scrolls without covering answer controls |
 | Moved to the current question (`out_of_sync`) | We moved you to question {n}. | Auto-hides after 10 s |
 | Start time changed | The start time changed to {time}. | Auto-hides after 30 s |
 
-Announcements are queued in `sent_at` order and each is announced once (`role="status"`). There is no per-exam announcement-count limit. Extension amount is the difference between the old and new deadlines, rounded to whole minutes.
+Announcements are queued in `sent_at` order. Immediately before showing the next toast, the client generates a UUID claim token and calls the claim route; it displays only a successful claim and retries a lost reply with the same token. The server's durable recipient row prevents the announcement from reappearing after refresh, reconnect or another heartbeat. When the timer ends, the toast is removed from the DOM. There is a one-second empty gap before the next queued toast and no candidate history, reopen button or persistent announcement indicator. Each toast is announced once (`role="status"`). There is no per-exam announcement-count limit. Extension amount is the difference between the old and new deadlines, rounded to whole minutes.
 
 ### 8.6 Time up and the locked screen
 
