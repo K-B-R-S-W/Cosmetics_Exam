@@ -1,0 +1,89 @@
+@import "tailwindcss";
+@import "./tokens.css";
+@import "./tablet.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+  text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100dvh;
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+button,
+input,
+select,
+textarea {
+  color: inherit;
+  font: inherit;
+}
+
+button,
+[role="button"] {
+  min-height: var(--touch-target);
+  min-width: var(--touch-target);
+}
+
+img,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+}
+
+a {
+  color: inherit;
+  text-underline-offset: 0.18em;
+}
+
+:lang(si) {
+  font-size: 1.08em;
+  line-height: 1.7;
+}
+
+:focus-visible {
+  outline: 0.1875rem solid var(--ink);
+  outline-offset: 0.1875rem;
+}
+
+[data-tabular-numbers="true"] {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: var(--selected);
+  color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@media print {
+  body {
+    background: var(--surface);
+  }
+}

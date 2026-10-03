@@ -1,0 +1,10 @@
+# infra/livekit/Caddyfile
+# Caddy gets and renews the Let's Encrypt certificate by itself (needs TCP 80 and 443 open).
+{
+	email {$ACME_EMAIL}
+}
+
+{$LIVEKIT_HOST} {
+	# WebSocket upgrade is handled automatically by reverse_proxy.
+	reverse_proxy 127.0.0.1:7880
+}

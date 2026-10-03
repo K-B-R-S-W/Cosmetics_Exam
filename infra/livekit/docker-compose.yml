@@ -1,0 +1,36 @@
+# infra/livekit/docker-compose.yml
+# Host networking is what LiveKit recommends: it needs the wide UDP port range and its real public address.
+# Pin the image versions after the first successful rehearsal. (verify the tags on Docker Hub)
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.7
+    network_mode: host
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    depends_on:
+      - redis
+    mem_limit: 900m
+
+  caddy:
+    image: caddy:2
+    network_mode: host
+    restart: unless-stopped
+    env_file: .env            # LIVEKIT_HOST, ACME_EMAIL
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # keeps the certificate between restarts (avoids Let's Encrypt rate limits)
+      - caddy_config:/config
+    mem_limit: 200m
+
+  redis:
+    image: redis:7-alpine
+    network_mode: host
+    restart: unless-stopped
+    command: ["redis-server", "--bind", "127.0.0.1", "--save", "", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    mem_limit: 100m
+
+volumes:
+  caddy_data:
+  caddy_config:

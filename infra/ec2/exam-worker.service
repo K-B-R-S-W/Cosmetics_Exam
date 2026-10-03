@@ -1,0 +1,30 @@
+# /etc/systemd/system/exam-worker.service
+[Unit]
+Description=Exam platform worker (scheduler, grading, heartbeat)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=exam
+Group=exam
+WorkingDirectory=/opt/exam-worker
+EnvironmentFile=/etc/exam-worker.env
+ExecStart=/usr/bin/node --max-old-space-size=256 dist/index.js
+Restart=always
+RestartSec=5
+# The single-instance guard (task 6A.1) exits with code 3 when another worker is alive.
+# Do not restart in that case, or two workers would fight forever.
+RestartPreventExitStatus=3
+MemoryMax=400M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,58 @@
+.candidate-page {
+  margin-inline: auto;
+  max-width: 68ch;
+  padding: var(--space-6);
+}
+
+.candidate-form {
+  max-width: 28rem;
+}
+
+.exam-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 100dvh;
+  overscroll-behavior: none;
+}
+
+.exam-scroll-region {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.candidate-question-drawer-trigger {
+  display: none;
+}
+
+.admin-shell {
+  min-width: 80rem;
+}
+
+@media (max-width: 63.999rem) {
+  .candidate-page {
+    padding: var(--space-5);
+  }
+}
+
+@media (max-width: 56.249rem) {
+  .candidate-question-sidebar,
+  .exam-strip-title {
+    display: none;
+  }
+
+  .candidate-question-drawer-trigger {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 47.999rem) {
+  .candidate-page {
+    padding: var(--space-4);
+  }
+}
+
+@media (orientation: portrait) and (max-width: 56.249rem) {
+  .keyboard-open .candidate-camera-preview {
+    visibility: hidden;
+  }
+}

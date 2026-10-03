@@ -1,0 +1,76 @@
+:root {
+  --paper: #f7f7f8;
+  --surface: #ffffff;
+  --ink: #1f2430;
+  --muted: #5a5f6e;
+  --line: #7a7f8c;
+  --hairline: #d9dbe0;
+  --selected: #eaebee;
+  --ok: #2f6b4f;
+  --ok-tint: #eef4f0;
+  --warn: #8a5200;
+  --warn-tint: #f7f0e3;
+  --alert: #a8231b;
+  --alert-tint: #f8eae8;
+
+  --font: var(--font-atkinson), var(--font-sinhala), system-ui, sans-serif;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  --control-radius: 0.5rem;
+  --panel-radius: 0;
+  --control-border: 1px solid var(--line);
+  --selected-border: 2px solid var(--ink);
+  --dialog-shadow: 0 0.5rem 1.5rem rgb(31 36 48 / 16%);
+  --touch-target: 2.75rem;
+  --motion-duration: 150ms;
+  --motion-easing: ease-out;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-hairline: var(--hairline);
+  --color-selected: var(--selected);
+  --color-ok: var(--ok);
+  --color-ok-tint: var(--ok-tint);
+  --color-warn: var(--warn);
+  --color-warn-tint: var(--warn-tint);
+  --color-alert: var(--alert);
+  --color-alert-tint: var(--alert-tint);
+  --font-sans: var(--font);
+
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.25rem;
+  --text-md: 1rem;
+  --text-md--line-height: 1.5rem;
+  --text-answer: 1.125rem;
+  --text-answer--line-height: 1.75rem;
+  --text-question: 1.25rem;
+  --text-question--line-height: 1.875rem;
+  --text-title: 1.75rem;
+  --text-title--line-height: 2.25rem;
+  --text-timer: 2rem;
+  --text-timer--line-height: 2.25rem;
+
+  --radius-control: var(--control-radius);
+  --radius-panel: var(--panel-radius);
+  --shadow-dialog: var(--dialog-shadow);
+
+  --breakpoint-tablet: 48rem;
+  --breakpoint-drawer: 56.25rem;
+  --breakpoint-laptop-sm: 64rem;
+  --breakpoint-laptop: 80rem;
+}
