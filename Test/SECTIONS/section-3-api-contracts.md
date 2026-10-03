@@ -43,6 +43,10 @@ These are gaps between the plan and the schema. Each one is fixed in the contrac
 - Success: `200` with a JSON object (no wrapper), `201` for creates, `202` when work continues in the background.
 - Never log request bodies (0.9). Log request id, route, status, duration, and the candidate or admin id only.
 
+### 1.1a Origin checks
+
+Browser `POST`, `PUT`, `PATCH`, and `DELETE` handlers call the shared `assertSameOrigin(request)` helper before reading the body or doing candidate/admin authentication work. The `Origin` header must match the request's own origin or an exact origin in the optional comma-separated `ALLOWED_ORIGINS` environment variable. A missing `Origin` is accepted only when `Sec-Fetch-Site: same-origin`; missing without that signal, malformed, and mismatched origins return the standard `403 forbidden` JSON response. `GET`, `HEAD`, and `OPTIONS` are unaffected. Header values are never logged. LiveKit webhooks and worker-to-server routes do not use this browser CSRF check; they authenticate with their own secrets.
+
 ### 1.2 Error shape
 ```json
 { "error": { "code": "exam_closed", "message": "The exam has ended.", "details": null } }
