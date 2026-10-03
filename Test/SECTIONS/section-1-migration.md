@@ -6,9 +6,10 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 
 - `001_initial.sql` — save as `supabase/migrations/001_initial.sql` and run first.
 - `002_grading.sql` — save as `supabase/migrations/002_grading.sql` and run second.
-- `001_smoke_test.sql` — run third in the SQL editor; it rolls itself back.
+- `003_function_search_path.sql` — run third. It fixes each application function's execution search path without changing its behavior.
+- `001_smoke_test.sql` — run last in the SQL editor; it rolls itself back.
 
-> **Verification status:** the earlier versions of all three files passed together in a clean temporary PostgreSQL 17 environment on 2 October 2026. The current least-privilege grants and fixed-five-second announcement revisions still require the hosted Supabase run described below. The hosted smoke test is the acceptance gate.
+> **Development verification status (4 October 2026):** `001_initial.sql`, `002_grading.sql`, and `001_smoke_test.sql` ran without errors on a fresh Supabase development project; the smoke test passed, the Dashboard reported zero tables without RLS, `/api/health` returned HTTP 200, and a manually created `super_admin` Auth user was linked to its `admin_profiles` row. `003_function_search_path.sql` was then applied successfully in the SQL Editor.
 
 ---
 
@@ -17,11 +18,12 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 1. Use a **fresh** Supabase project. The initial file creates tables, functions, policies, publication entries and Storage buckets and is not intended to be run twice. Use separate fresh projects for rehearsal and production; never test against production or promote a test database into production.
 2. SQL editor → paste `001_initial.sql` → **Run**.
 3. SQL editor → paste `002_grading.sql` → **Run**.
-4. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect the final notice **SMOKE TEST PASSED**.
-5. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
+4. SQL editor → paste `003_function_search_path.sql` → **Run**.
+5. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect the final notice **SMOKE TEST PASSED**.
+6. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
    `insert into public.admin_profiles (id, name, role) values ('<auth user uuid>', 'Name', 'super_admin');`
    Use `'admin'` for ordinary admins.
-6. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` are in `supabase_realtime`.
+7. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` are in `supabase_realtime`.
 
 If an already-created database still has the old exam default, run this only after the implementation migration step becomes due:
 
@@ -51,6 +53,10 @@ Fresh databases created by the current `001_initial.sql` already use `10` and do
 
 `position` and `current_position` are **0-based** everywhere.
 
+Every new database function must explicitly set its own safe `search_path`; do not rely on the caller's or database's default path.
+
+The Security Advisor warnings for `is_admin()` and `is_super_admin()` are accepted for the current design. Their `EXECUTE` grant to `authenticated` is intentional because RLS policies invoke them as the caller, and revoking it breaks authenticated Realtime reads. Moving these two helpers into a private schema is a possible later hardening cleanup, not a Phase 1 blocker.
+
 ---
 
 ## 3. Implementation-plan bindings
@@ -59,7 +65,8 @@ Fresh databases created by the current `001_initial.sql` already use `10` and do
 |---|---|
 | 1A.1 | Save the checked-in `001_initial.sql` as the migration. Never hand-write schema from task tables |
 | 1A.2b | Run the checked-in `002_grading.sql` after `001_initial.sql` |
-| 1A.2 | Run the checked-in smoke test after both migrations and require `SMOKE TEST PASSED` |
+| 1A.2c | Run `003_function_search_path.sql` after the schema migrations; every new function must set its own safe search path |
+| 1A.2 | Run the checked-in smoke test after all migrations and require `SMOKE TEST PASSED` |
 | 1A.3 | Verify RLS plus the explicit `anon`, `authenticated`, and `service_role` ACL assertions in the smoke test |
 | 1A.4 | Verify the six Realtime publication tables listed above |
 | 1A.5 | Verify both private Storage buckets and the authenticated admin read policies |
@@ -105,6 +112,7 @@ The migration and smoke test are intentionally not embedded here. Use these chec
 
 - [`001_initial.sql`](./001_initial.sql)
 - [`002_grading.sql`](./002_grading.sql)
+- [`003_function_search_path.sql`](../../supabase/migrations/003_function_search_path.sql)
 - [`001_smoke_test.sql`](./001_smoke_test.sql)
 
 This prevents the documentation copy from drifting away from the executable source of truth.

@@ -1,0 +1,12 @@
+alter function public.set_updated_at() set search_path = public, pg_temp;
+alter function public.bump_violation_count() set search_path = public, pg_temp;
+alter function public.sync_attempt_on_assign() set search_path = public, pg_temp;
+alter function public.resolve_disconnects() set search_path = public, pg_temp;
+alter function public.reverse_disconnects_for_incident(uuid) set search_path = public, pg_temp;
+alter function public.attempt_deadline(uuid) set search_path = public, pg_temp;
+alter function public.generate_paper(uuid) set search_path = public, pg_temp;
+alter function public.save_answer(uuid, uuid, text, uuid, boolean, int) set search_path = public, pg_temp;
+alter function public.advance_position(uuid, int, uuid, text, uuid, int) set search_path = public, pg_temp;
+alter function public.submit_attempt(uuid, text) set search_path = public, pg_temp;
+alter function public.create_broadcast(uuid, text, text, uuid[]) set search_path = public, pg_temp;
+alter function public.claim_broadcast(uuid, uuid, uuid) set search_path = public, pg_temp;
