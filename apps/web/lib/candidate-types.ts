@@ -51,3 +51,32 @@ export interface CandidateMe {
 export interface ApiErrorPayload {
   error: { code: string; message: string; details?: unknown };
 }
+
+export interface CandidateQuestion {
+  id: string;
+  position: number;
+  type: "mcq" | "written";
+  body_html: string;
+  image: {
+    url: string;
+    alt_text: string;
+  } | null;
+  marks: number;
+  options?: Array<{ id: string; text_html: string }>;
+}
+
+export interface SavedAnswer {
+  answer_text: string | null;
+  selected_option_id: string | null;
+  flagged: boolean;
+  revision: number;
+}
+
+export interface PaperBody {
+  server_time: string;
+  navigation_mode: "free" | "sequential";
+  total_questions: number;
+  current_position: number | null;
+  questions: CandidateQuestion[];
+  answers: Record<string, SavedAnswer>;
+}
