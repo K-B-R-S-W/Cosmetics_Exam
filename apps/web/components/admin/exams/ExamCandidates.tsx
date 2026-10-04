@@ -118,9 +118,9 @@ export function ExamCandidates({ examId }: { examId: string }) {
     setWorking(true);
     setError(undefined);
     setMessage(undefined);
+    let added = 0;
+    let alreadyAssigned = 0;
     try {
-      let added = 0;
-      let alreadyAssigned = 0;
       for (const candidateIds of candidateIdBatches([...selectedAvailable])) {
         const response = await fetch(`/api/admin/exams/${examId}/candidates`, {
           method: "POST",
@@ -140,6 +140,12 @@ export function ExamCandidates({ examId }: { examId: string }) {
       setMessage(`${added} added.${alreadyAssigned ? ` ${alreadyAssigned} were already assigned.` : ""}`);
       await load();
     } catch (actionError) {
+      if (added > 0 || alreadyAssigned > 0) {
+        await load();
+        setMessage(
+          `${added} added before the error.${alreadyAssigned ? ` ${alreadyAssigned} were already assigned.` : ""}`,
+        );
+      }
       setError((actionError as Error).message);
     } finally {
       setWorking(false);
@@ -152,9 +158,9 @@ export function ExamCandidates({ examId }: { examId: string }) {
     setMessage(undefined);
     setBlockedMessage(undefined);
     const selected = [...selectedAssigned];
+    const removed: string[] = [];
+    const blocked: Array<{ candidate_id: string }> = [];
     try {
-      const removed: string[] = [];
-      const blocked: Array<{ candidate_id: string }> = [];
       for (const candidateIds of candidateIdBatches(selected)) {
         const response = await fetch(`/api/admin/exams/${examId}/candidates`, {
           method: "DELETE",
@@ -182,6 +188,15 @@ export function ExamCandidates({ examId }: { examId: string }) {
       }
       await load();
     } catch (actionError) {
+      if (removed.length > 0 || blocked.length > 0) {
+        await load();
+        setMessage(`${removed.length} removed before the error.`);
+        if (blocked.length) {
+          setBlockedMessage(
+            `${blocked.length} could not be removed because they have already joined the exam.`,
+          );
+        }
+      }
       setError((actionError as Error).message);
     } finally {
       setWorking(false);

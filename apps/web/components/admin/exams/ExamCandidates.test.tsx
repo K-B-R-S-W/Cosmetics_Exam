@@ -37,7 +37,11 @@ describe("ExamCandidates", () => {
     render(<ExamCandidates examId="exam-1" />);
     const selectAll = await screen.findByLabelText("Select all shown");
     fireEvent.click(selectAll);
-    const addButton = await screen.findByRole("button", { name: "Add selected (230)" });
+    const addButton = await screen.findByRole(
+      "button",
+      { name: "Add selected (230)" },
+      { timeout: 10_000 },
+    );
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify({ added: 100, already_assigned: 0 }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ added: 98, already_assigned: 2 }), { status: 200 }))
@@ -48,6 +52,36 @@ describe("ExamCandidates", () => {
     expect(await screen.findByText("228 added. 2 were already assigned.")).toBeTruthy();
     const postCalls = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
     expect(postCalls.map(([, init]) => JSON.parse(String(init?.body)).candidate_ids.length)).toEqual([100, 100, 30]);
+  });
+
+  it("reloads and reports the completed count when a later add batch fails", async () => {
+    const candidates = Array.from({ length: 230 }, (_, index) => ({
+      candidate_id: `candidate-${index}`,
+      mer_code: `TEST-${String(index).padStart(3, "0")}`,
+      full_name: `Synthetic Candidate ${index}`,
+      outlet: null,
+    }));
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...assignedBody, items: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ items: candidates, total: 230, scan_limit: 1000, scanned_count: 230 }), { status: 200 }));
+    render(<ExamCandidates examId="exam-1" />);
+    fireEvent.click(await screen.findByLabelText("Select all shown"));
+    const addButton = await screen.findByRole(
+      "button",
+      { name: "Add selected (230)" },
+      { timeout: 10_000 },
+    );
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ added: 100, already_assigned: 0 }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Second batch failed." } }), { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...assignedBody, items: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...availableBody, items: [], total: 0, scanned_count: 0 }), { status: 200 }));
+    fireEvent.click(addButton);
+    expect(await screen.findByText("100 added before the error.")).toBeTruthy();
+    expect((await screen.findByRole("alert")).textContent).toContain("Second batch failed.");
+    const postCalls = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(postCalls.map(([, init]) => JSON.parse(String(init?.body)).candidate_ids.length)).toEqual([100, 100]);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
   });
 
   it("asks the admin to search when the available-candidate scan reaches its limit", async () => {

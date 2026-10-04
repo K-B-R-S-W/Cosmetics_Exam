@@ -59,20 +59,44 @@ describe("exam detail route", () => {
     expect(updateResult.chain.eq).toHaveBeenCalledWith("status", "draft");
   });
 
-  it.each([null, "2020-01-01T00:00:00.000Z"])(
-    "rejects an invalid scheduled start-time edit (%s)",
-    async (scheduledStartAt) => {
+  it("allows an unchanged near-future start time with a title edit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2099-10-05T03:59:30.000Z"));
+    try {
       const scheduled = { ...exam, status: "scheduled", scheduled_start_at: "2099-10-05T04:00:00.000Z" };
-      mocks.from.mockImplementation(() => loadQuery(scheduled));
+      const updateResult = updateQuery({ ...scheduled, title: "Renamed", questions: undefined, exam_candidates: undefined });
+      mocks.from.mockImplementationOnce(() => loadQuery(scheduled)).mockImplementationOnce(() => updateResult);
       const { PATCH } = await import("./route");
-      const response = await PATCH(new Request(`http://localhost/api/admin/exams/${exam.id}`, { method: "PATCH", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ scheduled_start_at: scheduledStartAt }) }), { params: Promise.resolve({ id: exam.id }) });
-      expect(response.status).toBe(409);
-      expect((await response.json()).error).toMatchObject({
-        code: "not_ready",
-        details: { missing: ["start_time"] },
-      });
-    },
-  );
+      const response = await PATCH(new Request(`http://localhost/api/admin/exams/${exam.id}`, { method: "PATCH", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ title: "Renamed", scheduled_start_at: "2099-10-05T04:00:00.000Z" }) }), { params: Promise.resolve({ id: exam.id }) });
+      expect(response.status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows moving a scheduled exam with an unchanged past start time back to draft", async () => {
+    const scheduled = { ...exam, status: "scheduled", scheduled_start_at: "2020-01-01T00:00:00.000Z" };
+    const updateResult = updateQuery({ ...scheduled, status: "draft", questions: undefined, exam_candidates: undefined });
+    mocks.from.mockImplementationOnce(() => loadQuery(scheduled)).mockImplementationOnce(() => updateResult);
+    const { PATCH } = await import("./route");
+    const response = await PATCH(new Request(`http://localhost/api/admin/exams/${exam.id}`, { method: "PATCH", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ status: "draft", scheduled_start_at: "2020-01-01T00:00:00.000Z" }) }), { params: Promise.resolve({ id: exam.id }) });
+    expect(response.status).toBe(200);
+  });
+
+  it.each([
+    ["changed start to the past", "2020-01-01T00:00:00.000Z"],
+    ["cleared start", null],
+  ])("rejects a %s", async (_caseName, scheduledStartAt) => {
+    const scheduled = { ...exam, status: "scheduled", scheduled_start_at: "2099-10-05T04:00:00.000Z" };
+    mocks.from.mockImplementation(() => loadQuery(scheduled));
+    const { PATCH } = await import("./route");
+    const response = await PATCH(new Request(`http://localhost/api/admin/exams/${exam.id}`, { method: "PATCH", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ scheduled_start_at: scheduledStartAt }) }), { params: Promise.resolve({ id: exam.id }) });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatchObject({
+      code: "not_ready",
+      details: { missing: ["start_time"] },
+    });
+  });
 
   it("allows a title-only edit to an already scheduled exam", async () => {
     const scheduled = { ...exam, status: "scheduled", scheduled_start_at: "2099-10-05T04:00:00.000Z" };

@@ -92,7 +92,7 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
     }
 
     const changes: Record<string, unknown> = { ...body };
-    if (body.status === "scheduled") {
+    if (body.status === "scheduled" && current.status !== "scheduled") {
       const effective = { ...current, ...body } as ExamItem;
       const missing = schedulingMissing(effective);
       if (missing.length) {
@@ -104,12 +104,18 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
         );
       }
     }
+    const scheduledStartChanged = body.scheduled_start_at !== undefined && (
+      body.scheduled_start_at === null || current.scheduled_start_at === null
+        ? body.scheduled_start_at !== current.scheduled_start_at
+        : new Date(body.scheduled_start_at).getTime() !== new Date(current.scheduled_start_at).getTime()
+    );
     if (
       current.status === "scheduled" &&
-      body.scheduled_start_at !== undefined &&
+      body.status !== "draft" &&
+      scheduledStartChanged &&
       (
         body.scheduled_start_at === null ||
-        new Date(body.scheduled_start_at).getTime() < Date.now() + 60_000
+        new Date(body.scheduled_start_at!).getTime() < Date.now() + 60_000
       )
     ) {
       throw new ApiError(
