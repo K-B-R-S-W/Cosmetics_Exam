@@ -15,15 +15,24 @@ import {
 
 import { Button } from "@/components/ui/Button";
 import { routeFor } from "@/lib/candidate-routing";
-import type { ApiErrorPayload, CandidateMe, StateBody } from "@/lib/candidate-types";
+import type { ApiErrorPayload, CandidateMe, PaperBody, StateBody } from "@/lib/candidate-types";
+
+export class CandidatePaperError extends Error {
+  constructor(readonly code: string, readonly status: number) {
+    super(code);
+    this.name = "CandidatePaperError";
+  }
+}
 
 interface CandidateContextValue {
   state: StateBody | null;
   me: CandidateMe | null;
+  paper: PaperBody | null;
   checkPassed: boolean;
   setCheckPassed(value: boolean): void;
   refreshState(): Promise<StateBody | null>;
   loadMe(): Promise<CandidateMe>;
+  loadPaper(): Promise<PaperBody>;
   resetCandidateSession(): void;
 }
 
@@ -38,10 +47,12 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [state, setState] = useState<StateBody | null>(null);
   const [me, setMe] = useState<CandidateMe | null>(null);
+  const [paper, setPaper] = useState<PaperBody | null>(null);
   const [checkPassed, setCheckPassed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(pathname === "/login");
   const mePromise = useRef<Promise<CandidateMe> | null>(null);
+  const paperPromise = useRef<Promise<PaperBody> | null>(null);
   const stateLoaded = useRef(false);
   const sessionGeneration = useRef(0);
 
@@ -49,10 +60,12 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     sessionGeneration.current += 1;
     setState(null);
     setMe(null);
+    setPaper(null);
     setError(null);
     setCheckPassed(false);
     setLoaded(false);
     mePromise.current = null;
+    paperPromise.current = null;
     stateLoaded.current = false;
     sessionStorage.removeItem("identityConfirmed");
   }, []);
@@ -93,6 +106,29 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     return mePromise.current;
   }, []);
 
+  const loadPaper = useCallback(async () => {
+    if (paper) return paper;
+    if (!paperPromise.current) {
+      const generation = sessionGeneration.current;
+      paperPromise.current = fetch("/api/exam/paper", { cache: "no-store" })
+        .then(async (response) => {
+          const body = (await payload(response)) as PaperBody | ApiErrorPayload | null;
+          if (!response.ok) {
+            const code = body && "error" in body ? body.error.code : "internal_error";
+            if (code === "unauthenticated" || code === "session_revoked") setError(code);
+            throw new CandidatePaperError(code, response.status);
+          }
+          if (sessionGeneration.current === generation) setPaper(body as PaperBody);
+          return body as PaperBody;
+        })
+        .catch((loadError) => {
+          paperPromise.current = null;
+          throw loadError;
+        });
+    }
+    return paperPromise.current;
+  }, [paper]);
+
   useEffect(() => {
     if (pathname === "/login") {
       const scheduledGeneration = sessionGeneration.current;
@@ -116,6 +152,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
 
   const visibleState = pathname === "/login" ? null : state;
   const visibleMe = pathname === "/login" ? null : me;
+  const visiblePaper = pathname === "/login" ? null : paper;
   const visibleError = pathname === "/login" ? null : error;
   const decision = routeFor({
     state: visibleState,
@@ -142,18 +179,22 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     () => ({
       state: visibleState,
       me: visibleMe,
+      paper: visiblePaper,
       checkPassed,
       setCheckPassed,
       refreshState,
       loadMe,
+      loadPaper,
       resetCandidateSession,
     }),
     [
       visibleState,
       visibleMe,
+      visiblePaper,
       checkPassed,
       refreshState,
       loadMe,
+      loadPaper,
       resetCandidateSession,
     ],
   );

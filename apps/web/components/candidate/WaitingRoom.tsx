@@ -3,7 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { CandidateErrorScreen, CandidateFrame, Notice, useCandidate } from "@/components/candidate/CandidateContext";
+import { CandidateErrorScreen, CandidateFrame, CandidatePaperError, Notice, useCandidate } from "@/components/candidate/CandidateContext";
+import { Button } from "@/components/ui/Button";
 import { useExamBroadcast } from "@/lib/broadcast";
 import { formatColombo } from "@/lib/format-time";
 import { langFor } from "@/lib/lang";
@@ -13,15 +14,21 @@ const ANNOUNCE_AT_SECONDS = [600, 300, 120, 60];
 
 export function WaitingRoom() {
   const router = useRouter();
-  const { state, refreshState } = useCandidate();
+  const { state, refreshState, loadPaper } = useCandidate();
   const now = useServerClock();
   const [connectionLost, setConnectionLost] = useState(false);
   const [changedTime, setChangedTime] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [delayed, setDelayed] = useState(false);
+  const [paperLoad, setPaperLoad] = useState<"idle" | "loading" | "transient">("idle");
+  const [paperError, setPaperError] = useState<string | null>(null);
+  const [notLiveNotice, setNotLiveNotice] = useState(false);
+  const [showPaperRetry, setShowPaperRetry] = useState(false);
   const firstStart = useRef<string | null | undefined>(undefined);
   const previousSeconds = useRef<number | null>(null);
   const announced = useRef(new Set<number>());
+  const handoffActive = useRef(false);
+  const retryVisibleTimer = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -66,13 +73,7 @@ export function WaitingRoom() {
     if (remainingMs === null || remainingMs <= 0) return;
     const seconds = Math.ceil(remainingMs / 1000);
     for (const threshold of ANNOUNCE_AT_SECONDS) {
-      if (
-        !announced.current.has(threshold) &&
-        seconds <= threshold &&
-        (previousSeconds.current === null
-          ? seconds === threshold
-          : previousSeconds.current > threshold)
-      ) {
+      if (!announced.current.has(threshold) && seconds <= threshold && (previousSeconds.current === null ? seconds === threshold : previousSeconds.current > threshold)) {
         announced.current.add(threshold);
         setAnnouncement(`${threshold / 60} ${threshold === 60 ? "minute" : "minutes"} until the exam starts.`);
         break;
@@ -81,13 +82,73 @@ export function WaitingRoom() {
     previousSeconds.current = seconds;
   }, [remainingMs]);
 
+  const requestPaper = useCallback(async () => {
+    if (handoffActive.current) return;
+    handoffActive.current = true;
+    setPaperLoad("loading");
+    setPaperError(null);
+    setNotLiveNotice(false);
+    try {
+      await loadPaper();
+      await refreshState();
+      if (retryVisibleTimer.current !== null) window.clearTimeout(retryVisibleTimer.current);
+      router.push("/exam");
+    } catch (error) {
+      handoffActive.current = false;
+      if (!(error instanceof CandidatePaperError) || error.status >= 500 || error.code === "service_unavailable") {
+        setPaperLoad("transient");
+        if (retryVisibleTimer.current === null) {
+          retryVisibleTimer.current = window.setTimeout(() => setShowPaperRetry(true), 8000);
+        }
+        return;
+      }
+      const next = await refreshState().catch(() => null);
+      setPaperLoad("idle");
+      setPaperError(error.code);
+      if (error.code === "not_acknowledged") router.push("/rules");
+      else if (error.code === "attempt_closed") router.push("/done");
+      else if (error.code === "exam_closed" && next?.attempt.status === "in_progress") router.push("/exam");
+      else if (error.code === "exam_not_live" && next?.phase === "waiting") {
+        setPaperError(null);
+        setNotLiveNotice(true);
+      }
+    }
+  }, [loadPaper, refreshState, router]);
+
   useEffect(() => {
-    if (state?.phase === "live") router.push("/exam");
-    else if (state?.phase === "submitted") router.push("/done");
-  }, [router, state?.phase]);
+    const timer = window.setTimeout(() => {
+      if (state?.phase === "live" && paperLoad === "idle" && !paperError) void requestPaper();
+      else if (state?.phase === "submitted") router.push("/done");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [paperError, paperLoad, requestPaper, router, state?.phase]);
+
+  useEffect(() => {
+    if (paperLoad !== "transient") return;
+    const retry = window.setTimeout(() => { handoffActive.current = false; setPaperLoad("idle"); }, 5000);
+    return () => window.clearTimeout(retry);
+  }, [paperLoad]);
+
+  useEffect(() => () => {
+    if (retryVisibleTimer.current !== null) window.clearTimeout(retryVisibleTimer.current);
+  }, []);
 
   if (!state) return <CandidateFrame><p className="text-muted">Loading…</p></CandidateFrame>;
   if (state.phase === "closed") return <CandidateErrorScreen title="This exam has ended." body="The exam is closed." signOut />;
+  if (paperError === "exam_has_no_questions") return <CandidateErrorScreen title="This exam has no questions yet." body="Tell the exam team." signOut />;
 
-  return <CandidateFrame wide><h1 tabIndex={-1} className="text-title font-bold" lang={langFor(state.exam.title)}>{state.exam.title}</h1>{connectionLost ? <div className="mt-5"><Notice warning>Connection lost. Reconnecting…</Notice></div> : null}{changedTime ? <div className="mt-5"><Notice>{changedTime}</Notice></div> : null}<div className="mt-8">{state.phase === "live" || atZero ? <Notice>The exam is starting…{delayed ? <span className="mt-2 block">This is taking longer than expected. Stay on this page. Tell the exam team if this continues.</span> : null}</Notice> : startAt && remainingMs !== null ? <><p className="text-muted">The exam starts in</p><p className="mt-2 text-timer font-bold" data-tabular-numbers="true">{formatCountdown(remainingMs)}</p><p className="mt-2 text-muted">{formatColombo(startAt)}</p></> : <Notice>The exam team will start the exam. Stay on this page.</Notice>}</div><p className="sr-only" aria-live="polite">{announcement}</p>{state.phase === "waiting" ? <p className="mt-8 text-muted">Stay on this page.</p> : null}{/* TODO Phase 2 batch 2: request the paper before entering the exam screen. */}</CandidateFrame>;
+  return (
+    <CandidateFrame wide>
+      <h1 tabIndex={-1} className="text-title font-bold" lang={langFor(state.exam.title)}>{state.exam.title}</h1>
+      {connectionLost ? <div className="mt-5"><Notice warning>Connection lost. Reconnecting…</Notice></div> : null}
+      {changedTime ? <div className="mt-5"><Notice>{changedTime}</Notice></div> : null}
+      {notLiveNotice ? <div className="mt-5"><Notice>The exam hasn&apos;t started yet.</Notice></div> : null}
+      <div className="mt-8">
+        {state.phase === "live" || atZero ? <Notice>The exam is starting…{delayed ? <span className="mt-2 block">This is taking longer than expected. Stay on this page. Tell the exam team if this continues.</span> : null}</Notice> : startAt && remainingMs !== null ? <><p className="text-muted">The exam starts in</p><p className="mt-2 text-timer font-bold" data-tabular-numbers="true">{formatCountdown(remainingMs)}</p><p className="mt-2 text-muted">{formatColombo(startAt)}</p></> : <Notice>The exam team will start the exam. Stay on this page.</Notice>}
+      </div>
+      {paperLoad === "transient" ? <div className="mt-5"><Notice warning>Loading your exam…</Notice>{showPaperRetry ? <Button className="mt-3" variant="secondary" onClick={() => { handoffActive.current = false; setPaperLoad("idle"); }}>Retry</Button> : null}</div> : null}
+      <p className="sr-only" aria-live="polite">{announcement}</p>
+      {state.phase === "waiting" ? <p className="mt-8 text-muted">Stay on this page.</p> : null}
+    </CandidateFrame>
+  );
 }

@@ -11,8 +11,21 @@
 .exam-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100dvh;
   min-height: 100dvh;
+  overflow: hidden;
   overscroll-behavior: none;
+  width: 100%;
+}
+
+.exam-strip,
+.exam-bottom-bar {
+  position: relative;
+  z-index: 10;
+}
+
+.exam-content {
+  overflow: hidden;
 }
 
 .exam-scroll-region {
@@ -42,6 +55,12 @@
 
   .candidate-question-drawer-trigger {
     display: inline-flex;
+    align-self: flex-start;
+    margin: var(--space-4);
+  }
+
+  .exam-content {
+    flex-direction: column;
   }
 }
 

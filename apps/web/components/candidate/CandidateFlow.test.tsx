@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CandidateProvider } from "./CandidateContext";
+import { CandidateProvider, useCandidate } from "./CandidateContext";
 import { CheckScreen } from "./CheckScreen";
 import { ConfirmScreen } from "./ConfirmScreen";
 import { LoginForm } from "./LoginForm";
@@ -99,6 +99,11 @@ function App() {
   return <CandidateProvider><CurrentPage /></CandidateProvider>;
 }
 
+function PaperProbe() {
+  const { loadPaper } = useCandidate();
+  return <><button onClick={() => void loadPaper()}>Load paper one</button><button onClick={() => void loadPaper()}>Load paper two</button></>;
+}
+
 function enterLogin(key: CandidateKey) {
   fireEvent.change(screen.getByLabelText("MER code"), {
     target: { value: people[key].mer },
@@ -141,6 +146,7 @@ beforeEach(() => {
     }
     if (url === "/api/exam/state") return json(stateBody(activeCandidate!));
     if (url === "/api/auth/me") return json(meBody(activeCandidate!));
+    if (url === "/api/exam/paper") return json({ server_time: "2026-10-04T10:00:00.000Z", navigation_mode: "free", total_questions: 0, current_position: null, questions: [], answers: {} });
     if (url === "/api/auth/acknowledge") {
       attemptStatus = "acknowledged";
       return json({ attempt: { status: attemptStatus } });
@@ -207,5 +213,15 @@ describe("CandidateProvider flow state", () => {
     navigation.replace.mockClear();
     await rerenderAt(view, "/rules");
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/confirm"));
+  });
+
+  it("keeps concurrent paper requests one-flight", async () => {
+    activeCandidate = "A";
+    navigation.path = "/confirm";
+    render(<CandidateProvider><PaperProbe /></CandidateProvider>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/exam/state", { cache: "no-store" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Load paper one" }));
+    fireEvent.click(screen.getByRole("button", { name: "Load paper two" }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/exam/paper")).toHaveLength(1));
   });
 });

@@ -46,7 +46,7 @@ function client({
     { attempt_id: auth.attemptId, question_id: q1, position: 1, option_order: null },
   ];
   const questions = [
-    { id: q1, type: "written", body_html: '<p onclick="bad()">සිංහල<script>secret</script></p>', image_path: null, image_alt_text: null, marks: "2.50", mcq_options: [] },
+    { id: q1, type: "written", body_html: '<p onclick="bad()">සිංහල<script>secret</script></p><blockquote>Quoted</blockquote><code>Code</code>', image_path: null, image_alt_text: null, marks: "2.50", mcq_options: [] },
     { id: q2, type: "mcq", body_html: "<p>Choose</p>", image_path: "questions/a/image.png", image_alt_text: "Synthetic product", marks: 1, mcq_options: [{ id: o1, text_html: '<p><a href="javascript:bad()">First</a></p>' }, { id: o2, text_html: "<p>Second</p>" }] },
   ];
   const answers = [{ question_id: q2, answer_text: null, selected_option_id: o2, flagged: false, revision: 4 }];
@@ -70,11 +70,11 @@ describe("loadCandidatePaper", () => {
     expect(paper.questions.map((question) => question.id)).toEqual([q2, q1]);
     expect(paper.questions[0]?.options?.map((option) => option.id)).toEqual([o2, o1]);
     expect(paper.questions[0]?.image).toEqual({ url: `/api/question-images/${q2}`, alt_text: "Synthetic product" });
-    expect(paper.questions[1]?.body_html).toBe("<p>සිංහල</p>");
+    expect(paper.questions[1]?.body_html).toBe("<p>සිංහල</p>QuotedCode");
     expect(paper.questions[0]?.options?.[1]?.text_html).toBe("<p>First</p>");
     expect(paper.answers[q2]?.revision).toBe(4);
     const serialized = JSON.stringify(paper);
-    for (const forbidden of ["answer_keys", "correct_option_id", "model_answer", "grading_notes", "calibration", "image_path", "label", "secret"]) {
+    for (const forbidden of ["answer_keys", "correct_option_id", "model_answer", "grading_notes", "calibration", "image_path", "label", "secret", "onclick", "javascript:", "blockquote", "<code"]) {
       expect(serialized).not.toContain(forbidden);
     }
   });
