@@ -46,7 +46,7 @@ video {
   max-width: 100%;
 }
 
-a {
+a:not([class]) {
   color: inherit;
   text-underline-offset: 0.18em;
 }

@@ -217,7 +217,7 @@ export function CandidateList() {
                 <td className="px-3 py-3" data-tabular-numbers="true">{candidate.assigned_exam_count}</td>
                 <td className="px-3 py-2">
                   <div className="flex justify-end gap-2">
-                    <Link href={`/admin/candidates/${candidate.id}`} className="inline-flex min-h-11 items-center rounded-control border border-line px-4 font-bold hover:bg-selected">Edit</Link>
+                    <Link href={`/admin/candidates/${candidate.id}`} className="inline-flex min-h-11 items-center rounded-control border border-line px-4 font-bold text-ink hover:bg-selected">Edit</Link>
                     <Button
                       variant="quiet"
                       loading={unlockingId === candidate.id}

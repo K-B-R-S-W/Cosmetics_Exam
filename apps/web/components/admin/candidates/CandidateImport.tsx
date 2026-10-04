@@ -208,7 +208,7 @@ export function CandidateImport() {
           <a
             download="candidate-import-template.csv"
             href="data:text/csv;charset=utf-8,mer_code%2Cfull_name%2Coutlet%2Cnic%0A"
-            className="font-bold underline"
+            className="font-bold text-ink underline"
           >
             Download template
           </a>
@@ -260,7 +260,7 @@ export function CandidateImport() {
           <div className="mt-8 border-l-4 border-ok bg-ok-tint px-4 py-4">
             <h2 className="font-bold">Done.</h2>
             <p>{finished.created} added, {finished.updated} updated, {finished.skipped} skipped.</p>
-            <Link href="/admin/candidates" className="mt-3 inline-block font-bold underline">Back to candidates</Link>
+            <Link href="/admin/candidates" className="mt-3 inline-block font-bold text-ink underline">Back to candidates</Link>
           </div>
         ) : null}
       </div>

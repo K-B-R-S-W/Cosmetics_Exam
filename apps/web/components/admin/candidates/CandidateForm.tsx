@@ -265,7 +265,7 @@ export function CandidateForm({ candidateId }: CandidateFormProps) {
 
         <div className="flex flex-wrap gap-3 pt-2">
           <Button type="submit" loading={saving}>Save</Button>
-          <Link href="/admin/candidates" className="inline-flex min-h-11 items-center rounded-control border border-line bg-surface px-5 font-bold hover:bg-selected">Cancel</Link>
+          <Link href="/admin/candidates" className="inline-flex min-h-11 items-center rounded-control border border-line bg-surface px-5 font-bold text-ink hover:bg-selected">Cancel</Link>
           {editing ? <Button className="ml-auto" variant="destructive" onClick={() => deleteDialog.current?.showModal()}>Delete candidate</Button> : null}
         </div>
       </form>
