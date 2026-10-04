@@ -162,4 +162,33 @@ describe("candidate import route", () => {
     expect(mocks.upsert).toHaveBeenCalledTimes(1);
     expect(mocks.audit).not.toHaveBeenCalled();
   });
+
+  it("update mode clears a blank outlet and replaces the ID hash", async () => {
+    mocks.existing.mockResolvedValue({
+      data: [{ mer_code: "TEST-001" }],
+      error: null,
+    });
+    mocks.hashNic.mockResolvedValue("$argon2id$new-synthetic-hash");
+    const { POST } = await import("./route");
+    const response = await POST(
+      request({
+        rows: [{ ...SYNTHETIC_ROWS[0], outlet: "" }],
+        on_duplicate: "update",
+        dry_run: false,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.hashNic).toHaveBeenCalledWith("190000000000");
+    expect(mocks.upsert).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          mer_code: "TEST-001",
+          outlet: null,
+          nic_hash: "$argon2id$new-synthetic-hash",
+        }),
+      ],
+      { onConflict: "mer_code", ignoreDuplicates: false },
+    );
+  });
 });

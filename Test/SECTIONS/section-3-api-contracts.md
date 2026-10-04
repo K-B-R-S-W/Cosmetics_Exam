@@ -488,7 +488,7 @@ Allowed only if the candidate has no attempt that has left `not_started`. Otherw
 { "rows": [{ "mer_code": "...", "full_name": "...", "outlet": "...", "nic": "..." }], "on_duplicate": "skip", "dry_run": true }
 ```
 - At most **100 rows per request** (argon2 time against the function limit). The page parses the CSV in the browser (Papaparse) and sends batches of 50 in sequence, with `dry_run: true` first to show errors before anything is written.
-- `on_duplicate`: `skip` (default) or `update` (updates name, outlet and ID hash for an existing MER code).
+- `on_duplicate`: `skip` (default) or `update`. Update mode replaces the existing full name, outlet and ID hash; a blank outlet is stored as `null` (clearing the existing outlet), and every applied update replaces the old ID hash with a new hash of the supplied ID.
 - The browser's Check step finds repeated normalized MER codes across the **whole file** before batching. The first occurrence is checked normally; every later occurrence is a row error and is never sent for import. The server independently rejects later repetitions within each batch as a backstop.
 - `dry_run: true` performs validation and the existing-MER pre-query only: it does **no Argon2 hashing and no writes**.
 - A real batch hashes only rows that will be applied, then performs one bulk upsert. Counts come from the pre-query. `skip` uses `ignoreDuplicates`; `update` replaces name, outlet and NIC hash for matching MERs.

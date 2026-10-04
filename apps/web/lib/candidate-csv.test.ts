@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { candidateImportBatches, repeatedMerIndexes } from "./candidate-csv";
+import {
+  candidateImportBatches,
+  findCandidateCsvDamage,
+  maskNicForPreview,
+  repeatedMerIndexes,
+} from "./candidate-csv";
 import type { CandidateImportRow } from "./candidates";
 
 function syntheticRow(index: number): CandidateImportRow {
@@ -30,5 +35,25 @@ describe("candidate CSV helpers", () => {
 
     expect(batches.map((batch) => batch.length)).toEqual([50, 50, 1]);
     expect(batches[0]?.[0]?.row.outlet).toBe("පුහුණු ශාඛාව");
+  });
+
+  it("masks all but the last three ID characters", () => {
+    expect(maskNicForPreview("190000000000")).toBe("•••••••••000");
+    expect(maskNicForPreview("000000000V")).toBe("•••••••00V");
+    expect(maskNicForPreview("")).toBe("—");
+  });
+
+  it("finds likely encoding damage and spreadsheet scientific notation", () => {
+    expect(
+      findCandidateCsvDamage([
+        { ...syntheticRow(1), full_name: "???" },
+        { ...syntheticRow(2), outlet: "Damaged \uFFFD text" },
+        { ...syntheticRow(3), nic: "1.9E+11" },
+      ]),
+    ).toEqual([
+      { row: 2, reason: "question_marks" },
+      { row: 3, reason: "replacement_character" },
+      { row: 4, reason: "scientific_notation_id" },
+    ]);
   });
 });

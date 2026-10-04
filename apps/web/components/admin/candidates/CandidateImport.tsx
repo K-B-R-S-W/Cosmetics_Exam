@@ -7,6 +7,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import {
   candidateImportBatches,
+  findCandidateCsvDamage,
+  maskNicForPreview,
   repeatedMerIndexes,
   type IndexedCandidateImportRow,
 } from "@/lib/candidate-csv";
@@ -52,6 +54,7 @@ export function CandidateImport() {
     setError(undefined);
     setSummary(undefined);
     setFinished(undefined);
+    setRows([]);
     setFileName(file.name);
 
     Papa.parse<Record<string, string>>(file, {
@@ -175,6 +178,9 @@ export function CandidateImport() {
       }
       setFinished(totals);
       setStep("import");
+      setRows([]);
+      setSummary(undefined);
+      setFileName("");
     } catch {
       setError(`The import stopped after ${processed} rows. Nothing after that was saved. Fix the problem and run the file again with "Skip" selected.`);
     } finally {
@@ -183,6 +189,7 @@ export function CandidateImport() {
   }
 
   const importCount = (summary?.created ?? 0) + (summary?.updated ?? 0);
+  const fileDamage = findCandidateCsvDamage(rows);
 
   return (
     <section className="border-t border-hairline pt-6" aria-labelledby="candidate-import-title">
@@ -217,6 +224,12 @@ export function CandidateImport() {
         <p className="mt-3 text-sm text-muted">Save from Excel as <strong>CSV UTF-8</strong> so Sinhala names stay correct.</p>
         <p className="mt-3 border-l-4 border-warn bg-warn-tint px-4 py-3">The file contains ID numbers. Delete it from your computer after importing.</p>
 
+        {fileDamage.length > 0 ? (
+          <p className="mt-3 border-l-4 border-alert bg-alert-tint px-4 py-3" role="alert">
+            This file may be damaged. Re-save it as CSV UTF-8 without scientific notation and choose it again. Check file is disabled. Affected CSV row{fileDamage.length === 1 ? "" : "s"}: {fileDamage.map((item) => item.row).join(", ")}.
+          </p>
+        ) : null}
+
         {rows.length > 0 ? (
           <>
             <p className="mt-5 font-bold">{rows.length} row{rows.length === 1 ? "" : "s"}</p>
@@ -224,7 +237,7 @@ export function CandidateImport() {
               <table className="w-full border-collapse text-left text-sm">
                 <thead><tr className="border-b border-hairline"><th className="p-2">MER code</th><th className="p-2">Full name</th><th className="p-2">Outlet</th><th className="p-2">ID number</th></tr></thead>
                 <tbody>{rows.slice(0, 10).map((row, index) => (
-                  <tr key={index} className="border-b border-hairline last:border-0"><td className="p-2">{row.mer_code}</td><td className="p-2">{row.full_name}</td><td className="p-2">{row.outlet}</td><td className="p-2">{row.nic}</td></tr>
+                  <tr key={index} className="border-b border-hairline last:border-0"><td className="p-2">{row.mer_code}</td><td className="p-2">{row.full_name}</td><td className="p-2">{row.outlet}</td><td className="p-2">{maskNicForPreview(row.nic)}</td></tr>
                 ))}</tbody>
               </table>
             </div>
@@ -235,8 +248,9 @@ export function CandidateImport() {
                 <label className="flex min-h-11 items-center gap-2"><input type="radio" name="strategy" value="skip" checked={strategy === "skip"} onChange={() => { setStrategy("skip"); setSummary(undefined); setStep("choose"); }} /> Skip it</label>
                 <label className="flex min-h-11 items-center gap-2"><input type="radio" name="strategy" value="update" checked={strategy === "update"} onChange={() => { setStrategy("update"); setSummary(undefined); setStep("choose"); }} /> Update it</label>
               </div>
+              <p className="mt-2 text-sm text-muted">Update replaces the full name, outlet and ID hash. A blank outlet clears the existing outlet.</p>
             </fieldset>
-            <Button className="mt-4" loading={checking} onClick={() => void checkFile()}>Check file</Button>
+            <Button className="mt-4" loading={checking} disabled={fileDamage.length > 0} onClick={() => void checkFile()}>Check file</Button>
           </>
         ) : null}
 
