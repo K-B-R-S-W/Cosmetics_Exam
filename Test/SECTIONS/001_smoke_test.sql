@@ -1,5 +1,5 @@
 -- =====================================================================
--- 001_smoke_test.sql  —  run AFTER migrations 001, 002, 003 and 004 in the Supabase SQL editor.
+-- 001_smoke_test.sql  —  run AFTER migrations 001, 002, 003, 004 and 005 in the Supabase SQL editor.
 -- Everything runs inside a transaction that is ROLLED BACK, so no data is left behind.
 -- Success = the last notice says "SMOKE TEST PASSED". Any failure raises an error naming the check.
 -- =====================================================================
@@ -32,7 +32,11 @@ declare
     'public.submit_attempt(uuid,text)',
     'public.create_broadcast(uuid,text,text,uuid[])',
     'public.claim_broadcast(uuid,uuid,uuid)',
-    'public.unassign_exam_candidates(uuid,uuid[])'
+    'public.unassign_exam_candidates(uuid,uuid[])',
+    'public.save_question(uuid,uuid,text,text,numeric,integer,text,text,text,integer,jsonb,uuid,text,text,jsonb)',
+    'public.delete_question(uuid,uuid)',
+    'public.reorder_questions(uuid,uuid[])',
+    'public.save_answer_key(uuid,uuid,text,text,jsonb)'
   ];
 begin
   assert not exists (
@@ -663,6 +667,184 @@ begin
     '13b: force-end window must close after 15 seconds';
 
   raise notice 'SMOKE TEST PASSED';
+end $$;
+
+-- 14. Question-builder RPCs are atomic, retryable and status-guarded (migration 005).
+do $$
+declare
+  v_exam uuid := gen_random_uuid();
+  v_other_exam uuid := gen_random_uuid();
+  v_live_exam uuid := gen_random_uuid();
+  v_question uuid := gen_random_uuid();
+  v_question2 uuid := gen_random_uuid();
+  v_failed_question uuid := gen_random_uuid();
+  v_bad_key_question uuid := gen_random_uuid();
+  v_foreign_question uuid := gen_random_uuid();
+  v_live_question uuid := gen_random_uuid();
+  v_option1 uuid := gen_random_uuid();
+  v_option2 uuid := gen_random_uuid();
+  v_failed_option uuid := gen_random_uuid();
+  v_bad_option1 uuid := gen_random_uuid();
+  v_bad_option2 uuid := gen_random_uuid();
+  v_position int;
+begin
+  insert into public.exams (id, title, duration_min, status) values
+    (v_exam, 'Question RPC smoke', 30, 'draft'),
+    (v_other_exam, 'Other question RPC smoke', 30, 'draft');
+  insert into public.exams (
+    id, title, duration_min, status, started_at, ends_at
+  ) values (
+    v_live_exam, 'Live question RPC smoke', 30, 'live', now(), now() + interval '30 minutes'
+  );
+
+  select out_position into v_position
+    from public.save_question(
+      v_question, v_exam, 'mcq', '<p>Atomic MCQ</p>', null, null,
+      null, null, null, null,
+      jsonb_build_array(
+        jsonb_build_object('id', v_option1, 'text_html', '<p>One</p>'),
+        jsonb_build_object('id', v_option2, 'text_html', '<p>Two</p>')
+      ),
+      v_option1, null, null, '[]'::jsonb
+    );
+  assert v_position = 0, '14a: first question must receive position zero';
+  assert (select marks from public.questions where id = v_question) = 1,
+    '14a: omitted marks must be stored as one';
+  assert (select correct_option_id from public.answer_keys where question_id = v_question) = v_option1,
+    '14a: question, options and key must save together';
+
+  -- Retrying the exact client-generated ids updates the same rows.
+  perform public.save_question(
+    v_question, v_exam, 'mcq', '<p>Atomic MCQ retry</p>', 2, null,
+    null, null, null, null,
+    jsonb_build_array(
+      jsonb_build_object('id', v_option1, 'text_html', '<p>One updated</p>'),
+      jsonb_build_object('id', v_option2, 'text_html', '<p>Two updated</p>')
+    ),
+    v_option2, null, null, '[]'::jsonb
+  );
+  assert (select count(*) from public.questions where id = v_question) = 1,
+    '14b: an idempotent retry must not duplicate the question';
+  assert (select count(*) from public.mcq_options where question_id = v_question) = 2,
+    '14b: an idempotent retry must not duplicate options';
+  assert (select body_html = '<p>Atomic MCQ retry</p>' and marks = 2
+            from public.questions where id = v_question),
+    '14b: an idempotent retry must update question fields';
+  assert (select correct_option_id from public.answer_keys where question_id = v_question) = v_option2,
+    '14b: an idempotent retry must update the key';
+
+  -- A failure during option insertion rolls the earlier question upsert back.
+  begin
+    perform public.save_question(
+      v_failed_question, v_exam, 'mcq', '<p>Must roll back</p>', 1, null,
+      null, null, null, null,
+      jsonb_build_array(
+        jsonb_build_object('id', v_failed_option, 'text_html', '<p>Duplicate one</p>'),
+        jsonb_build_object('id', v_failed_option, 'text_html', '<p>Duplicate two</p>')
+      ),
+      v_failed_option, null, null, '[]'::jsonb
+    );
+    assert false, '14c: duplicate option ids must fail';
+  exception when others then
+    assert sqlerrm = 'validation_failed',
+      '14c: expected validation_failed for duplicate options, got ' || sqlerrm;
+  end;
+  assert not exists (select 1 from public.questions where id = v_failed_question),
+    '14c: option failure must roll back the question upsert';
+  assert not exists (select 1 from public.mcq_options where id = v_failed_option),
+    '14c: option failure must leave no option rows';
+
+  insert into public.questions (
+    id, exam_id, position, type, body_html, marks
+  ) values (
+    v_foreign_question, v_other_exam, 0, 'written', '<p>Foreign</p>', 1
+  );
+  begin
+    perform public.save_question(
+      v_foreign_question, v_exam, 'written', '<p>Collision</p>', 1, null,
+      null, null, null, null, '[]'::jsonb, null, 'Answer', null, '[]'::jsonb
+    );
+    assert false, '14d: a question id from another exam must be rejected';
+  exception when others then
+    assert sqlerrm = 'not_found', '14d: expected not_found, got ' || sqlerrm;
+  end;
+  assert (select exam_id from public.questions where id = v_foreign_question) = v_other_exam,
+    '14d: a foreign-exam collision must not modify the existing question';
+
+  begin
+    perform public.save_question(
+      v_bad_key_question, v_exam, 'mcq', '<p>Bad key</p>', 1, null,
+      null, null, null, null,
+      jsonb_build_array(
+        jsonb_build_object('id', v_bad_option1, 'text_html', '<p>One</p>'),
+        jsonb_build_object('id', v_bad_option2, 'text_html', '<p>Two</p>')
+      ),
+      gen_random_uuid(), null, null, '[]'::jsonb
+    );
+    assert false, '14e: a foreign correct option must be rejected';
+  exception when others then
+    assert sqlerrm = 'bad_correct_option',
+      '14e: expected bad_correct_option, got ' || sqlerrm;
+  end;
+  assert not exists (select 1 from public.questions where id = v_bad_key_question),
+    '14e: a bad correct option must roll back the whole save';
+
+  insert into public.questions (
+    id, exam_id, position, type, body_html, marks
+  ) values (
+    v_live_question, v_live_exam, 0, 'written', '<p>Locked</p>', 1
+  );
+  begin
+    perform public.save_question(
+      gen_random_uuid(), v_live_exam, 'written', '<p>Too late</p>', 1, null,
+      null, null, null, null, '[]'::jsonb, null, null, null, '[]'::jsonb
+    );
+    assert false, '14f: save_question must reject a live exam';
+  exception when others then
+    assert sqlerrm = 'exam_locked', '14f: expected exam_locked, got ' || sqlerrm;
+  end;
+  begin
+    perform public.delete_question(v_live_exam, v_live_question);
+    assert false, '14g: delete_question must reject a live exam';
+  exception when others then
+    assert sqlerrm = 'exam_locked', '14g: expected exam_locked, got ' || sqlerrm;
+  end;
+  begin
+    perform public.reorder_questions(v_live_exam, array[v_live_question]);
+    assert false, '14h: reorder_questions must reject a live exam';
+  exception when others then
+    assert sqlerrm = 'exam_locked', '14h: expected exam_locked, got ' || sqlerrm;
+  end;
+  assert not public.save_answer_key(
+    v_live_question, null, 'Live answer key', 'Allowed after start', '[]'::jsonb
+  ), '14h: save_answer_key must remain available on a live exam';
+
+  perform public.save_question(
+    v_question2, v_exam, 'written', '<p>Written</p>', 3, null,
+    null, null, null, null, '[]'::jsonb, null,
+    'Model answer', 'Notes', '[]'::jsonb
+  );
+  assert public.reorder_questions(v_exam, array[v_question2, v_question]) = 2,
+    '14i: reorder must update every question';
+  assert (select position from public.questions where id = v_question2) = 0
+     and (select position from public.questions where id = v_question) = 1,
+    '14i: reorder must assign positions 0..n-1';
+  begin
+    perform public.reorder_questions(v_exam, array[v_question]);
+    assert false, '14j: reorder must require the exact question set';
+  exception when others then
+    assert sqlerrm = 'validation_failed',
+      '14j: expected validation_failed, got ' || sqlerrm;
+  end;
+
+  insert into public.grading_runs (exam_id, status) values (v_exam, 'running');
+  begin
+    perform public.save_answer_key(v_question2, null, 'Changed', 'Changed', '[]'::jsonb);
+    assert false, '14k: answer keys must lock during grading';
+  exception when others then
+    assert sqlerrm = 'grading_in_progress',
+      '14k: expected grading_in_progress, got ' || sqlerrm;
+  end;
 end $$;
 
 select

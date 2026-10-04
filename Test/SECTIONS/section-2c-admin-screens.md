@@ -215,7 +215,7 @@ Shown for every question. A heading **Answer key** and a status word (**Complete
 
 ### 4.5 Saving and errors
 
-- **Save question** runs the question save, then the key save. If the first succeeds and the second fails, the editor stays open with **The question was saved, but the answer key was not. Try saving again.** Saving again is safe (the contract orders the writes so a repeat repairs a partial save).
+- **Save question** sends the complete question, options, image metadata and answer key through the atomic `save_question` function. Any failure rolls back the whole save. The editor retains its client-generated question and option ids, so retrying after a lost response updates the same records without duplicates. **Save answer key** remains separate when the question is locked or the examiner explicitly saves only the key.
 - Leaving with unsaved edits opens the same **You have unsaved changes.** dialog as §3.2.
 - Error copy for every code is in §11.
 

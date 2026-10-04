@@ -8,6 +8,7 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 - `002_grading.sql` — save as `supabase/migrations/002_grading.sql` and run second.
 - `003_function_search_path.sql` — run third. It fixes each application function's execution search path without changing its behavior.
 - `004_exam_paper_and_unassign.sql` — run fourth. It assigns every composed question to every paper, removes the superseded `questions_per_paper` column, and adds atomic candidate unassignment.
+- `005_question_rpcs.sql` — run fifth. It adds atomic, status-locked question save/delete/reorder and answer-key save functions.
 - `001_smoke_test.sql` — run last in the SQL editor; it rolls itself back and reports the observed `generate_paper()` time for 100 questions.
 
 > **Development verification status (4 October 2026):** `001_initial.sql`, `002_grading.sql`, `003_function_search_path.sql`, `004_exam_paper_and_unassign.sql`, and the revised `001_smoke_test.sql` ran without errors on the Supabase development project. The smoke test passed, the Dashboard reported zero tables without RLS, `/api/health` returned HTTP 200, and a manually created `super_admin` Auth user was linked to its `admin_profiles` row.
@@ -16,6 +17,8 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 > `select proname, proconfig from pg_proc join pg_namespace on pg_namespace.oid = pg_proc.pronamespace where pg_namespace.nspname = 'public' order by proname;`
 > All 15 public functions had an explicit `search_path`: 13 used `public, pg_temp`; `is_admin()` and `is_super_admin()` used `public`.
 > The additional all-functions assertion and SQL Editor result-grid `SELECT` added afterward will be exercised the next time the smoke test runs.
+>
+> **Pending:** `005_question_rpcs.sql` and its smoke-test block have not yet been applied to the development project. Apply them only after review and local PostgreSQL verification.
 
 ---
 
@@ -26,11 +29,12 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 3. SQL editor → paste `002_grading.sql` → **Run**.
 4. SQL editor → paste `003_function_search_path.sql` → **Run**.
 5. SQL editor → paste `004_exam_paper_and_unassign.sql` → **Run**.
-6. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect a `generate_paper 100-question timing: ... ms` notice and the final notice **SMOKE TEST PASSED**.
-7. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
+6. SQL editor → paste `005_question_rpcs.sql` → **Run**.
+7. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect a `generate_paper 100-question timing: ... ms` notice and the final result **SMOKE TEST PASSED**.
+8. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
    `insert into public.admin_profiles (id, name, role) values ('<auth user uuid>', 'Name', 'super_admin');`
    Use `'admin'` for ordinary admins.
-8. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` are in `supabase_realtime`.
+9. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` are in `supabase_realtime`.
 
 If an already-created database still has the old exam default, run this only after the implementation migration step becomes due:
 
@@ -75,6 +79,7 @@ The Security Advisor warnings for `is_admin()` and `is_super_admin()` are accept
 | 1A.2b | Run the checked-in `002_grading.sql` after `001_initial.sql` |
 | 1A.2c | Run `003_function_search_path.sql` after the schema migrations; every new function must set its own safe search path |
 | 1D.2–1D.3 | Run `004_exam_paper_and_unassign.sql`; every paper contains all composed questions and mixed unassignment is atomic |
+| 1E.6–1E.7 | Run `005_question_rpcs.sql`; question save/delete/reorder and answer-key save are atomic and lock the exam row |
 | 1A.2 | Run the checked-in smoke test after all migrations and require `SMOKE TEST PASSED` |
 | 1A.3 | Verify RLS plus the explicit `anon`, `authenticated`, and `service_role` ACL assertions in the smoke test |
 | 1A.4 | Verify the six Realtime publication tables listed above |
@@ -123,6 +128,7 @@ The migration and smoke test are intentionally not embedded here. Use these chec
 - [`002_grading.sql`](./002_grading.sql)
 - [`003_function_search_path.sql`](../../supabase/migrations/003_function_search_path.sql)
 - [`004_exam_paper_and_unassign.sql`](../../supabase/migrations/004_exam_paper_and_unassign.sql)
+- [`005_question_rpcs.sql`](../../supabase/migrations/005_question_rpcs.sql)
 - [`001_smoke_test.sql`](./001_smoke_test.sql)
 
 This prevents the documentation copy from drifting away from the executable source of truth.

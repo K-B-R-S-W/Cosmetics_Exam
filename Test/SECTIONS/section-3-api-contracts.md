@@ -80,7 +80,7 @@ All handlers use the **service-role** Supabase client after the auth check. The 
 The admin layout's authorization check runs only on full loads; client-side navigation can reuse the mounted layout, so it is not an authorization boundary for page data requests or route handlers. Every admin page's own data-access function and every `/api/admin/*` handler must call `requireAdmin()` or `requireSuperAdmin()` itself before loading or changing data. Do not rely on the layout or Proxy for authorization.
 
 ### 1.4 Limits and platform
-- Body limits: 64 KB by default. `POST /api/events` 200 KB. Question routes 200 KB. Candidate import 500 KB. `POST /api/admin/question-images` accepts one multipart upload whose decoded file is at most **4 MiB**; reject it before buffering when `Content-Length` already exceeds the route's multipart ceiling. The 4 MiB file cap leaves room below Vercel Functions' 4.5 MB request-payload limit for multipart framing and `alt_text`.
+- Body limits: 64 KB by default. `POST /api/events` 200 KB. Question routes 200 KB. Candidate import 500 KB. `POST /api/admin/question-images` accepts one multipart upload whose decoded file is at most **4 MiB**; reject it before buffering when `Content-Length` exceeds **4 MiB**. Multipart overhead therefore makes the practical maximum source file slightly smaller than 4 MiB. This stays below Vercel Functions' 4.5 MB request-payload limit.
 - `export const maxDuration = 30` on the import, grade, force-end and snapshot-purge routes *(verify the Hobby limit)*.
 - Rate limits: login (1.5) and events (30 per minute per attempt). Nothing else needs one at 23 candidates.
 - Client IP for `login_attempts` and `sessions`: first value of `x-forwarded-for`.
@@ -550,6 +550,8 @@ Known limitation: assignment checks the exam status before inserting. If the exa
 
 **Lock rule (1E.7):** once the exam is `live` or later (`live`, `ended`, `finalized`), these return `409 exam_locked`: create, delete, reorder, change of `body_html`, `marks`, or options. **Answer-key edits stay allowed** (`PUT /api/admin/answer-keys`, below), because keys are only used at grading time.
 
+Question RPC errors map consistently: `exam_locked` → `409 exam_locked`; `grading_in_progress` → `409 grading_in_progress`; `exam_not_found` and `not_found` → `404 not_found`; `type_immutable` → `400 type_immutable`; `validation_failed` and `bad_correct_option` → `400 validation_failed`. Other database failures use the standard `503 service_unavailable` response.
+
 **Sanitizing:** all HTML goes through `sanitize-html` before it is stored.
 - Allowed tags: `p br strong b em i u s ul ol li span h2 h3` (options: no headings).
 - Allowed attributes: `span` may carry `style` with **only** `font-size` and a value matching `^\d{1,3}(px|em|rem|%)$`. Everything else (classes, links, images, scripts, event attributes) is removed.
@@ -559,42 +561,46 @@ Known limitation: assignment checks the exam status before inserting. If the exa
 ```json
 { "items": [{
   "id": "<uuid>", "position": 0, "type": "mcq", "body_html": "...", "marks": 1,
+  "image": null,
   "options": [{ "id": "<uuid>", "position": 0, "label": "a", "text_html": "..." }],
   "answer_key": { "correct_option_id": "<uuid>", "model_answer": null, "grading_notes": null, "calibration": null }
 }] }
 ```
 Admin only. This is the only route that returns answer keys together with questions.
+When an image exists, `image` contains the four stored metadata fields plus an admin-only `preview_url` signed for five minutes. The URL is generated at read time, is never stored, and is never returned by a candidate route.
 
 **`POST /api/admin/questions`**
 ```json
 {
+  "id": "<client-generated uuid>",
   "exam_id": "<uuid>",
   "type": "mcq",
   "body_html": "<p>Which ingredient ...</p>",
   "image": null,
   "marks": 1,
   "position": null,
-  "options": [{ "text_html": "Niacinamide", "is_correct": true }, { "text_html": "Water", "is_correct": false }],
-  "answer_key": { "model_answer": null, "grading_notes": null, "calibration": [] }
+  "options": [{ "id": "<client-generated uuid>", "text_html": "Niacinamide" }, { "id": "<client-generated uuid>", "text_html": "Water" }],
+  "answer_key": { "correct_option_id": "<option uuid>", "model_answer": null, "grading_notes": null, "calibration": [] }
 }
 ```
 - `marks`: **optional**. When the admin leaves it out it is saved as `1` (the column default, and grading needs a number). When given: above 0, at most 999.99 (the column is `numeric(5,2)`). `position` defaults to the end.
-- `mcq`: 2 to 10 options and exactly one `is_correct`. Labels (`a`, `b`, `c`…) are assigned by the server from the order.
+- The question and option UUIDs are generated once by the editor and retained across retries. A UUID collision with another exam is returned as `404 not_found`; reusing a question UUID with a different type is `400 type_immutable`.
+- `mcq`: 2 to 10 options and exactly one `answer_key.correct_option_id`, which must belong to the question. Labels (`a`, `b`, `c`…) are assigned by the server from the order.
 - `written`: no `options`. `answer_key.model_answer` is optional here.
 - `image` is `null` or the complete upload metadata from `/api/admin/question-images`; the server rejects partial or mismatched metadata before the database all-or-none constraint does.
-- The server writes `questions`, then `mcq_options`, then `answer_keys`, in that order. The order is chosen so that saving the same question again repairs any partial failure (there is no multi-table transaction in the JS client; if you want one, move this into a `save_question()` database function later).
+- After TypeScript sanitization and Storage metadata verification, the route calls `save_question(...)`. The function locks the exam row `FOR SHARE`, rejects statuses other than `draft` and `scheduled`, and writes `questions`, `mcq_options`, then `answer_keys` in one transaction. A failure rolls back every step. Retrying the same client-generated IDs safely repairs a lost response without duplicating rows.
 - `201 { "question": { ...same shape as GET } }`.
 
 **`PATCH /api/admin/questions/[id]`** (NEW file)
-`{ "body_html"?, "marks"?, "options"?, "image"? }`. `image` is either `null` (remove it) or the complete metadata returned by the upload route. `type` cannot change (`400 type_immutable`): delete and recreate. `options` is a full replacement list: items with an `id` are updated, items without are inserted, ids missing from the list are deleted. Same MCQ rules as create.
+`{ "body_html"?, "marks"?, "options"?, "image"?, "answer_key"? }`. The route loads the existing values, validates a complete replacement document, sanitizes it, then calls the same atomic `save_question(...)` function. `image` is either `null` (remove it) or the complete metadata returned by the upload route. `type` cannot change (`400 type_immutable`): delete and recreate. `options` is a full replacement list using stable client-generated ids; ids missing from the list are deleted. Same MCQ rules as create.
 
-**`POST /api/admin/question-images`** accepts `multipart/form-data` with one file plus required `alt_text` of 1–500 trimmed characters. Allow only JPEG, PNG and WebP after checking both the declared MIME type and decoded file signature; maximum **4 MiB (4,194,304 bytes)**. Re-encode or reject malformed input, generate the object path server-side (`questions/{admin_id}/{uuid}.{ext}`), upload to the private `question-images` bucket, and return all metadata needed by the all-or-none database constraint. Do not trust a client path or filename. The 4 MiB limit is deliberately below Vercel Functions' 4.5 MB request limit so multipart overhead cannot turn an otherwise valid file into a platform-level `413`. **`DELETE`** permits an authenticated admin to remove their own unattached upload or an image owned by a question they may edit. Replacing/removing an attached image deletes the old object after the question row commits, with a retryable cleanup job if deletion fails. The worker purges objects older than 24 hours that are not referenced by any `questions.image_path`, covering abandoned create forms and failed saves.
+**`POST /api/admin/question-images`** accepts `multipart/form-data` with one file plus required `alt_text` of 1–500 trimmed characters. Allow only JPEG, PNG and WebP after checking both the declared MIME type and decoded file signature; maximum **4 MiB (4,194,304 bytes)**. Reject a `Content-Length` above 4 MiB before buffering, then re-encode or reject malformed input, generate the object path server-side (`questions/{admin_id}/{uuid}.{ext}`), upload to the private `question-images` bucket, and return MIME and size from the processed output with the other all-or-none metadata. Do not trust a client path or filename. **`DELETE`** permits an authenticated admin to remove their own unattached upload or an image owned by a question they may edit. Replacing/removing an attached image deletes the old object after the question row commits; failure gets one immediate retry. If both attempts fail, the object remains unreferenced for the Phase 6 worker's daily purge. The worker purges objects older than 24 hours that are not referenced by any `questions.image_path`, covering abandoned create forms and failed saves.
 
 **`DELETE /api/admin/questions/[id]`** (NEW)
-Draft or scheduled exams only.
+Calls `delete_question(exam_id, question_id)`, which takes the same exam-row lock and deletes only in draft or scheduled exams.
 
 **`POST /api/admin/questions/reorder`** (NEW)
-`{ "exam_id": "<uuid>", "ordered_ids": ["<uuid>", ...] }`. The list must be exactly the set of the exam's question ids, otherwise `400 validation_failed`. Sets `position` = index. Draft or scheduled only.
+`{ "exam_id": "<uuid>", "ordered_ids": ["<uuid>", ...] }`. Calls `reorder_questions(exam_id, ordered_ids)`. Under the exam-row lock, the list must be exactly the set of the exam's question ids, otherwise `400 validation_failed`; the function atomically assigns positions `0..n-1`. Draft or scheduled only.
 
 **`GET /api/admin/answer-keys?exam_id=`**
 `200 { "items": [{ "question_id", "correct_option_id", "model_answer", "grading_notes", "calibration" }] }`.
@@ -610,7 +616,7 @@ Draft or scheduled exams only.
 }
 ```
 - `correct_option_id` only for MCQ and must belong to the question; `model_answer`, `grading_notes`, `calibration` only for written (`400 type_mismatch` otherwise). `model_answer` max 10,000, `grading_notes` 4,000, `calibration` up to 10 items with `marks` between 0 and the question's marks.
-- Upserts the row. Allowed in any exam status, except `409 grading_in_progress` while a grading run for the exam is `running` or `paused` (changing the key mid-run would grade candidates against different keys).
+- Calls `save_answer_key(...)`. The function locks the exam row `FOR SHARE` and upserts the row in any exam status, except `409 grading_in_progress` while a grading run for the exam is `running` or `paused` (changing the key mid-run would grade candidates against different keys). Grade start takes `FOR UPDATE` on the same exam row before checking keys and creating its run, so the two operations serialize.
 - Response: `200 { "answer_key": {...}, "regrade_needed": true }`. `regrade_needed` is `true` when scores already exist for that question, so the admin page can offer a regrade.
 
 ### 4.4 Exam controls
