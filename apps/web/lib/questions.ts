@@ -5,6 +5,7 @@ export const QUESTION_BODY_MAX = 50_000;
 export const OPTION_TEXT_MAX = 5_000;
 export const QUESTION_REQUEST_MAX_BYTES = 200 * 1024;
 export const QUESTION_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+export const QUESTION_IMAGE_MULTIPART_OVERHEAD = 64 * 1024;
 export const QUESTION_IMAGE_MAX_PIXELS = 25_000_000;
 export const QUESTION_IMAGE_LONG_EDGE = 1_600;
 
@@ -45,7 +46,7 @@ export const questionOptionSchema = z.object({
 }).strict();
 
 const questionDocumentShape = {
-  body_html: z.string().trim().min(1).max(QUESTION_BODY_MAX),
+  body_html: z.string().trim().max(QUESTION_BODY_MAX),
   marks: marksSchema.optional().default(1),
   image: questionImageSchema.nullable().default(null),
   options: z.array(questionOptionSchema).max(10).default([]),
@@ -106,12 +107,32 @@ export interface CompleteQuestionDocument {
 function validateQuestionDocument(
   value: {
     type: "mcq" | "written";
+    body_html: string;
+    marks: number;
+    image: QuestionImage | null;
     options: QuestionOptionInput[];
     answer_key: AnswerKeyInput;
   },
   context: z.RefinementCtx,
 ): void {
   const key = value.answer_key;
+  if (!hasVisibleHtmlText(value.body_html) && !value.image) {
+    context.addIssue({ code: "custom", path: ["body_html"], message: "Enter question text or attach an image." });
+  }
+  value.options.forEach((option, index) => {
+    if (!hasVisibleHtmlText(option.text_html)) {
+      context.addIssue({ code: "custom", path: ["options", index, "text_html"], message: "Enter option text." });
+    }
+  });
+  key.calibration.forEach((example, index) => {
+    if (example.marks > value.marks) {
+      context.addIssue({
+        code: "custom",
+        path: ["answer_key", "calibration", index, "marks"],
+        message: "Calibration marks cannot exceed the question marks.",
+      });
+    }
+  });
   if (value.type === "mcq") {
     if (value.options.length < 2 || value.options.length > 10) {
       context.addIssue({ code: "custom", path: ["options"], message: "MCQ questions need 2 to 10 options." });
@@ -150,6 +171,16 @@ export function sanitizeOptionHtml(value: string): string {
     ...baseSanitizeOptions,
     allowedTags: QUESTION_ALLOWED_TAGS.filter((tag) => tag !== "h2" && tag !== "h3"),
   }).trim();
+}
+
+export function hasVisibleHtmlText(value: string): boolean {
+  return sanitizeHtml(value, { allowedTags: [], allowedAttributes: {} })
+    .replace(/\u00a0/g, " ")
+    .trim().length > 0;
+}
+
+export function calibrationFitsMarks(answerKey: AnswerKeyInput, marks: number): boolean {
+  return answerKey.calibration.every((example) => example.marks <= marks);
 }
 
 export function sanitizeCompleteQuestion(document: CompleteQuestionDocument): CompleteQuestionDocument {

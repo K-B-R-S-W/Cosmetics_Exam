@@ -11,7 +11,7 @@ import {
   saveQuestionArgs,
   throwQuestionRpcError,
 } from "@/lib/question-server";
-import { QUESTION_IMAGE_MAX_BYTES, questionIdSchema, questionImageSchema } from "@/lib/questions";
+import { QUESTION_IMAGE_MAX_BYTES, QUESTION_IMAGE_MULTIPART_OVERHEAD, questionIdSchema, questionImageSchema } from "@/lib/questions";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -22,7 +22,7 @@ function assertUploadContentLength(request: Request): void {
   const raw = request.headers.get("content-length");
   if (!raw) return;
   const length = Number(raw);
-  if (!Number.isSafeInteger(length) || length < 0 || length > QUESTION_IMAGE_MAX_BYTES) {
+  if (!Number.isSafeInteger(length) || length < 0 || length > QUESTION_IMAGE_MAX_BYTES + QUESTION_IMAGE_MULTIPART_OVERHEAD) {
     throw new ApiError("payload_too_large", 413, "The upload must be 4 MiB or smaller.");
   }
 }

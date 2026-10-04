@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  requireAdmin: vi.fn(), assertSameOrigin: vi.fn(), rpc: vi.fn(), from: vi.fn(), audit: vi.fn(), logger: vi.fn(),
+  requireAdmin: vi.fn(), assertSameOrigin: vi.fn(), rpc: vi.fn(), from: vi.fn(), audit: vi.fn(), logger: vi.fn(), storageRemove: vi.fn(), createSignedUrls: vi.fn(),
 }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/auth", async (original) => ({ ...(await original<typeof import("@/lib/auth")>()), requireAdmin: mocks.requireAdmin }));
 vi.mock("@/lib/origin", async (original) => ({ ...(await original<typeof import("@/lib/origin")>()), assertSameOrigin: mocks.assertSameOrigin }));
 vi.mock("@/lib/admin-server", async (original) => ({ ...(await original<typeof import("@/lib/admin-server")>()), recordAdminAction: mocks.audit }));
 vi.mock("@/lib/logger", () => ({ logger: { error: mocks.logger, warn: vi.fn(), info: vi.fn() } }));
-vi.mock("@/lib/supabase/server", () => ({ createServiceRoleClient: () => ({ from: mocks.from, rpc: mocks.rpc, storage: { from: vi.fn() } }) }));
+vi.mock("@/lib/supabase/server", () => ({ createServiceRoleClient: () => ({ from: mocks.from, rpc: mocks.rpc, storage: { from: () => ({ remove: mocks.storageRemove, createSignedUrls: mocks.createSignedUrls }) } }) }));
 
 const ids = {
   question: "00000000-0000-4000-8000-000000000101",
@@ -42,6 +42,8 @@ describe("admin questions collection route", () => {
     mocks.requireAdmin.mockResolvedValue({ id: "00000000-0000-4000-8000-000000000001" });
     mocks.audit.mockResolvedValue(undefined);
     mocks.rpc.mockResolvedValue({ data: [{ out_question_id: ids.question, out_position: 0 }], error: null });
+    mocks.storageRemove.mockResolvedValue({ error: null });
+    mocks.createSignedUrls.mockResolvedValue({ data: [], error: null });
     mocks.from.mockReturnValue({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: saved, error: null }) }) }) });
   });
 
@@ -52,6 +54,17 @@ describe("admin questions collection route", () => {
     expect(response.status).toBe(200);
     expect(mocks.requireAdmin).toHaveBeenCalledTimes(1);
     expect((await response.json()).items[0].answer_key.correct_option_id).toBe(ids.a);
+  });
+
+  it("uses one signed-URL batch and marks a missing image without failing GET", async () => {
+    const path = "questions/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000105.jpg";
+    mocks.from.mockReturnValue({ select: () => ({ eq: () => ({ order: async () => ({ data: [{ ...saved, image_path: path, image_alt_text: "Synthetic", image_mime: "image/jpeg", image_size_bytes: 123 }], error: null }) }) }) });
+    mocks.createSignedUrls.mockResolvedValue({ data: [{ path, signedUrl: null, error: "Object not found" }], error: null });
+    const { GET } = await import("./route");
+    const response = await GET(new Request(`http://localhost/api/admin/questions?exam_id=${ids.exam}`));
+    expect(response.status).toBe(200);
+    expect(mocks.createSignedUrls).toHaveBeenCalledOnce();
+    expect((await response.json()).items[0].image).toMatchObject({ image_missing: true });
   });
 
   it("sanitizes, calls the RPC, and audits IDs and counts only", async () => {
@@ -68,6 +81,18 @@ describe("admin questions collection route", () => {
       exam_id: ids.exam, question_id: ids.question, option_count: 2,
     });
     expect(JSON.stringify(mocks.audit.mock.calls)).not.toContain("Which");
+  });
+
+  it("removes an existing question image only after POST replaces it", async () => {
+    const oldPath = "questions/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000105.jpg";
+    mocks.from
+      .mockReturnValueOnce({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { image_path: oldPath }, error: null }) }) }) })
+      .mockReturnValueOnce({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: saved, error: null }) }) }) });
+    const { POST } = await import("./route");
+    const response = await POST(request());
+    expect(response.status).toBe(201);
+    expect(mocks.rpc.mock.invocationCallOrder[0]).toBeLessThan(mocks.storageRemove.mock.invocationCallOrder[0]!);
+    expect(mocks.storageRemove).toHaveBeenCalledWith([oldPath]);
   });
 
   it("rejects invalid option IDs before calling the RPC", async () => {

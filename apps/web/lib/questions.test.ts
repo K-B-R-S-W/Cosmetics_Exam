@@ -57,6 +57,61 @@ describe("question schemas", () => {
     expect(createQuestionSchema.safeParse(input).success).toBe(false);
   });
 
+  it.each(["<p></p>", "<p><br></p>", "<p>&nbsp;</p>", "<p>   </p>"])("rejects a body with no visible text: %s", (bodyHtml) => {
+    expect(createQuestionSchema.safeParse({ ...validQuestion(), body_html: bodyHtml }).success).toBe(false);
+  });
+
+  it("allows an image-only question body", () => {
+    expect(createQuestionSchema.safeParse({
+      ...validQuestion(),
+      body_html: "<p><br></p>",
+      image: {
+        path: "questions/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000105.jpg",
+        alt_text: "Synthetic diagram",
+        mime: "image/jpeg",
+        size_bytes: 123,
+      },
+    }).success).toBe(true);
+    expect(createQuestionSchema.safeParse({
+      ...validQuestion(),
+      body_html: "",
+      image: {
+        path: "questions/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000105.jpg",
+        alt_text: "Synthetic diagram",
+        mime: "image/jpeg",
+        size_bytes: 123,
+      },
+    }).success).toBe(true);
+  });
+
+  it.each(["<p></p>", "<p><br></p>", "<p>&nbsp;</p>", "<p>   </p>"])("rejects option text with no visible text: %s", (textHtml) => {
+    const input = validQuestion();
+    input.options[0]!.text_html = textHtml;
+    expect(createQuestionSchema.safeParse(input).success).toBe(false);
+  });
+
+  it("preserves and accepts visible Sinhala text", () => {
+    const input = validQuestion();
+    input.body_html = "<p>නිවැරදි පිළිතුර තෝරන්න</p>";
+    input.options[0]!.text_html = "<p>පළමු පිළිතුර</p>";
+    expect(createQuestionSchema.parse(input).body_html).toBe(input.body_html);
+  });
+
+  it("rejects calibration marks above the question marks", () => {
+    expect(createQuestionSchema.safeParse({
+      ...validQuestion(),
+      type: "written",
+      marks: 2,
+      options: [],
+      answer_key: {
+        correct_option_id: null,
+        model_answer: "Answer",
+        grading_notes: null,
+        calibration: [{ answer: "Example", marks: 2.01, note: "Too high" }],
+      },
+    }).success).toBe(false);
+  });
+
   it("enforces two to ten options, unique IDs and a correct option from this question", () => {
     const one = validQuestion();
     one.options = one.options.slice(0, 1);

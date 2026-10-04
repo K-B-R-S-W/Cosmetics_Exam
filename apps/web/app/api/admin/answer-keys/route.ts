@@ -3,7 +3,7 @@ import { recordAdminAction } from "@/lib/admin-server";
 import { requireAdmin } from "@/lib/auth";
 import { assertSameOrigin } from "@/lib/origin";
 import { readQuestionJson, throwQuestionRpcError } from "@/lib/question-server";
-import { answerKeyMutationSchema, examIdQuerySchema } from "@/lib/questions";
+import { answerKeyMutationSchema, calibrationFitsMarks, examIdQuerySchema } from "@/lib/questions";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
 const ROUTE = "/api/admin/answer-keys";
@@ -59,7 +59,7 @@ export async function PUT(request: Request): Promise<Response> {
       throw new ApiError("validation_failed", 400, "Written questions cannot have a correct option.");
     }
     const maxMarks = Number(question.marks);
-    if (body.calibration.some((example) => example.marks > maxMarks)) {
+    if (!calibrationFitsMarks(body, maxMarks)) {
       throw new ApiError("validation_failed", 400, "Calibration marks cannot exceed the question marks.");
     }
     const { data, error } = await client.rpc("save_answer_key", {

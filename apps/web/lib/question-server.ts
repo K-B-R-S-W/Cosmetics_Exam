@@ -31,7 +31,7 @@ interface QuestionRow {
 
 export interface AdminQuestionItem extends CompleteQuestionDocument {
   position: number;
-  image: (QuestionImage & { preview_url?: string }) | null;
+  image: (QuestionImage & { preview_url?: string; image_missing?: true }) | null;
   options: Array<{ id: string; position: number; label: string; text_html: string }>;
 }
 
@@ -131,11 +131,25 @@ export async function verifyQuestionImage(
   if ((references?.length ?? 0) > 0) throw new ApiError("invalid_image", 400, "That image is already attached to another question.");
 }
 
-export async function addPreviewUrl(client: SupabaseClient, item: AdminQuestionItem): Promise<AdminQuestionItem> {
-  if (!item.image) return item;
-  const { data, error } = await client.storage.from(QUESTION_BUCKET).createSignedUrl(item.image.path, 300);
-  if (error || !data?.signedUrl) throw error ?? new Error("signed_url_failed");
-  return { ...item, image: { ...item.image, preview_url: data.signedUrl } };
+export async function addPreviewUrls(client: SupabaseClient, items: AdminQuestionItem[]): Promise<AdminQuestionItem[]> {
+  const paths = items.flatMap((item) => item.image ? [item.image.path] : []);
+  if (paths.length === 0) return items;
+  const { data, error } = await client.storage.from(QUESTION_BUCKET).createSignedUrls(paths, 300);
+  const signedByPath = new Map(
+    !error && data
+      ? data.map((entry) => [entry.path, entry.error || !entry.signedUrl ? null : entry.signedUrl] as const)
+      : [],
+  );
+  return items.map((item) => {
+    if (!item.image) return item;
+    const previewUrl = signedByPath.get(item.image.path);
+    return {
+      ...item,
+      image: previewUrl
+        ? { ...item.image, preview_url: previewUrl }
+        : { ...item.image, image_missing: true },
+    };
+  });
 }
 
 export async function removeQuestionImageWithRetry(client: SupabaseClient, path: string, actorId: string): Promise<boolean> {

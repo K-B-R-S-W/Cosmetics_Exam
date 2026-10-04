@@ -24,12 +24,20 @@ describe("admin question image route", () => {
 
   it("checks Content-Length before buffering", async () => {
     const { POST } = await import("./route");
-    const request = new Request("http://localhost/api/admin/question-images", { method: "POST", headers: { Origin: "http://localhost", "Content-Length": "4194305", "Content-Type": "multipart/form-data; boundary=x" }, body: "--x--" });
+    const request = new Request("http://localhost/api/admin/question-images", { method: "POST", headers: { Origin: "http://localhost", "Content-Length": "4259841", "Content-Type": "multipart/form-data; boundary=x" }, body: "--x--" });
     const formData = vi.spyOn(request, "formData");
     const response = await POST(request);
     expect(response.status).toBe(413);
     expect(formData).not.toHaveBeenCalled();
     expect(mocks.assertSameOrigin.mock.invocationCallOrder[0]).toBeLessThan(mocks.requireAdmin.mock.invocationCallOrder[0]!);
+  });
+
+  it("allows multipart overhead while keeping the file limit separate", async () => {
+    const { POST } = await import("./route");
+    const request = new Request("http://localhost/api/admin/question-images", { method: "POST", headers: { Origin: "http://localhost", "Content-Length": "4259840", "Content-Type": "multipart/form-data; boundary=x" }, body: "--x--" });
+    vi.spyOn(request, "formData").mockRejectedValue(new Error("synthetic invalid multipart"));
+    const response = await POST(request);
+    expect(response.status).toBe(400);
   });
 
   it("uploads processed bytes and reports their MIME and size", async () => {

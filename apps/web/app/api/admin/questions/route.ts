@@ -4,9 +4,10 @@ import { requireAdmin } from "@/lib/auth";
 import { assertSameOrigin } from "@/lib/origin";
 import {
   QUESTION_COLUMNS,
-  addPreviewUrl,
+  addPreviewUrls,
   loadQuestion,
   readQuestionJson,
+  removeQuestionImageWithRetry,
   saveQuestionArgs,
   throwQuestionRpcError,
   toQuestionItem,
@@ -25,7 +26,7 @@ export async function GET(request: Request): Promise<Response> {
     const client = createServiceRoleClient();
     const { data, error } = await client.from("questions").select(QUESTION_COLUMNS).eq("exam_id", examId.data).order("position");
     if (error) throw error;
-    const items = await Promise.all((data ?? []).map((row) => addPreviewUrl(client, toQuestionItem(row as never))));
+    const items = await addPreviewUrls(client, (data ?? []).map((row) => toQuestionItem(row as never)));
     return jsonResponse({ items });
   } catch (error) {
     return apiErrorResponse(error, ROUTE);
@@ -38,15 +39,24 @@ export async function POST(request: Request): Promise<Response> {
     const admin = await requireAdmin();
     const document = sanitizeCompleteQuestion(createQuestionSchema.parse(await readQuestionJson(request)));
     const client = createServiceRoleClient();
+    const { data: existing, error: existingError } = await client
+      .from("questions")
+      .select("image_path")
+      .eq("id", document.id)
+      .maybeSingle();
+    if (existingError) throw existingError;
     await verifyQuestionImage(client, document.image, document.id);
     const { error } = await client.rpc("save_question", saveQuestionArgs(document));
     if (error) throwQuestionRpcError(error);
+    if (existing?.image_path && existing.image_path !== document.image?.path) {
+      await removeQuestionImageWithRetry(client, existing.image_path, admin.id);
+    }
     await recordAdminAction(client, admin, "question_save", document.id, {
       exam_id: document.exam_id,
       question_id: document.id,
       option_count: document.options.length,
     });
-    const question = await addPreviewUrl(client, await loadQuestion(client, document.id));
+    const [question] = await addPreviewUrls(client, [await loadQuestion(client, document.id)]);
     return jsonResponse({ question }, { status: 201 });
   } catch (error) {
     return apiErrorResponse(error, ROUTE);

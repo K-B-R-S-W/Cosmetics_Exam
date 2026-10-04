@@ -3,7 +3,7 @@ import { recordAdminAction } from "@/lib/admin-server";
 import { requireAdmin } from "@/lib/auth";
 import { assertSameOrigin } from "@/lib/origin";
 import {
-  addPreviewUrl,
+  addPreviewUrls,
   loadQuestion,
   readQuestionJson,
   removeQuestionImageWithRetry,
@@ -45,7 +45,9 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
       options: patch.options ?? current.options.map(({ id: optionId, text_html }) => ({ id: optionId, text_html })),
       answer_key: patch.answer_key ?? current.answer_key,
     }));
-    await verifyQuestionImage(client, document.image, id);
+    if (document.image?.path !== current.image?.path) {
+      await verifyQuestionImage(client, document.image, id);
+    }
     const { error } = await client.rpc("save_question", saveQuestionArgs(document));
     if (error) throwQuestionRpcError(error);
     if (current.image?.path && current.image.path !== document.image?.path) {
@@ -56,7 +58,7 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
       question_id: id,
       option_count: document.options.length,
     });
-    const question = await addPreviewUrl(client, await loadQuestion(client, id));
+    const [question] = await addPreviewUrls(client, [await loadQuestion(client, id)]);
     return jsonResponse({ question });
   } catch (error) {
     return apiErrorResponse(error, ROUTE);

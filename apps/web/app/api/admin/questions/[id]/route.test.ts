@@ -11,7 +11,7 @@ vi.mock("@/lib/question-server", async (original) => ({
   ...(await original<typeof import("@/lib/question-server")>()),
   loadQuestion: mocks.load,
   verifyQuestionImage: mocks.verify,
-  addPreviewUrl: mocks.preview,
+  addPreviewUrls: mocks.preview,
   removeQuestionImageWithRetry: mocks.remove,
 }));
 vi.mock("@/lib/supabase/server", () => ({ createServiceRoleClient: () => ({ rpc: mocks.rpc }) }));
@@ -38,7 +38,7 @@ describe("admin question detail route", () => {
     mocks.load.mockResolvedValue(current);
     mocks.verify.mockResolvedValue(undefined);
     mocks.rpc.mockResolvedValue({ data: true, error: null });
-    mocks.preview.mockImplementation(async (_client, item) => item);
+    mocks.preview.mockImplementation(async (_client, items) => items);
     mocks.remove.mockResolvedValue(true);
     mocks.audit.mockResolvedValue(undefined);
   });
@@ -47,11 +47,43 @@ describe("admin question detail route", () => {
     const { PATCH } = await import("./route");
     const response = await PATCH(patch({ body_html: "<p>Changed</p>" }), context);
     expect(response.status).toBe(200);
-    expect(mocks.verify).toHaveBeenCalledWith(expect.anything(), oldImage, questionId);
+    expect(mocks.verify).not.toHaveBeenCalled();
     expect(mocks.rpc).toHaveBeenCalledWith("save_question", expect.objectContaining({
       p_image_path: oldImage.path, p_image_alt_text: "Old", p_image_mime: "image/jpeg", p_image_size_bytes: 123,
     }));
     expect(mocks.remove).not.toHaveBeenCalled();
+  });
+
+  it("verifies a replacement image because its path changed", async () => {
+    const replacement = { ...oldImage, path: oldImage.path.replace("105", "106") };
+    const { PATCH } = await import("./route");
+    const response = await PATCH(patch({ image: replacement }), context);
+    expect(response.status).toBe(200);
+    expect(mocks.verify).toHaveBeenCalledWith(expect.anything(), replacement, questionId);
+  });
+
+  it("returns the committed save with image_missing when preview signing fails", async () => {
+    mocks.preview.mockImplementation(async (_client, items) => items.map((item: typeof current) => ({
+      ...item,
+      image: item.image ? { ...item.image, image_missing: true } : null,
+    })));
+    const { PATCH } = await import("./route");
+    const response = await PATCH(patch({ body_html: "<p>Changed</p>" }), context);
+    expect(response.status).toBe(200);
+    expect((await response.json()).question.image).toMatchObject({ image_missing: true });
+  });
+
+  it("rejects lowering marks below an existing calibration score", async () => {
+    mocks.load.mockResolvedValue({
+      ...current,
+      type: "written",
+      options: [],
+      answer_key: { correct_option_id: null, model_answer: "Answer", grading_notes: null, calibration: [{ answer: "Example", marks: 1, note: "Good" }] },
+    });
+    const { PATCH } = await import("./route");
+    const response = await PATCH(patch({ marks: 0.5 }), context);
+    expect(response.status).toBe(400);
+    expect(mocks.rpc).not.toHaveBeenCalled();
   });
 
   it("removes the old object only after a successful image-changing RPC", async () => {
