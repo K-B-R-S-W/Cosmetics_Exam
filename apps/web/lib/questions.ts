@@ -163,14 +163,18 @@ const baseSanitizeOptions: sanitizeHtml.IOptions = {
 };
 
 export function sanitizeQuestionHtml(value: string): string {
-  return sanitizeHtml(value, baseSanitizeOptions).trim();
+  return canonicalizeEditorHtml(sanitizeHtml(value, baseSanitizeOptions).trim());
 }
 
 export function sanitizeOptionHtml(value: string): string {
-  return sanitizeHtml(value, {
+  return canonicalizeEditorHtml(sanitizeHtml(value, {
     ...baseSanitizeOptions,
     allowedTags: QUESTION_ALLOWED_TAGS.filter((tag) => tag !== "h2" && tag !== "h3"),
-  }).trim();
+  }).trim());
+}
+
+function canonicalizeEditorHtml(value: string): string {
+  return value.replace(/style="font-size:\s*([^";]+);?"/g, 'style="font-size: $1;"');
 }
 
 export function hasVisibleHtmlText(value: string): boolean {

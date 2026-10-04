@@ -144,7 +144,7 @@ describe("question HTML allowlist", () => {
     const input = '<h2>H</h2><p><strong>B</strong><b>b</b><em>E</em><i>i</i><u>u</u><s>s</s><br><span style="font-size:120%;color:red" class="x">T</span></p><ul><li>U</li></ul><ol><li>O</li></ol>';
     const output = sanitizeQuestionHtml(input);
     expect(output).toContain("<h2>H</h2>");
-    expect(output).toContain('style="font-size:120%"');
+    expect(output).toContain('style="font-size: 120%;"');
     expect(output).not.toContain("color");
     expect(output).not.toContain("class");
   });

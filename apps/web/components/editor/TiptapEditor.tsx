@@ -1,10 +1,12 @@
 "use client";
 
+import { Extension, getHTMLFromFragment, type Extensions } from "@tiptap/core";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Underline from "@tiptap/extension-underline";
 import { EditorContent, useEditor } from "@tiptap/react";
+import { Plugin } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { FontSize } from "@/components/editor/FontSize";
 
@@ -12,34 +14,70 @@ interface TiptapEditorProps {
   ariaLabel: string;
   disabled?: boolean;
   headings?: boolean;
+  error?: string;
   maxLength: number;
   onChange: (html: string) => void;
   value: string;
 }
 
+function maxHtmlLength(maxLength: number, onLimitReached: () => void) {
+  return Extension.create({
+    name: "maxHtmlLength",
+    addProseMirrorPlugins() {
+      return [new Plugin({
+        filterTransaction(transaction) {
+          if (!transaction.docChanged) return true;
+          const nextLength = getHTMLFromFragment(transaction.doc.content, transaction.doc.type.schema).length;
+          if (nextLength <= maxLength) return true;
+          queueMicrotask(onLimitReached);
+          return false;
+        },
+      })];
+    },
+  });
+}
+
+export function createEditorExtensions(headings: boolean, maxLength: number, onLimitReached: () => void = () => undefined): Extensions {
+  return [
+    StarterKit.configure({
+      blockquote: false,
+      code: false,
+      codeBlock: false,
+      heading: headings ? { levels: [2, 3] } : false,
+      horizontalRule: false,
+      link: false,
+      underline: false,
+    }),
+    Underline,
+    TextStyle,
+    FontSize,
+    maxHtmlLength(maxLength, onLimitReached),
+  ];
+}
+
 const toolbarButton = "min-h-11 min-w-11 border border-line bg-surface px-2 font-bold hover:bg-selected disabled:cursor-not-allowed disabled:bg-hairline disabled:text-muted";
 
-export function TiptapEditor({ ariaLabel, disabled = false, headings = true, maxLength, onChange, value }: TiptapEditorProps) {
+export function TiptapEditor({ ariaLabel, disabled = false, headings = true, error, maxLength, onChange, value }: TiptapEditorProps) {
+  const [limitReached, setLimitReached] = useState(false);
   const language = /[\u0D80-\u0DFF]/u.test(value) ? "si" : "en";
+  const errorId = `${ariaLabel.replace(/\W+/g, "-").toLowerCase()}-error`;
+  const limitId = `${ariaLabel.replace(/\W+/g, "-").toLowerCase()}-limit`;
   const editor = useEditor({
     immediatelyRender: false,
     editable: !disabled,
     content: value,
-    extensions: [
-      StarterKit.configure({ heading: headings ? { levels: [2, 3] } : false }),
-      Underline,
-      TextStyle,
-      FontSize,
-    ],
+    extensions: createEditorExtensions(headings, maxLength, () => setLimitReached(true)),
     editorProps: {
       attributes: {
         "aria-label": ariaLabel,
+        "aria-invalid": error ? "true" : "false",
+        "aria-describedby": error ? errorId : limitReached ? limitId : "",
         class: "min-h-32 max-w-[68ch] p-3 text-question focus:outline-none",
       },
     },
     onUpdate: ({ editor: current }) => {
-      const html = current.getHTML();
-      if (html.length <= maxLength) onChange(html);
+      setLimitReached(false);
+      onChange(current.getHTML());
     },
   });
 
@@ -50,6 +88,14 @@ export function TiptapEditor({ ariaLabel, disabled = false, headings = true, max
   useEffect(() => {
     if (editor && editor.getHTML() !== value) editor.commands.setContent(value || "<p></p>", { emitUpdate: false });
   }, [editor, value]);
+
+  useEffect(() => {
+    if (!editor) return;
+    editor.view.dom.setAttribute("aria-invalid", error ? "true" : "false");
+    if (error) editor.view.dom.setAttribute("aria-describedby", errorId);
+    else if (limitReached) editor.view.dom.setAttribute("aria-describedby", limitId);
+    else editor.view.dom.removeAttribute("aria-describedby");
+  }, [editor, error, errorId, limitId, limitReached]);
 
   if (!editor) return <div className="min-h-32 border border-line bg-hairline" aria-label={`${ariaLabel} loading`} />;
 
@@ -67,7 +113,7 @@ export function TiptapEditor({ ariaLabel, disabled = false, headings = true, max
       <button type="button" className={toolbarButton} aria-label="Bullet list" title="Bullet list" disabled={disabled} aria-pressed={editor.isActive("bulletList")} onClick={command(() => { editor.chain().focus().toggleBulletList().run(); })}>•</button>
       <button type="button" className={toolbarButton} aria-label="Numbered list" title="Numbered list" disabled={disabled} aria-pressed={editor.isActive("orderedList")} onClick={command(() => { editor.chain().focus().toggleOrderedList().run(); })}>1.</button>
       <label className="sr-only" htmlFor={`${ariaLabel.replace(/\W+/g, "-").toLowerCase()}-font-size`}>Font size</label>
-      <select id={`${ariaLabel.replace(/\W+/g, "-").toLowerCase()}-font-size`} title="Font size" aria-label="Font size" className="min-h-11 border border-line bg-surface px-2" disabled={disabled} defaultValue="" onChange={(event) => {
+      <select id={`${ariaLabel.replace(/\W+/g, "-").toLowerCase()}-font-size`} title="Font size" aria-label="Font size" className="min-h-11 border border-line bg-surface px-2" disabled={disabled} value={editor.getAttributes("textStyle").fontSize ?? ""} onChange={(event) => {
         if (event.target.value) editor.chain().focus().setFontSize(event.target.value).run();
         else editor.chain().focus().unsetFontSize().run();
       }}>
@@ -75,6 +121,8 @@ export function TiptapEditor({ ariaLabel, disabled = false, headings = true, max
       </select>
     </div>
     <EditorContent editor={editor} />
+    {error ? <p id={errorId} className="px-3 py-1 text-sm text-alert" role="alert">{error}</p> : null}
+    {limitReached ? <p id={limitId} className="px-3 py-1 text-sm text-alert" role="alert">Maximum {maxLength.toLocaleString()} characters reached. Remove text before adding more.</p> : null}
     <p className="border-t border-hairline px-3 py-1 text-right text-xs text-muted">{value.length} / {maxLength}</p>
   </div>;
 }
