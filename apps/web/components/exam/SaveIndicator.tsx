@@ -1,3 +1,7 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
 import type { SaveIndicatorState } from "@/hooks/useAutosave";
 
 // Removed from the indicator in Batch 3B; retained until Commit C enables the controls that use this tooltip.
@@ -13,6 +17,8 @@ function savedTime(savedAt: string): string {
 }
 
 export function SaveIndicator({ state = { kind: "waiting", durable: true, savedAt: null } }: { state?: SaveIndicatorState }) {
+  const previous = useRef<SaveIndicatorState["kind"] | null>(null);
+  const [announcement, setAnnouncement] = useState("");
   const content = {
     waiting: { icon: "●", words: "Waiting to save", warning: false },
     saving: { icon: "●", words: "Saving…", warning: false },
@@ -25,8 +31,15 @@ export function SaveIndicator({ state = { kind: "waiting", durable: true, savedA
       warning: true,
     },
     retrying: { icon: "◌", words: "Reconnecting…", warning: true },
+    failed: { icon: "⚠", words: "Could not save this answer. Tell the exam team.", warning: true },
   }[state.kind];
-  const announces = state.kind === "offline" || state.kind === "retrying" || state.kind === "saved";
   const spins = state.kind === "saving" || state.kind === "retrying";
-  return <p role="status" aria-live={announces ? "polite" : "off"} className={`text-sm ${content.warning ? "text-warn" : "text-muted"}`}><span aria-hidden="true" className={spins ? "inline-block motion-safe:animate-spin" : undefined}>{content.icon}</span> {content.words}</p>;
+  useEffect(() => {
+    const wasProblem = previous.current === "offline" || previous.current === "retrying" || previous.current === "failed";
+    const isProblem = state.kind === "offline" || state.kind === "retrying" || state.kind === "failed";
+    if (isProblem || (state.kind === "saved" && wasProblem)) setAnnouncement(content.words);
+    else setAnnouncement("");
+    previous.current = state.kind;
+  }, [content.words, state.kind]);
+  return <><p data-testid="save-indicator" className={`text-sm ${content.warning ? "text-warn" : "text-muted"}`}><span aria-hidden="true" className={spins ? "inline-block motion-safe:animate-spin" : undefined}>{content.icon}</span> {content.words}</p><p role="status" aria-live="polite" className="sr-only">{announcement}</p></>;
 }

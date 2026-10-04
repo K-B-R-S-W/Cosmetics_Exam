@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { StrictMode, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -124,8 +125,76 @@ describe("useAutosave", () => {
     await flush();
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(onPermanentError).toHaveBeenCalledWith("stale_revision");
+    expect(result.current.currentState.kind).toBe("failed");
     await act(() => vi.advanceTimersByTimeAsync(20_000));
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an unexpected 4xx dirty, shows failed, and retries only after the value changes", async () => {
+    const fetcher = vi.fn()
+      .mockImplementationOnce(() => response({ error: { code: "payload_too_large", message: "Too large", details: null } }, 413))
+      .mockImplementationOnce(() => response({ result: "saved", server_time: "2026-10-04T10:00:00Z" })) as unknown as typeof fetch;
+    const hookOptions = options(fetcher);
+    const { result } = renderHook(() => useAutosave(hookOptions));
+    await flush();
+    act(() => result.current.updateAnswer(questionId, { answer_text: "First", selected_option_id: null, flagged: false }, true));
+    await flush();
+    expect(result.current.currentState.kind).toBe("failed");
+    expect(result.current.pendingAnswers()).toHaveLength(1);
+    await act(() => vi.advanceTimersByTimeAsync(20_000));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    act(() => result.current.updateAnswer(questionId, { answer_text: "Changed", selected_option_id: null, flagged: false }, true));
+    await flush();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(result.current.currentState.kind).toBe("saved");
+  });
+
+  it("drops wrong_position, asks for a state resync, and does not show failed", async () => {
+    const onWrongPosition = vi.fn();
+    const fetcher = vi.fn(() => response({ error: { code: "wrong_position", message: "Wrong", details: null } }, 409)) as unknown as typeof fetch;
+    const hookOptions = { ...options(fetcher), onWrongPosition };
+    const { result } = renderHook(() => useAutosave(hookOptions));
+    await flush();
+    act(() => result.current.updateAnswer(questionId, { answer_text: "Moved", selected_option_id: null, flagged: false }, true));
+    await flush();
+    expect(onWrongPosition).toHaveBeenCalledOnce();
+    expect(result.current.pendingAnswers()).toEqual([]);
+    expect(result.current.currentState.kind).not.toBe("failed");
+  });
+
+  it("restores a dirty IndexedDB draft under React StrictMode and gates input until ready", async () => {
+    const store = createAnswerDraftStore(undefined);
+    await store.put({
+      attempt_id: attemptId,
+      question_id: questionId,
+      answer_text: "Restored",
+      selected_option_id: null,
+      flagged: true,
+      revision: 4,
+      confirmed_revision: 3,
+      dirty: true,
+      saved_at: null,
+      updated_at: 1,
+    });
+    let release!: (rows: StoredAnswerDraft[]) => void;
+    const delayedStore = {
+      ...store,
+      loadAttempt: vi.fn(() => new Promise<StoredAnswerDraft[]>((resolve) => { release = resolve; })),
+    };
+    const fetcher = vi.fn(() => response({ result: "saved", server_time: "2026-10-04T10:00:00Z" })) as unknown as typeof fetch;
+    const server: SavedAnswer = { answer_text: "Server", selected_option_id: null, flagged: false, revision: 3, saved_at: "2026-10-04T09:00:00Z" };
+    const hookOptions = { ...options(fetcher, { [questionId]: server }), store: delayedStore };
+    const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
+    const { result } = renderHook(() => useAutosave(hookOptions), { wrapper });
+    expect(result.current.ready).toBe(false);
+    await act(async () => release(await store.loadAttempt(attemptId)));
+    await flush();
+    if (!result.current.ready) {
+      await act(async () => release(await store.loadAttempt(attemptId)));
+      await flush();
+    }
+    expect(result.current.ready).toBe(true);
+    expect(result.current.answers[questionId]).toMatchObject({ answer_text: "Restored", flagged: true });
   });
 
   it("retries network and 5xx failures but drops permanent failures", async () => {

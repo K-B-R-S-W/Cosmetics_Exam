@@ -8,7 +8,7 @@ vi.mock("@/lib/candidate-next", () => ({ advanceCandidatePosition: mocks.advance
 import { POST } from "./route";
 
 const body = { expected_position: 0, question_id: "00000000-0000-4000-8000-000000000011", answer_text: null, selected_option_id: null, revision: 1 };
-function request(value: unknown) { return new Request("http://localhost/api/exam/next", { method: "POST", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify(value) }); }
+function request(value: unknown, contentLength?: number) { return new Request("http://localhost/api/exam/next", { method: "POST", headers: { Origin: "http://localhost", "Content-Type": "application/json", ...(contentLength ? { "Content-Length": String(contentLength) } : {}) }, body: JSON.stringify(value) }); }
 
 beforeEach(() => {
   mocks.requireCandidate.mockReset().mockResolvedValue({ candidateId: "candidate", attemptId: "attempt" });
@@ -32,5 +32,13 @@ describe("POST /api/exam/next", () => {
     expect(response.status).toBe(200);
     expect(payload).toEqual(expect.objectContaining({ result: "last_question", position: 0 }));
     expect(payload).not.toHaveProperty("submit_now");
+  });
+
+  it("lets the 20,000-character zod limit govern Sinhala answers", async () => {
+    expect((await POST(request({ ...body, answer_text: "අ".repeat(20_000) }))).status).toBe(200);
+    const tooLong = await POST(request({ ...body, answer_text: "අ".repeat(20_001) }));
+    expect(tooLong.status).toBe(400);
+    expect(await tooLong.json()).toMatchObject({ error: { code: "validation_failed" } });
+    expect((await POST(request(body, 96 * 1024 + 1))).status).toBe(413);
   });
 });

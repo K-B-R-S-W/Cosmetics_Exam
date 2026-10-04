@@ -10,7 +10,7 @@ export async function POST(request: Request): Promise<Response> {
     assertSameOrigin(request);
     const auth = await requireCandidate();
     context.setCandidateId(auth.candidateId);
-    const input = answerInputSchema.parse(await readCandidateJson(request, 24 * 1024));
+    const input = answerInputSchema.parse(await readCandidateJson(request, 96 * 1024));
     const outcome = await saveCandidateAnswer(createServiceRoleClient(), auth.attemptId, input);
     return jsonResponse(publicSaveResult(outcome));
   });

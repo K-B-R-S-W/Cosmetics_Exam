@@ -10,7 +10,7 @@ export async function POST(request: Request): Promise<Response> {
     assertSameOrigin(request);
     const auth = await requireCandidate();
     context.setCandidateId(auth.candidateId);
-    const input = submitInputSchema.parse(await readCandidateJson(request, 4 * 1024 * 1024));
+    const input = submitInputSchema.parse(await readCandidateJson(request, 16 * 1024 * 1024));
     return jsonResponse(await submitCandidateAttempt(auth, input));
   });
 }

@@ -63,6 +63,7 @@ The same script's Argon-only mode measured one policy hash at **24.6 ms** and on
 
 - `GET /api/exam/paper`: five database calls in four sequential stages: candidate auth; exam/deadline lookup; `generate_paper`; then question/options and saved-answer reads in parallel.
 - `GET /api/question-images/[questionId]`: two database calls including candidate auth, then one private Storage download.
+- `POST /api/exam/next`: five database calls on an advancement response: candidate authentication, exam/deadline and question-count lookup, `advance_position`, the single target assignment/question row, then only that question's saved answer.
 - Waiting-room start handoff: the paper route above followed by the required state refresh (two more database calls) before client-side navigation.
 - Unit tests verify the four paper stages and use a synthetic 40 ms paper + 20 ms state-refresh schedule to prove `/exam` is not entered until the full mocked 60 ms handoff completes. Those values are controlled test timings, not production measurements.
 

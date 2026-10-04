@@ -58,7 +58,7 @@ describe("ExamScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review and submit" }));
     expect(screen.getByRole("heading", { name: "Review your answers" })).toBeTruthy();
     expect((screen.getByRole("button", { name: "Submit exam" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole("status").textContent).toContain("Waiting to save");
+    expect(screen.getByTestId("save-indicator").textContent).toContain("Waiting to save");
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
@@ -89,7 +89,7 @@ describe("ExamScreen", () => {
     render(<ExamScreen />);
     expect(await screen.findByRole("heading", { name: "Time is up" })).toBeTruthy();
     expect(screen.queryByText("Choose")).toBeNull();
-    expect(screen.getByRole("status").textContent).toContain("Waiting to save");
+    expect(screen.getByTestId("save-indicator").textContent).toContain("Waiting to save");
     expect(mocks.push).not.toHaveBeenCalled();
     expect(mocks.context.loadPaper).toHaveBeenCalledTimes(1);
   });

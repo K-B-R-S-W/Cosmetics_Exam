@@ -26,6 +26,12 @@ type AssignmentWithQuestion = {
   questions: CandidateQuestionRow | CandidateQuestionRow[] | null;
 };
 type AnswerRow = Omit<SavedAnswer, "saved_at"> & { updated_at: string };
+type OpenExam = {
+  status: StateBody["exam"]["status"];
+  ends_at: string | null;
+  force_ended_at: string | null;
+  questions: Array<{ count: number }>;
+};
 
 function nextError(result: string, position: number): ApiError {
   if (result === "closed") return new ApiError("exam_closed", 409, "The exam has ended.");
@@ -44,24 +50,26 @@ async function assertNextIsOpen(
   supabase: SupabaseClient,
   auth: CandidateAuthContext,
   now: Date,
-): Promise<void> {
+): Promise<number> {
   const { data, error } = await supabase
     .from("exams")
-    .select("status,ends_at,force_ended_at")
+    .select("status,ends_at,force_ended_at,questions(count)")
     .eq("id", auth.examId)
     .single();
   if (error) throw error;
-  const exam = data as { status: StateBody["exam"]["status"]; ends_at: string | null; force_ended_at: string | null };
+  const exam = data as OpenExam;
   const deadline = attemptDeadline(exam.ends_at, auth.extraMinutes);
   if (examPhase(auth.attemptStatus, exam.status, exam.force_ended_at !== null, deadline, now) !== "live") {
     throw new ApiError("exam_closed", 409, "The exam has ended.");
   }
+  return exam.questions[0]?.count ?? 0;
 }
 
 async function loadPosition(
   supabase: SupabaseClient,
   attemptId: string,
   position: number,
+  totalQuestions: number,
   result: NextQuestionBody["result"],
   now: Date,
 ): Promise<NextQuestionBody> {
@@ -69,22 +77,22 @@ async function loadPosition(
     .from("attempt_questions")
     .select("question_id,position,option_order,questions!inner(id,type,body_html,image_path,image_alt_text,marks,mcq_options(id,text_html))")
     .eq("attempt_id", attemptId)
-    .order("position");
-  const answerRequest = supabase
+    .eq("position", position)
+    .single();
+  const assignmentResult = await assignmentsRequest;
+  if (assignmentResult.error) throw assignmentResult.error;
+  const assignment = assignmentResult.data as AssignmentWithQuestion | null;
+  if (!assignment) throw new Error("paper_question_missing");
+  const answerResult = await supabase
     .from("answers")
     .select("question_id,answer_text,selected_option_id,flagged,revision,updated_at")
-    .eq("attempt_id", attemptId);
-  const [assignmentResult, answerResult] = await Promise.all([assignmentsRequest, answerRequest]);
-  if (assignmentResult.error) throw assignmentResult.error;
+    .eq("attempt_id", attemptId)
+    .eq("question_id", assignment.question_id)
+    .maybeSingle();
   if (answerResult.error) throw answerResult.error;
-  const assignments = (assignmentResult.data ?? []) as AssignmentWithQuestion[];
-  const assignment = assignments.find((row) => row.position === position);
-  if (!assignment) throw new Error("paper_question_missing");
   const question = Array.isArray(assignment.questions) ? assignment.questions[0] : assignment.questions;
   if (!question) throw new Error("paper_question_missing");
-  const answerRow = ((answerResult.data ?? []) as Array<AnswerRow & { question_id: string }>).find(
-    (answer) => answer.question_id === assignment.question_id,
-  );
+  const answerRow = answerResult.data as AnswerRow | null;
   const answer = answerRow ? {
     answer_text: answerRow.answer_text,
     selected_option_id: answerRow.selected_option_id,
@@ -95,7 +103,7 @@ async function loadPosition(
   return {
     result,
     position,
-    total_questions: assignments.length,
+    total_questions: totalQuestions,
     question: toCandidateQuestion(question, assignment),
     answer,
     server_time: now.toISOString(),
@@ -109,7 +117,7 @@ export async function advanceCandidatePosition(
 ): Promise<NextQuestionBody | { result: "last_question"; position: number; server_time: string }> {
   const supabase = options.supabase ?? createServiceRoleClient();
   const now = options.now ?? new Date();
-  await assertNextIsOpen(supabase, auth, now);
+  const totalQuestions = await assertNextIsOpen(supabase, auth, now);
   const { data, error } = await supabase.rpc("advance_position", {
     p_attempt_id: auth.attemptId,
     p_expected_position: input.expected_position,
@@ -128,7 +136,7 @@ export async function advanceCandidatePosition(
     return { result: "last_question", position: row.out_position, server_time: now.toISOString() };
   }
   if (row.out_result === "advanced" || row.out_result === "already_advanced" || row.out_result === "out_of_sync") {
-    return loadPosition(supabase, auth.attemptId, row.out_position, row.out_result, now);
+    return loadPosition(supabase, auth.attemptId, row.out_position, totalQuestions, row.out_result, now);
   }
   throw nextError(row.out_result, row.out_position);
 }

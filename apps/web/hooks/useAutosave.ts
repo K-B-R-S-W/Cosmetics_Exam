@@ -15,7 +15,8 @@ export type SaveIndicatorState =
   | { kind: "saving"; durable: boolean; savedAt: string | null }
   | { kind: "saved"; durable: boolean; savedAt: string | null }
   | { kind: "offline"; durable: boolean; savedAt: string | null }
-  | { kind: "retrying"; durable: boolean; savedAt: string | null };
+  | { kind: "retrying"; durable: boolean; savedAt: string | null }
+  | { kind: "failed"; durable: boolean; savedAt: string | null };
 
 interface UseAutosaveOptions {
   attemptId: string;
@@ -27,6 +28,7 @@ interface UseAutosaveOptions {
   fetcher?: typeof fetch;
   onExamClosed?(): void;
   onSessionRevoked?(): void;
+  onWrongPosition?(): void;
   onPermanentError?(code: string): void;
 }
 
@@ -74,6 +76,7 @@ export function useAutosave({
   fetcher = fetch,
   onExamClosed,
   onSessionRevoked,
+  onWrongPosition,
   onPermanentError,
 }: UseAutosaveOptions) {
   const [answers, setAnswers] = useState<Record<string, DraftAnswer>>(() =>
@@ -81,6 +84,7 @@ export function useAutosave({
   );
   const [states, setStates] = useState<Record<string, SaveIndicatorState>>({});
   const [durable, setDurable] = useState(store.durable);
+  const [ready, setReady] = useState(false);
   const records = useRef(new Map<string, StoredAnswerDraft>());
   const inFlight = useRef(new Map<string, Promise<void>>());
   const debounceTimers = useRef(new Map<string, number>());
@@ -152,6 +156,7 @@ export function useAutosave({
             setQuestionState(questionId, "waiting");
             if (staleCount >= 1) {
               blocked.current.add(questionId);
+              setQuestionState(questionId, "failed");
               onPermanentError?.("stale_revision");
               return;
             }
@@ -181,13 +186,20 @@ export function useAutosave({
         if (code === "exam_closed") {
           blocked.current.add(questionId);
           onExamClosed?.();
-          setQuestionState(questionId, "waiting");
+          setQuestionState(questionId, "failed");
           return;
         }
         if (code === "session_revoked" || code === "unauthenticated") onSessionRevoked?.();
         const current = records.current.get(questionId);
-        if (current) await persist({ ...current, dirty: false });
-        setQuestionState(questionId, "waiting");
+        const discard = code === "wrong_position" || code === "not_in_paper" || code === "bad_option";
+        if (current && discard) await persist({ ...current, dirty: false });
+        blocked.current.add(questionId);
+        if (code === "wrong_position") {
+          setQuestionState(questionId, "waiting");
+          onWrongPosition?.();
+        } else {
+          setQuestionState(questionId, "failed");
+        }
         onPermanentError?.(code);
       } catch (error) {
         setQuestionState(questionId, error instanceof TypeError || (typeof navigator !== "undefined" && !navigator.onLine) ? "offline" : "retrying");
@@ -200,7 +212,7 @@ export function useAutosave({
     });
     inFlight.current.set(questionId, operation);
     return operation;
-  }, [enabled, fetcher, onExamClosed, onPermanentError, onSessionRevoked, persist, setQuestionState]);
+  }, [enabled, fetcher, onExamClosed, onPermanentError, onSessionRevoked, onWrongPosition, persist, setQuestionState]);
   useEffect(() => { sendRef.current = send; }, [send]);
 
   const scheduleRetry = useCallback((questionId: string) => {
@@ -219,7 +231,7 @@ export function useAutosave({
   useEffect(() => {
     mounted.current = true;
     if (initializedAttempt.current === attemptId) return;
-    initializedAttempt.current = attemptId;
+    setReady(false);
     let active = true;
     void store.loadAttempt(attemptId).then(async (localRows) => {
       if (!active) return;
@@ -228,9 +240,11 @@ export function useAutosave({
       records.current = new Map(merged.map((row) => [row.question_id, row]));
       await Promise.all(merged.map((row) => store.put(row)));
       if (!active) return;
+      initializedAttempt.current = attemptId;
       setAnswers(Object.fromEntries(merged.map((row) => [row.question_id, { answer_text: row.answer_text, selected_option_id: row.selected_option_id, flagged: row.flagged }])));
       setStates(Object.fromEntries(merged.map((row) => [row.question_id, { kind: row.dirty ? "waiting" : "saved", durable: store.durable, savedAt: row.saved_at } satisfies SaveIndicatorState])));
       setDurable(store.durable);
+      setReady(true);
       for (const row of merged) if (row.dirty) void sendRef.current(row.question_id);
     });
     return () => { active = false; };
@@ -309,5 +323,5 @@ export function useAutosave({
     return states[currentQuestionId] ?? { kind: "saved", durable, savedAt: serverAnswers[currentQuestionId]?.saved_at ?? null };
   }, [currentQuestionId, durable, serverAnswers, states]);
 
-  return { answers, updateAnswer, flushQuestion, flushAll, pendingAnswers, currentState, durable };
+  return { answers, updateAnswer, flushQuestion, flushAll, pendingAnswers, currentState, durable, ready };
 }

@@ -7,7 +7,7 @@ vi.mock("@/lib/candidate-submit", () => ({ submitCandidateAttempt: mocks.submit 
 
 import { POST } from "./route";
 
-function request(value: unknown) { return new Request("http://localhost/api/exam/submit", { method: "POST", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify(value) }); }
+function request(value: unknown, contentLength?: number) { return new Request("http://localhost/api/exam/submit", { method: "POST", headers: { Origin: "http://localhost", "Content-Type": "application/json", ...(contentLength ? { "Content-Length": String(contentLength) } : {}) }, body: JSON.stringify(value) }); }
 
 beforeEach(() => {
   mocks.requireCandidate.mockReset().mockResolvedValue({ candidateId: "candidate", attemptId: "attempt" });
@@ -34,5 +34,20 @@ describe("POST /api/exam/submit", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(mocks.submit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ pending_answers }));
+  });
+
+  it("accepts 200 maximum-length Sinhala answers within 16 MiB", async () => {
+    const pending_answers = Array.from({ length: 200 }, (_, index) => ({
+      question_id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      answer_text: "අ".repeat(20_000),
+      selected_option_id: null,
+      flagged: false,
+      revision: 1,
+    }));
+    expect((await POST(request({ pending_answers }))).status).toBe(200);
+    const invalid = await POST(request({ pending_answers: [{ ...pending_answers[0], answer_text: "අ".repeat(20_001) }] }));
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ error: { code: "validation_failed" } });
+    expect((await POST(request({}, 16 * 1024 * 1024 + 1))).status).toBe(413);
   });
 });

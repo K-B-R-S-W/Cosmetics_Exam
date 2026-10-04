@@ -22,6 +22,7 @@ function chain(result: unknown) {
   const value: Record<string, unknown> = {};
   for (const method of ["select", "eq", "order"]) value[method] = vi.fn(() => value);
   value.single = vi.fn().mockResolvedValue(result);
+  value.maybeSingle = vi.fn().mockResolvedValue(result);
   value.then = (resolve: (next: unknown) => unknown) => Promise.resolve(result).then(resolve);
   return value;
 }
@@ -33,9 +34,9 @@ function client(result = "advanced", position = 1, endsAt = "2027-10-04T11:00:00
   ];
   const answers = [{ question_id: q2, answer_text: "Saved", selected_option_id: null, flagged: false, revision: 4, updated_at: "2026-10-04T09:59:00.000Z" }];
   const from = vi.fn((table: string) => {
-    if (table === "exams") return chain({ data: { status: "live", ends_at: endsAt, force_ended_at: null }, error: null });
-    if (table === "attempt_questions") return chain({ data: assignments, error: null });
-    if (table === "answers") return chain({ data: answers, error: null });
+    if (table === "exams") return chain({ data: { status: "live", ends_at: endsAt, force_ended_at: null, questions: [{ count: 2 }] }, error: null });
+    if (table === "attempt_questions") return chain({ data: assignments[position], error: null });
+    if (table === "answers") return chain({ data: answers[0], error: null });
     throw new Error(`unexpected table ${table}`);
   });
   const rpc = vi.fn().mockResolvedValue({ data: [{ out_result: result, out_position: position }], error: null });
@@ -50,6 +51,9 @@ describe("advanceCandidatePosition", () => {
     const body = await advanceCandidatePosition(auth, input, { supabase: supabase as never, now: new Date("2026-10-04T10:00:00Z") });
     expect(body).toMatchObject({ result, position: 1, total_questions: 2, question: { id: q2 }, answer: { revision: 4, saved_at: "2026-10-04T09:59:00.000Z" } });
     expect(JSON.stringify(body)).not.toMatch(/answer_key|image_path|correct_option/);
+    expect(supabase.from).toHaveBeenCalledTimes(3);
+    const assignmentQuery = vi.mocked(supabase.from).mock.results[1]?.value as { eq: ReturnType<typeof vi.fn> };
+    expect(assignmentQuery.eq).toHaveBeenCalledWith("position", 1);
   });
 
   it("checks the no-grace deadline before advance_position", async () => {
