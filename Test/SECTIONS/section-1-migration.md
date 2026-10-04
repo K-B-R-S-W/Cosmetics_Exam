@@ -11,14 +11,14 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 - `005_question_rpcs.sql` — run fifth. It adds atomic, status-locked question save/delete/reorder and answer-key save functions.
 - `001_smoke_test.sql` — run last in the SQL editor; it rolls itself back and reports the observed `generate_paper()` time for 100 questions.
 
-> **Development verification status (4 October 2026):** `001_initial.sql`, `002_grading.sql`, `003_function_search_path.sql`, `004_exam_paper_and_unassign.sql`, and the revised `001_smoke_test.sql` ran without errors on the Supabase development project. The smoke test passed, the Dashboard reported zero tables without RLS, `/api/health` returned HTTP 200, and a manually created `super_admin` Auth user was linked to its `admin_profiles` row.
+> **Development verification status (4 October 2026):** `001_initial.sql` through `005_question_rpcs.sql` and the full revised `001_smoke_test.sql` (including block 14) ran without errors on PostgreSQL 16.2. The smoke test passed. Earlier development-project checks also reported zero tables without RLS, `/api/health` returned HTTP 200, and a manually created `super_admin` Auth user was linked to its `admin_profiles` row.
 >
 > Function hardening was verified after applying 003 with:
 > `select proname, proconfig from pg_proc join pg_namespace on pg_namespace.oid = pg_proc.pronamespace where pg_namespace.nspname = 'public' order by proname;`
 > All 15 public functions had an explicit `search_path`: 13 used `public, pg_temp`; `is_admin()` and `is_super_admin()` used `public`.
-> The additional all-functions assertion and SQL Editor result-grid `SELECT` added afterward will be exercised the next time the smoke test runs.
+> The all-functions assertion, SQL Editor result-grid `SELECT`, and question-RPC block all passed.
 >
-> **Pending:** `005_question_rpcs.sql` and its smoke-test block have not yet been applied to the development project. Apply them only after review and local PostgreSQL verification.
+> The `save_question` lock was separately verified with a two-session test: concurrent creates received positions 0 and 1 after changing its lock to `FOR NO KEY UPDATE`; Start waited while a save held the exam-row lock; and a save begun after Start returned `exam_locked`. This concurrency property cannot be asserted deterministically by the single-session transactional smoke test.
 
 ---
 

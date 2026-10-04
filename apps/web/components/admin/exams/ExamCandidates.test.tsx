@@ -35,6 +35,7 @@ describe("ExamCandidates", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...assignedBody, items: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ items: candidates, total: 230, scan_limit: 1000, scanned_count: 230 }), { status: 200 }));
     render(<ExamCandidates examId="exam-1" />);
+    await screen.findByLabelText("Select available TEST-000");
     const selectAll = await screen.findByLabelText("Select all shown");
     fireEvent.click(selectAll);
     const addButton = await screen.findByRole(
@@ -65,6 +66,7 @@ describe("ExamCandidates", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...assignedBody, items: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ items: candidates, total: 230, scan_limit: 1000, scanned_count: 230 }), { status: 200 }));
     render(<ExamCandidates examId="exam-1" />);
+    await screen.findByLabelText("Select available TEST-000");
     fireEvent.click(await screen.findByLabelText("Select all shown"));
     const addButton = await screen.findByRole(
       "button",

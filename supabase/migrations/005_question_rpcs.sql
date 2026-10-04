@@ -1,8 +1,9 @@
 begin;
 
--- Save a complete question atomically. The exam row lock prevents the status
--- changing while the question, options and key are written. Client-generated
--- question/option ids make the same request safe to retry.
+-- Save a complete question atomically. FOR NO KEY UPDATE both prevents the
+-- exam status changing and serializes next-position allocation, so concurrent
+-- creates cannot choose the same position. Client-generated question/option
+-- ids make the same request safe to retry.
 create or replace function public.save_question(
   p_question_id uuid,
   p_exam_id uuid,
@@ -36,7 +37,7 @@ begin
   select e.status into v_exam_status
     from public.exams e
    where e.id = p_exam_id
-   for share;
+   for no key update;
 
   if not found then raise exception 'exam_not_found'; end if;
   if v_exam_status not in ('draft', 'scheduled') then raise exception 'exam_locked'; end if;
