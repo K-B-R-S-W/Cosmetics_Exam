@@ -22,6 +22,9 @@ export interface CandidateAuthContext {
     | "in_progress"
     | "submitted"
     | "finalized";
+  currentPosition: number;
+  extraMinutes: number;
+  submitReason: "manual" | "auto" | "forced" | null;
 }
 
 type SessionAttemptRow = {
@@ -29,8 +32,8 @@ type SessionAttemptRow = {
   candidate_id: string;
   revoked_at: string | null;
   attempts:
-    | { id: string; exam_id: string; status: CandidateAuthContext["attemptStatus"] }
-    | { id: string; exam_id: string; status: CandidateAuthContext["attemptStatus"] }[]
+    | { id: string; exam_id: string; status: CandidateAuthContext["attemptStatus"]; current_position: number; extra_minutes: number; submit_reason: CandidateAuthContext["submitReason"] }
+    | { id: string; exam_id: string; status: CandidateAuthContext["attemptStatus"]; current_position: number; extra_minutes: number; submit_reason: CandidateAuthContext["submitReason"] }[]
     | null;
 };
 
@@ -54,7 +57,7 @@ export async function requireCandidate(): Promise<CandidateAuthContext> {
   const supabase = createServiceRoleClient();
   const { data, error } = await supabase
     .from("sessions")
-    .select("id,candidate_id,revoked_at,attempts!sessions_attempt_id_fkey(id,exam_id,status)")
+    .select("id,candidate_id,revoked_at,attempts!sessions_attempt_id_fkey(id,exam_id,status,current_position,extra_minutes,submit_reason)")
     .eq("id", cookie.sid)
     .maybeSingle();
 
@@ -86,6 +89,9 @@ export async function requireCandidate(): Promise<CandidateAuthContext> {
     attemptId: attempt.id,
     examId: attempt.exam_id,
     attemptStatus: attempt.status,
+    currentPosition: attempt.current_position,
+    extraMinutes: attempt.extra_minutes,
+    submitReason: attempt.submit_reason,
   };
 }
 

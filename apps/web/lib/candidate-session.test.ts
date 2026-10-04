@@ -35,10 +35,10 @@ describe("requireCandidate", () => {
   });
 
   it("returns ids and status from one joined query", async () => {
-    const chain = query({ id: "s", candidate_id: "c", revoked_at: null, attempts: { id: "a", exam_id: "e", status: "acknowledged" } });
+    const chain = query({ id: "s", candidate_id: "c", revoked_at: null, attempts: { id: "a", exam_id: "e", status: "acknowledged", current_position: 2, extra_minutes: 5, submit_reason: null } });
     mocks.getIronSession.mockResolvedValue({ sid: "s" });
     mocks.createClient.mockReturnValue({ from: vi.fn(() => chain) });
-    await expect(requireCandidate()).resolves.toEqual({ sessionId: "s", candidateId: "c", attemptId: "a", examId: "e", attemptStatus: "acknowledged" });
+    await expect(requireCandidate()).resolves.toEqual({ sessionId: "s", candidateId: "c", attemptId: "a", examId: "e", attemptStatus: "acknowledged", currentPosition: 2, extraMinutes: 5, submitReason: null });
     expect((mocks.createClient.mock.results[0]?.value.from as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
   });
 });
