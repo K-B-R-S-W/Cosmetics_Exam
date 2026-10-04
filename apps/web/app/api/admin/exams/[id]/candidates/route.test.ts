@@ -47,4 +47,19 @@ describe("exam candidate unassign route", () => {
     expect(body.error.message).not.toContain("00000000");
     expect(mocks.rpc).not.toHaveBeenCalled();
   });
+  it("rejects assignment requests containing more than 100 candidate IDs", async () => {
+    const candidateIds = Array.from(
+      { length: 101 },
+      (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    );
+    const { POST } = await import("./route");
+    const response = await POST(new Request("http://localhost/api/admin/exams/00000000-0000-4000-8000-000000000010/candidates", {
+      method: "POST",
+      headers: { Origin: "http://localhost", "Content-Type": "application/json" },
+      body: JSON.stringify({ candidate_ids: candidateIds }),
+    }), { params: Promise.resolve({ id: "00000000-0000-4000-8000-000000000010" }) });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("validation_failed");
+    expect(mocks.from).not.toHaveBeenCalled();
+  });
 });

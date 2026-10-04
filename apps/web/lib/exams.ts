@@ -7,6 +7,7 @@ export const EXAM_DURATION_MAX = 480;
 export const FLAG_THRESHOLD_MIN = 1;
 export const FLAG_THRESHOLD_MAX = 100;
 export const AVAILABLE_CANDIDATE_SCAN_LIMIT = 1000;
+export const EXAM_CANDIDATE_MUTATION_LIMIT = 100;
 export const COLOMBO_OFFSET_MINUTES = 330;
 
 export const examStatuses = [
@@ -64,12 +65,30 @@ export const examCandidatesQuerySchema = z.object({
   view: z.enum(["assigned", "available"]).optional().default("assigned"),
   q: z.string().trim().max(200).optional().default(""),
   page: z.coerce.number().int().min(1).optional().default(1),
-  page_size: z.coerce.number().int().min(1).max(200).optional().default(50),
+  page_size: z.coerce.number().int().min(1).max(AVAILABLE_CANDIDATE_SCAN_LIMIT).optional().default(50),
 });
 
 export const examCandidateMutationSchema = z.object({
-  candidate_ids: z.array(z.uuid()).min(1).max(200).transform((ids) => [...new Set(ids)]),
+  candidate_ids: z
+    .array(z.uuid())
+    .min(1)
+    .max(EXAM_CANDIDATE_MUTATION_LIMIT)
+    .transform((ids) => [...new Set(ids)]),
 });
+
+export function candidateIdBatches(
+  candidateIds: string[],
+  batchSize = EXAM_CANDIDATE_MUTATION_LIMIT,
+): string[][] {
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new Error("invalid_candidate_batch_size");
+  }
+  const batches: string[][] = [];
+  for (let index = 0; index < candidateIds.length; index += batchSize) {
+    batches.push(candidateIds.slice(index, index + batchSize));
+  }
+  return batches;
+}
 
 export interface ExamItem {
   id: string;

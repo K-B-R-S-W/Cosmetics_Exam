@@ -114,6 +114,7 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
       items: available.slice(start, start + query.page_size),
       total: available.length,
       scan_limit: AVAILABLE_CANDIDATE_SCAN_LIMIT,
+      scanned_count: candidateResult.data?.length ?? 0,
     });
   } catch (error) {
     return apiErrorResponse(error, ROUTE);

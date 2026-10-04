@@ -4,42 +4,227 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import { ExamTabs } from "@/components/admin/exams/ExamTabs";
 import { Button } from "@/components/ui/Button";
-import type { AssignedCandidateItem, AvailableCandidateItem, ExamStatus } from "@/lib/exams";
+import {
+  AVAILABLE_CANDIDATE_SCAN_LIMIT,
+  candidateIdBatches,
+  type AssignedCandidateItem,
+  type AvailableCandidateItem,
+  type ExamStatus,
+} from "@/lib/exams";
 
-interface ExamHeader { id: string; title: string; status: ExamStatus }
-interface ErrorBody { error?: { message?: string } }
-const PAGE_SIZE = 50;
+interface ExamHeader {
+  id: string;
+  title: string;
+  status: ExamStatus;
+}
+
+interface ErrorBody {
+  error?: { message?: string };
+}
+
+interface AvailableBody extends ErrorBody {
+  items?: AvailableCandidateItem[];
+  total?: number;
+  scan_limit?: number;
+  scanned_count?: number;
+}
+
+const PAGE_SIZE = AVAILABLE_CANDIDATE_SCAN_LIMIT;
 
 function attemptLabel(status: AssignedCandidateItem["attempt_status"]): string {
-  return ({ not_started: "Not joined", acknowledged: "Ready", in_progress: "In exam", submitted: "Submitted", finalized: "Submitted" })[status];
+  return ({
+    not_started: "Not joined",
+    acknowledged: "Ready",
+    in_progress: "In exam",
+    submitted: "Submitted",
+    finalized: "Submitted",
+  })[status];
 }
 
 export function ExamCandidates({ examId }: { examId: string }) {
-  const [exam, setExam] = useState<ExamHeader>(); const [assigned, setAssigned] = useState<AssignedCandidateItem[]>([]); const [available, setAvailable] = useState<AvailableCandidateItem[]>([]); const [total, setTotal] = useState(0); const [queryInput, setQueryInput] = useState(""); const [query, setQuery] = useState(""); const [page, setPage] = useState(1); const [selectedAssigned, setSelectedAssigned] = useState<Set<string>>(new Set()); const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set()); const [loading, setLoading] = useState(true); const [working, setWorking] = useState(false); const [message, setMessage] = useState<string>(); const [blockedMessage, setBlockedMessage] = useState<string>(); const [error, setError] = useState<string>();
+  const [exam, setExam] = useState<ExamHeader>();
+  const [assigned, setAssigned] = useState<AssignedCandidateItem[]>([]);
+  const [available, setAvailable] = useState<AvailableCandidateItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [scanLimited, setScanLimited] = useState(false);
+  const [queryInput, setQueryInput] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [selectedAssigned, setSelectedAssigned] = useState<Set<string>>(new Set());
+  const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState(false);
+  const [message, setMessage] = useState<string>();
+  const [blockedMessage, setBlockedMessage] = useState<string>();
+  const [error, setError] = useState<string>();
 
   const load = useCallback(async () => {
-    setLoading(true); setError(undefined);
+    setLoading(true);
+    setError(undefined);
     try {
-      const params = new URLSearchParams({ view: "available", q: query, page: String(page), page_size: String(PAGE_SIZE) });
-      const [assignedResponse, availableResponse] = await Promise.all([fetch(`/api/admin/exams/${examId}/candidates?view=assigned`, { cache: "no-store" }), fetch(`/api/admin/exams/${examId}/candidates?${params}`, { cache: "no-store" })]);
-      const assignedBody = await assignedResponse.json() as { exam?: ExamHeader; items?: AssignedCandidateItem[] } & ErrorBody; const availableBody = await availableResponse.json() as { items?: AvailableCandidateItem[]; total?: number } & ErrorBody;
-      if (!assignedResponse.ok) throw new Error(assignedBody.error?.message ?? "Assigned candidates could not be loaded."); if (!availableResponse.ok) throw new Error(availableBody.error?.message ?? "Available candidates could not be loaded.");
-      setExam(assignedBody.exam); setAssigned(assignedBody.items ?? []); setAvailable(availableBody.items ?? []); setTotal(availableBody.total ?? 0); setSelectedAssigned(new Set()); setSelectedAvailable(new Set());
-    } catch (loadError) { setError((loadError as Error).message); } finally { setLoading(false); }
+      const params = new URLSearchParams({
+        view: "available",
+        q: query,
+        page: String(page),
+        page_size: String(PAGE_SIZE),
+      });
+      const [assignedResponse, availableResponse] = await Promise.all([
+        fetch(`/api/admin/exams/${examId}/candidates?view=assigned`, { cache: "no-store" }),
+        fetch(`/api/admin/exams/${examId}/candidates?${params}`, { cache: "no-store" }),
+      ]);
+      const assignedBody = await assignedResponse.json() as {
+        exam?: ExamHeader;
+        items?: AssignedCandidateItem[];
+      } & ErrorBody;
+      const availableBody = await availableResponse.json() as AvailableBody;
+      if (!assignedResponse.ok) {
+        throw new Error(assignedBody.error?.message ?? "Assigned candidates could not be loaded.");
+      }
+      if (!availableResponse.ok) {
+        throw new Error(availableBody.error?.message ?? "Available candidates could not be loaded.");
+      }
+      setExam(assignedBody.exam);
+      setAssigned(assignedBody.items ?? []);
+      setAvailable(availableBody.items ?? []);
+      setTotal(availableBody.total ?? 0);
+      setScanLimited(
+        typeof availableBody.scan_limit === "number" &&
+        typeof availableBody.scanned_count === "number" &&
+        availableBody.scanned_count >= availableBody.scan_limit,
+      );
+      setSelectedAssigned(new Set());
+      setSelectedAvailable(new Set());
+    } catch (loadError) {
+      setError((loadError as Error).message);
+    } finally {
+      setLoading(false);
+    }
   }, [examId, page, query]);
+
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timeout);
   }, [load]);
-  const locked = exam ? ["ended", "finalized"].includes(exam.status) : false;
-  const toggle = (set: Set<string>, update: (value: Set<string>) => void, id: string) => { const next = new Set(set); if (next.has(id)) next.delete(id); else next.add(id); update(next); };
 
-  async function addSelected() { setWorking(true); setError(undefined); setMessage(undefined); try { const response = await fetch(`/api/admin/exams/${examId}/candidates`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ candidate_ids: [...selectedAvailable] }) }); const body = await response.json() as { added?: number; already_assigned?: number } & ErrorBody; if (!response.ok) throw new Error(body.error?.message ?? "Candidates could not be added."); setMessage(`${body.added ?? 0} added.${body.already_assigned ? ` ${body.already_assigned} were already assigned.` : ""}`); await load(); } catch (actionError) { setError((actionError as Error).message); } finally { setWorking(false); } }
-  async function removeSelected() { setWorking(true); setError(undefined); setMessage(undefined); setBlockedMessage(undefined); const selected = [...selectedAssigned]; try { const response = await fetch(`/api/admin/exams/${examId}/candidates`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ candidate_ids: selected }) }); const body = await response.json() as { removed?: string[]; blocked?: Array<{ candidate_id: string }> } & ErrorBody; if (!response.ok) throw new Error(body.error?.message ?? "Candidates could not be removed."); setMessage(`${body.removed?.length ?? 0} removed.`); if (body.blocked?.length) { const blockedNames = body.blocked.map(({ candidate_id }) => assigned.find((item) => item.candidate_id === candidate_id)?.full_name).filter(Boolean); setBlockedMessage(`${body.blocked.length} could not be removed because they have already joined the exam.${blockedNames.length ? ` ${blockedNames.join(", ")}.` : ""}`); } await load(); } catch (actionError) { setError((actionError as Error).message); } finally { setWorking(false); } }
-  function search(event: FormEvent) { event.preventDefault(); setPage(1); setQuery(queryInput.trim()); }
+  const locked = exam ? ["ended", "finalized"].includes(exam.status) : false;
+  const toggle = (set: Set<string>, update: (value: Set<string>) => void, id: string) => {
+    const next = new Set(set);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    update(next);
+  };
+
+  async function addSelected() {
+    setWorking(true);
+    setError(undefined);
+    setMessage(undefined);
+    try {
+      let added = 0;
+      let alreadyAssigned = 0;
+      for (const candidateIds of candidateIdBatches([...selectedAvailable])) {
+        const response = await fetch(`/api/admin/exams/${examId}/candidates`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ candidate_ids: candidateIds }),
+        });
+        const body = await response.json() as {
+          added?: number;
+          already_assigned?: number;
+        } & ErrorBody;
+        if (!response.ok) {
+          throw new Error(body.error?.message ?? "Candidates could not be added.");
+        }
+        added += body.added ?? 0;
+        alreadyAssigned += body.already_assigned ?? 0;
+      }
+      setMessage(`${added} added.${alreadyAssigned ? ` ${alreadyAssigned} were already assigned.` : ""}`);
+      await load();
+    } catch (actionError) {
+      setError((actionError as Error).message);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function removeSelected() {
+    setWorking(true);
+    setError(undefined);
+    setMessage(undefined);
+    setBlockedMessage(undefined);
+    const selected = [...selectedAssigned];
+    try {
+      const removed: string[] = [];
+      const blocked: Array<{ candidate_id: string }> = [];
+      for (const candidateIds of candidateIdBatches(selected)) {
+        const response = await fetch(`/api/admin/exams/${examId}/candidates`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ candidate_ids: candidateIds }),
+        });
+        const body = await response.json() as {
+          removed?: string[];
+          blocked?: Array<{ candidate_id: string }>;
+        } & ErrorBody;
+        if (!response.ok) {
+          throw new Error(body.error?.message ?? "Candidates could not be removed.");
+        }
+        removed.push(...(body.removed ?? []));
+        blocked.push(...(body.blocked ?? []));
+      }
+      setMessage(`${removed.length} removed.`);
+      if (blocked.length) {
+        const blockedNames = blocked
+          .map(({ candidate_id }) => assigned.find((item) => item.candidate_id === candidate_id)?.full_name)
+          .filter(Boolean);
+        setBlockedMessage(
+          `${blocked.length} could not be removed because they have already joined the exam.${blockedNames.length ? ` ${blockedNames.join(", ")}.` : ""}`,
+        );
+      }
+      await load();
+    } catch (actionError) {
+      setError((actionError as Error).message);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  function search(event: FormEvent) {
+    event.preventDefault();
+    setPage(1);
+    setQuery(queryInput.trim());
+  }
+
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  return <section className="border-t border-hairline pt-6" aria-labelledby="exam-candidates-title"><p className="mb-2 text-sm text-muted">Exams</p><h1 id="exam-candidates-title" className="text-title font-bold">{exam?.title ?? "Exam candidates"}</h1><ExamTabs examId={examId} current="candidates" /><p className="mt-5 font-bold">{assigned.length} assigned</p>{exam?.status === "live" ? <p className="mt-4 border-l-4 border-warn bg-warn-tint px-4 py-3">This exam is live. New candidates can sign in and get the same end time as everyone else.</p> : null}{locked ? <p className="mt-4 border-l-4 border-warn bg-warn-tint px-4 py-3">The exam has ended, so candidates can no longer be added or removed.</p> : null}{message ? <p role="status" className="mt-4 border-l-4 border-ok bg-ok-tint px-4 py-3">{message}</p> : null}{blockedMessage ? <p className="mt-4 border-l-4 border-warn bg-warn-tint px-4 py-3">{blockedMessage}</p> : null}{error ? <p role="alert" className="mt-4 border-l-4 border-alert bg-alert-tint px-4 py-3">{error}</p> : null}
-    <section className="mt-6"><div className="flex items-center justify-between"><h2 className="text-question font-bold">Assigned</h2><Button variant="destructive" disabled={locked || selectedAssigned.size === 0} loading={working} onClick={() => void removeSelected()}>Remove selected</Button></div><div className="mt-3 overflow-x-auto border-y border-hairline bg-surface"><table className="w-full text-left"><thead><tr className="border-b border-hairline"><th className="p-3"><span className="sr-only">Select</span></th><th className="p-3">MER code</th><th className="p-3">Name</th><th className="p-3">Outlet</th><th className="p-3">Attempt</th></tr></thead><tbody>{!loading && assigned.length === 0 ? <tr><td colSpan={5} className="p-8 text-center text-muted">No candidates assigned.</td></tr> : assigned.map((item) => <tr key={item.candidate_id} className="border-b border-hairline"><td className="p-3"><input aria-label={`Select assigned ${item.mer_code}`} type="checkbox" disabled={locked} checked={selectedAssigned.has(item.candidate_id)} onChange={() => toggle(selectedAssigned, setSelectedAssigned, item.candidate_id)} /></td><td className="p-3 font-bold">{item.mer_code}</td><td className="p-3">{item.full_name}</td><td className="p-3">{item.outlet || "—"}</td><td className="p-3">{attemptLabel(item.attempt_status)}</td></tr>)}</tbody></table></div></section>
-    <section className="mt-8"><h2 className="text-question font-bold">Add candidates</h2><form className="mt-3 flex gap-3" onSubmit={search}><label className="flex-1 font-bold">Search<input className="mt-2 min-h-11 w-full rounded-control border border-line px-3 font-normal" value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search by MER code, name or outlet" /></label><Button className="self-end" variant="secondary" type="submit">Search</Button></form><div className="mt-4 flex items-center justify-between"><label className="flex min-h-11 items-center gap-3 font-bold"><input type="checkbox" disabled={locked || available.length === 0} checked={available.length > 0 && available.every((item) => selectedAvailable.has(item.candidate_id))} onChange={(event) => setSelectedAvailable(event.target.checked ? new Set(available.map((item) => item.candidate_id)) : new Set())} /> Select all shown</label><Button disabled={locked || selectedAvailable.size === 0} loading={working} onClick={() => void addSelected()}>Add selected ({selectedAvailable.size})</Button></div><div className="mt-3 overflow-x-auto border-y border-hairline bg-surface"><table className="w-full text-left"><thead><tr className="border-b border-hairline"><th className="p-3"><span className="sr-only">Select</span></th><th className="p-3">MER code</th><th className="p-3">Name</th><th className="p-3">Outlet</th></tr></thead><tbody>{available.map((item) => <tr key={item.candidate_id} className="border-b border-hairline"><td className="p-3"><input aria-label={`Select available ${item.mer_code}`} type="checkbox" disabled={locked} checked={selectedAvailable.has(item.candidate_id)} onChange={() => toggle(selectedAvailable, setSelectedAvailable, item.candidate_id)} /></td><td className="p-3 font-bold">{item.mer_code}</td><td className="p-3">{item.full_name}</td><td className="p-3">{item.outlet || "—"}</td></tr>)}</tbody></table></div>{pageCount > 1 ? <div className="mt-4 flex justify-between"><Button variant="secondary" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Previous</Button><span>Page {page} of {pageCount}</span><Button variant="secondary" disabled={page === pageCount} onClick={() => setPage((value) => value + 1)}>Next</Button></div> : null}</section>
+  return <section className="border-t border-hairline pt-6" aria-labelledby="exam-candidates-title">
+    <p className="mb-2 text-sm text-muted">Exams</p>
+    <h1 id="exam-candidates-title" className="text-title font-bold">{exam?.title ?? "Exam candidates"}</h1>
+    <ExamTabs examId={examId} current="candidates" />
+    <p className="mt-5 font-bold">{assigned.length} assigned</p>
+    {exam?.status === "live" ? <p className="mt-4 border-l-4 border-warn bg-warn-tint px-4 py-3">This exam is live. New candidates can sign in and get the same end time as everyone else.</p> : null}
+    {locked ? <p className="mt-4 border-l-4 border-warn bg-warn-tint px-4 py-3">The exam has ended, so candidates can no longer be added or removed.</p> : null}
+    {message ? <p role="status" className="mt-4 border-l-4 border-ok bg-ok-tint px-4 py-3">{message}</p> : null}
+    {blockedMessage ? <p className="mt-4 border-l-4 border-warn bg-warn-tint px-4 py-3">{blockedMessage}</p> : null}
+    {error ? <p role="alert" className="mt-4 border-l-4 border-alert bg-alert-tint px-4 py-3">{error}</p> : null}
+
+    <section className="mt-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-question font-bold">Assigned</h2>
+        <Button variant="destructive" disabled={locked || selectedAssigned.size === 0} loading={working} onClick={() => void removeSelected()}>Remove selected</Button>
+      </div>
+      <div className="mt-3 overflow-x-auto border-y border-hairline bg-surface">
+        <table className="w-full text-left"><thead><tr className="border-b border-hairline"><th className="p-3"><span className="sr-only">Select</span></th><th className="p-3">MER code</th><th className="p-3">Name</th><th className="p-3">Outlet</th><th className="p-3">Attempt</th></tr></thead><tbody>
+          {!loading && assigned.length === 0 ? <tr><td colSpan={5} className="p-8 text-center text-muted">No candidates assigned.</td></tr> : assigned.map((item) => <tr key={item.candidate_id} className="border-b border-hairline"><td className="p-3"><input aria-label={`Select assigned ${item.mer_code}`} type="checkbox" disabled={locked} checked={selectedAssigned.has(item.candidate_id)} onChange={() => toggle(selectedAssigned, setSelectedAssigned, item.candidate_id)} /></td><td className="p-3 font-bold">{item.mer_code}</td><td className="p-3">{item.full_name}</td><td className="p-3">{item.outlet || "—"}</td><td className="p-3">{attemptLabel(item.attempt_status)}</td></tr>)}
+        </tbody></table>
+      </div>
+    </section>
+
+    <section className="mt-8">
+      <h2 className="text-question font-bold">Add candidates</h2>
+      <form className="mt-3 flex gap-3" onSubmit={search}><label className="flex-1 font-bold">Search<input className="mt-2 min-h-11 w-full rounded-control border border-line px-3 font-normal" value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search by MER code, name or outlet" /></label><Button className="self-end" variant="secondary" type="submit">Search</Button></form>
+      {scanLimited ? <p className="mt-3 border-l-4 border-warn bg-warn-tint px-4 py-3">Search to narrow the list.</p> : null}
+      <div className="mt-4 flex items-center justify-between"><label className="flex min-h-11 items-center gap-3 font-bold"><input type="checkbox" disabled={locked || available.length === 0} checked={available.length > 0 && available.every((item) => selectedAvailable.has(item.candidate_id))} onChange={(event) => setSelectedAvailable(event.target.checked ? new Set(available.map((item) => item.candidate_id)) : new Set())} /> Select all shown</label><Button disabled={locked || selectedAvailable.size === 0} loading={working} onClick={() => void addSelected()}>Add selected ({selectedAvailable.size})</Button></div>
+      <div className="mt-3 overflow-x-auto border-y border-hairline bg-surface"><table className="w-full text-left"><thead><tr className="border-b border-hairline"><th className="p-3"><span className="sr-only">Select</span></th><th className="p-3">MER code</th><th className="p-3">Name</th><th className="p-3">Outlet</th></tr></thead><tbody>{available.map((item) => <tr key={item.candidate_id} className="border-b border-hairline"><td className="p-3"><input aria-label={`Select available ${item.mer_code}`} type="checkbox" disabled={locked} checked={selectedAvailable.has(item.candidate_id)} onChange={() => toggle(selectedAvailable, setSelectedAvailable, item.candidate_id)} /></td><td className="p-3 font-bold">{item.mer_code}</td><td className="p-3">{item.full_name}</td><td className="p-3">{item.outlet || "—"}</td></tr>)}</tbody></table></div>
+      {pageCount > 1 ? <div className="mt-4 flex justify-between"><Button variant="secondary" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>Previous</Button><span>Page {page} of {pageCount}</span><Button variant="secondary" disabled={page === pageCount} onClick={() => setPage((value) => value + 1)}>Next</Button></div> : null}
+    </section>
   </section>;
 }

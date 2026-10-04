@@ -104,15 +104,37 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
         );
       }
     }
+    if (
+      current.status === "scheduled" &&
+      body.scheduled_start_at !== undefined &&
+      (
+        body.scheduled_start_at === null ||
+        new Date(body.scheduled_start_at).getTime() < Date.now() + 60_000
+      )
+    ) {
+      throw new ApiError(
+        "not_ready",
+        409,
+        "The exam is not ready to schedule.",
+        { missing: ["start_time"] },
+      );
+    }
 
     const { data, error } = await client
       .from("exams")
       .update(changes)
       .eq("id", id)
+      .eq("status", current.status)
       .select(EXAM_COLUMNS)
       .maybeSingle();
     if (error) throw databaseUnavailable();
-    if (!data) throw examNotFound();
+    if (!data) {
+      throw new ApiError(
+        "exam_locked",
+        409,
+        "The exam changed. Reload and try again.",
+      );
+    }
 
     const auditDetail = body.flag_threshold === undefined
       ? null
