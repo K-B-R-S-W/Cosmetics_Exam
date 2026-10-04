@@ -151,6 +151,8 @@ describe("WaitingRoom", () => {
     await act(() => vi.advanceTimersByTimeAsync(5000));
     await flush();
     expect(mocks.loadPaper).toHaveBeenCalledTimes(2);
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("shows the ended screen without making a submit call", () => {

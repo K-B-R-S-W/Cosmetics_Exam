@@ -4,9 +4,6 @@ import { useEffect, useRef, useState } from "react";
 
 import type { SaveIndicatorState } from "@/hooks/useAutosave";
 
-// Removed from the indicator in Batch 3B; retained until Commit C enables the controls that use this tooltip.
-export const BATCH_THREE_NOTE = "Answers are not saved yet (Phase 2 batch 3)";
-
 function savedTime(savedAt: string): string {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Colombo",

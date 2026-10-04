@@ -32,4 +32,8 @@ describe("routeFor", () => {
     expect(routeFor({ state: state("in_progress", "closed"), pathname: "/waiting", checkPassed: true })).toEqual({ redirect: "/exam" });
     expect(routeFor({ state: state("submitted", "submitted"), pathname: "/exam", checkPassed: true })).toEqual({ redirect: "/done" });
   });
+  it("does not allow a direct Done visit before submission", () => {
+    expect(routeFor({ state: state("in_progress", "live"), pathname: "/done", checkPassed: true })).toEqual({ redirect: "/exam" });
+    expect(routeFor({ state: state("not_started", "waiting"), pathname: "/done", checkPassed: false })).toEqual({ redirect: "/confirm" });
+  });
 });

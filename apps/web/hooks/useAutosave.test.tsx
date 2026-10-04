@@ -279,4 +279,43 @@ describe("useAutosave", () => {
     expect(result.current.currentState.durable).toBe(false);
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it("collects 100 dirty answers for the final pending_answers payload", async () => {
+    const ids = Array.from({ length: 100 }, (_, index) => `question-${index}`);
+    const fetcher = vi.fn() as unknown as typeof fetch;
+    const { result } = renderHook(() => useAutosave({
+      attemptId,
+      questionIds: ids,
+      serverAnswers: {},
+      currentQuestionId: ids[0]!,
+      enabled: false,
+      store: createAnswerDraftStore(undefined),
+      fetcher,
+    }));
+    await flush();
+    act(() => {
+      for (const id of ids) result.current.updateAnswer(id, { answer_text: `Answer ${id}`, selected_option_id: null, flagged: false });
+    });
+    await flush();
+    expect(result.current.pendingAnswers()).toHaveLength(100);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("adds a newly returned sequential question without resetting the attempt", async () => {
+    const fetcher = vi.fn() as unknown as typeof fetch;
+    const store = createAnswerDraftStore(undefined);
+    const hook = renderHook(({ ids }) => useAutosave({
+      attemptId,
+      questionIds: ids,
+      serverAnswers: {},
+      currentQuestionId: ids.at(-1) ?? null,
+      enabled: false,
+      store,
+      fetcher,
+    }), { initialProps: { ids: [questionId] } });
+    await flush();
+    hook.rerender({ ids: ["00000000-0000-4000-8000-000000000012"] });
+    await flush();
+    expect(hook.result.current.answers["00000000-0000-4000-8000-000000000012"]).toEqual({ answer_text: null, selected_option_id: null, flagged: false });
+  });
 });

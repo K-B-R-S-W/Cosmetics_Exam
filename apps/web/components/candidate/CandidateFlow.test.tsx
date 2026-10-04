@@ -224,4 +224,25 @@ describe("CandidateProvider flow state", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load paper two" }));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/exam/paper")).toHaveLength(1));
   });
+
+  it("does not overwrite the tab title while the exam screen owns it", async () => {
+    activeCandidate = "A";
+    navigation.path = "/exam";
+    document.title = "Question 7 · Exam A";
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/exam/state") {
+        const base = stateBody("A");
+        return json({
+          ...base,
+          phase: "live",
+          exam: { ...base.exam, status: "live", ends_at: "2026-10-04T11:00:00.000Z" },
+          attempt: { ...base.attempt, status: "in_progress", deadline: "2026-10-04T11:00:00.000Z" },
+        });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+    render(<CandidateProvider><h1>Provider must ignore this heading</h1></CandidateProvider>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/exam/state", { cache: "no-store" }));
+    expect(document.title).toBe("Question 7 · Exam A");
+  });
 });

@@ -251,6 +251,25 @@ export function useAutosave({
   }, [attemptId, questionIds, serverAnswers, store]);
 
   useEffect(() => {
+    if (!ready) return;
+    const missing = questionIds.filter((questionId) => !records.current.has(questionId));
+    if (missing.length === 0) return;
+    const rows = missing.map((questionId) => storedFromServer(attemptId, questionId, serverAnswers[questionId]));
+    for (const row of rows) records.current.set(row.question_id, row);
+    void Promise.all(rows.map((row) => store.put(row))).then(() => {
+      if (!mounted.current) return;
+      setAnswers((current) => ({
+        ...current,
+        ...Object.fromEntries(rows.map((row) => [row.question_id, { answer_text: row.answer_text, selected_option_id: row.selected_option_id, flagged: row.flagged }])),
+      }));
+      setStates((current) => ({
+        ...current,
+        ...Object.fromEntries(rows.map((row) => [row.question_id, { kind: "saved", durable: store.durable, savedAt: row.saved_at } satisfies SaveIndicatorState])),
+      }));
+    });
+  }, [attemptId, questionIds, ready, serverAnswers, store]);
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       for (const record of records.current.values()) if (record.dirty) void sendRef.current(record.question_id);
     }, PERIODIC_MS);
@@ -312,6 +331,32 @@ export function useAutosave({
       revision: Math.max(record.revision, record.confirmed_revision) + 1,
     })), []);
 
+  const answerInput = useCallback((questionId: string): AnswerInput | null => {
+    const record = records.current.get(questionId);
+    if (!record) return null;
+    return {
+      question_id: questionId,
+      answer_text: record.answer_text,
+      selected_option_id: record.selected_option_id,
+      flagged: record.flagged,
+      revision: Math.max(record.revision, record.confirmed_revision) + 1,
+    };
+  }, []);
+
+  const confirmDirectSave = useCallback(async (questionId: string, revision: number, savedAt: string) => {
+    const record = records.current.get(questionId);
+    if (!record) return;
+    const confirmed = { ...record, revision: Math.max(record.revision, revision), confirmed_revision: revision, dirty: false, saved_at: savedAt };
+    blocked.current.delete(questionId);
+    await persist(confirmed);
+    setQuestionState(questionId, "saved", savedAt);
+  }, [persist, setQuestionState]);
+
+  const clearDrafts = useCallback(async () => {
+    records.current.clear();
+    await store.clearAttempt(attemptId);
+  }, [attemptId, store]);
+
   const flushAll = useCallback(async (timeoutMs = 3_000): Promise<AnswerInput[]> => {
     const flushing = Promise.all([...records.current.keys()].map((questionId) => flushQuestion(questionId)));
     await Promise.race([flushing, new Promise<void>((resolve) => window.setTimeout(resolve, timeoutMs))]);
@@ -323,5 +368,5 @@ export function useAutosave({
     return states[currentQuestionId] ?? { kind: "saved", durable, savedAt: serverAnswers[currentQuestionId]?.saved_at ?? null };
   }, [currentQuestionId, durable, serverAnswers, states]);
 
-  return { answers, updateAnswer, flushQuestion, flushAll, pendingAnswers, currentState, durable, ready };
+  return { answers, updateAnswer, flushQuestion, flushAll, pendingAnswers, answerInput, confirmDirectSave, clearDrafts, currentState, durable, ready };
 }

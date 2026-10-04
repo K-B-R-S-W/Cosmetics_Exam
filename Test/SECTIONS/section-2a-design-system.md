@@ -13,7 +13,7 @@ Covers the look of the whole platform: tokens, type, layout rules, the component
 
 ## 0. Conflicts found with the plan
 
-1. **2D.4 Save indicator says "green/yellow/orange states".** That contradicts the neutral rule and makes save state depend on colour. New rule: save state is shown in words and an icon (§4.5). Colour is only a secondary cue, and only for the offline state.
+1. **2D.4 Save indicator says "green/yellow/orange states".** That contradicts the neutral rule and makes save state depend on colour. New rule: save state is shown in words and an icon (§4.5). Colour is only a secondary cue for Offline, Retrying and Failed.
 2. **3C.2 badges are red and amber by threshold.** This is fine because it is the admin side, but the badge must also show the number and a word or icon, not colour alone (§4.10 and §4.11).
 3. **4B.4 camera banner and 3A.10 fullscreen overlay need a style.** Both are warnings the candidate must act on. They use the Warning signal at low weight (§4.6 and §4.8), not red, so candidates don't panic over a server-side fault.
 4. **The available logo is PNG only (201×187 px).** Use the supplied PNG assets; SVG is not a prerequisite. Keep it near 90 px high or smaller so it remains sharp (§2).
@@ -191,8 +191,9 @@ A single line in the exam strip: icon + words. Always shown.
 | Waiting | "Waiting to save" (typing, debounce pending) | Dot | `--muted` |
 | Offline | "Offline. Answers are kept on this device. Reconnect to save them." | Warning triangle | `--warn` |
 | Retrying | "Reconnecting…" | Spinner | `--warn` |
+| Failed | "Could not save this answer. Tell the exam team." | Warning triangle | `--warn` |
 
-Only Offline and Retrying use colour, and they also change the words and the icon. The indicator uses `role="status"` with `aria-live="polite"`. It announces only changes into Offline, Retrying, and back to Saved, never every save.
+Offline, Retrying and Failed use colour, and they also change the words and the icon. A separate screen-reader status region announces only changes into Offline, Retrying or Failed, and the return to Saved after one of those states; ordinary Waiting/Saving/Saved changes while typing are not announced. If IndexedDB is unavailable, Offline instead says **"Offline. Keep this window open. Reconnect to save your answers."**
 
 ### 4.6 Banner
 
@@ -331,7 +332,7 @@ Tailwind v4 maps the tokens through CSS `@theme` in `styles/tokens.css`, so clas
 
 | # | Where | Edit |
 |---|---|---|
-| 1 | 2D.4 | Replace "green/yellow/orange states" with the five states and words in Section 2A §4.5 |
+| 1 | 2D.4 | Replace "green/yellow/orange states" with the six states and words in Section 2A §4.5 |
 | 2 | 2D.3 | Timer states and live-region rules from §4.4 |
 | 3 | 2D.2 | MCQ option spec from §4.3 (letters by position, row is the label, 56 px) |
 | 4 | 3A.10 | Overlay spec from §4.8 |

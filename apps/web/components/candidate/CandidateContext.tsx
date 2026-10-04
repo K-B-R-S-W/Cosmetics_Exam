@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { routeFor } from "@/lib/candidate-routing";
 import type { ApiErrorPayload, CandidateMe, PaperBody, StateBody } from "@/lib/candidate-types";
+import { getAnswerDraftStore } from "@/lib/indexeddb";
 
 export class CandidatePaperError extends Error {
   constructor(readonly code: string, readonly status: number) {
@@ -32,7 +33,7 @@ interface CandidateContextValue {
   setCheckPassed(value: boolean): void;
   refreshState(): Promise<StateBody | null>;
   loadMe(): Promise<CandidateMe>;
-  loadPaper(): Promise<PaperBody>;
+  loadPaper(force?: boolean): Promise<PaperBody>;
   resetCandidateSession(): void;
 }
 
@@ -55,8 +56,10 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   const paperPromise = useRef<Promise<PaperBody> | null>(null);
   const stateLoaded = useRef(false);
   const sessionGeneration = useRef(0);
+  const activeAttemptId = state?.attempt.id;
 
   const resetCandidateSession = useCallback(() => {
+    if (activeAttemptId) void getAnswerDraftStore().clearAttempt(activeAttemptId);
     sessionGeneration.current += 1;
     setState(null);
     setMe(null);
@@ -68,7 +71,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     paperPromise.current = null;
     stateLoaded.current = false;
     sessionStorage.removeItem("identityConfirmed");
-  }, []);
+  }, [activeAttemptId]);
 
   const refreshState = useCallback(async () => {
     const response = await fetch("/api/exam/state", { cache: "no-store" });
@@ -106,8 +109,12 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     return mePromise.current;
   }, []);
 
-  const loadPaper = useCallback(async () => {
-    if (paper) return paper;
+  const loadPaper = useCallback(async (force = false) => {
+    if (force) {
+      paperPromise.current = null;
+      setPaper(null);
+    }
+    if (paper && !force) return paper;
     if (!paperPromise.current) {
       const generation = sessionGeneration.current;
       paperPromise.current = fetch("/api/exam/paper", { cache: "no-store" })
@@ -167,6 +174,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   }, [decision, pathname, router]);
 
   useEffect(() => {
+    if (pathname === "/exam") return;
     const frame = requestAnimationFrame(() => {
       document.querySelector<HTMLElement>("h1")?.focus();
       const heading = document.querySelector("h1")?.textContent?.trim() || "Online exam";

@@ -36,4 +36,15 @@ describe("Timer", () => {
     render(<Timer deadline="2026-10-04T10:30:00.000Z" onExpired={expired} />);
     expect(expired).toHaveBeenCalledTimes(1);
   });
+
+  it("can expire again after the deadline is extended", () => {
+    const expired = vi.fn();
+    nowMs = Date.parse("2026-10-04T10:30:00.000Z");
+    const view = render(<Timer deadline="2026-10-04T10:30:00.000Z" onExpired={expired} />);
+    expect(expired).toHaveBeenCalledTimes(1);
+    view.rerender(<Timer deadline="2026-10-04T10:45:00.000Z" onExpired={expired} />);
+    nowMs = Date.parse("2026-10-04T10:45:00.000Z");
+    view.rerender(<Timer deadline="2026-10-04T10:45:00.000Z" onExpired={expired} />);
+    expect(expired).toHaveBeenCalledTimes(2);
+  });
 });

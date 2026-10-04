@@ -26,6 +26,7 @@ export function Timer({ deadline, onExpired }: { deadline: string | null; onExpi
   const [announcement, setAnnouncement] = useState("");
 
   useEffect(() => {
+    if (remainingMs > 0) expired.current = false;
     if (remainingMs === 0 && deadline && !expired.current) {
       expired.current = true;
       onExpired?.();

@@ -53,7 +53,7 @@ export function QuestionCard({
           ) : (
             // The URL is always the authenticated same-origin candidate image route.
             // eslint-disable-next-line @next/next/no-img-element
-            <img key={imageAttempt} src={question.image.url} alt={question.image.alt_text} className="h-auto max-w-full" onError={() => setImageFailed(true)} />
+            <img key={imageAttempt} src={question.image.url} alt={question.image.alt_text} className="max-h-[60dvh] h-auto max-w-full object-contain" onError={() => setImageFailed(true)} />
           )}
         </div>
       ) : null}

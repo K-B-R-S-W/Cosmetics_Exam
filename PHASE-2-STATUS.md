@@ -1,8 +1,8 @@
 # Phase 2 status
 
-**Status:** Batches 1 and 2 locally complete; Supabase-backed manual verification and load timing pending
+**Status:** Phase 2 locally complete except task 2F.5 (worker scheduler); credential-backed manual verification and load timing pending
 
-This record covers implementation-plan tasks 2A.1 through 2A.8 and 2B.1 through 2B.6 within the explicitly approved Batch 1 scope.
+This record covers the locally implemented Phase 2 candidate flow. Task 2F.5 has its own upcoming Gate 1 and no worker application exists yet.
 
 | Task | Local status | Note |
 |---|---|---|
@@ -53,10 +53,10 @@ The same script's Argon-only mode measured one policy hash at **24.6 ms** and on
 | 2D.1 Exam frame | Complete for Batch 2 | `100dvh`, overscroll prevention, fixed regions, browser-Back containment, free/sequential layouts, and client-side transitions |
 | 2D.2 Question renderer | Complete | Candidate-safe rich text, MCQ order, written input, optional authenticated images, Sinhala language attributes, and marks |
 | 2D.3 Timer | Complete | Server-clock offset, per-attempt deadline, zero clamp, token states, and announcements only at 30/10/5/1 minutes |
-| 2D.4 Save indicator | Deliberately deferred | It truthfully says "Answers are not saved yet (Phase 2 batch 3)" instead of displaying a false Saved state |
-| 2D.5–2D.6 Answer inputs | Complete for Batch 2 | Values and flags are React-memory-only; there is no answer network request or browser persistence |
-| 2D.7 Sequential Next | Deliberately disabled | Section 3 sends only the current sequential question. Batch 3 adds the atomic Next route before this control can advance safely |
-| 2D.8 Free question list | Complete for Batch 2 | Local navigation, word-and-icon status, flags, portrait drawer, and local review summary; final Submit is disabled |
+| 2D.4 Save indicator | Complete | Word-and-icon waiting, saving, saved, offline, retrying and failed states; only problem transitions and recovery are announced |
+| 2D.5–2D.6 Answer inputs | Complete | IndexedDB-first persistence, server autosave, revision recovery, durable/degraded offline behavior, and saved flags |
+| 2D.7 Sequential Next | Complete | Blank-answer confirmation, cleared-answer save, double-tap guard, idempotent server advance and current-question resync |
+| 2D.8 Free question list | Complete | Local navigation with a bounded flush, word-and-icon status, flags, review summary, and final Submit flow |
 | 2D.9 Touch layout | Complete locally | Existing tokens, 44 px controls, tablet drawer breakpoint, `100dvh`, and no hover-only action |
 
 ### Database/network cost
@@ -71,17 +71,24 @@ The same script's Argon-only mode measured one policy hash at **24.6 ms** and on
 
 The route calculates the deadline with the same `attemptDeadline()` and `examPhase()` helpers as the state builder and returns `409 exam_closed` before `generate_paper` when the deadline has passed. The database function does not repeat that deadline check, so a request that crosses the deadline in the milliseconds between the route check and the RPC can still create the paper. The resulting screen has a timer already clamped to zero and grants no extra answering time; the later deadline auto-submit in plan 2F.5 closes the attempt. This accepted race must be revisited during the Phase 6 review.
 
-### Explicit Batch 3 deferrals
+## Batch 3: autosave, navigation and submit
 
-- `/api/answers`, autosave, IndexedDB/offline queue, real save indicator, and persisted flags.
-- `/api/exam/next`, sequential advancement, blank-answer confirmation, and double-tap/server-idempotency handling.
-- `/api/exam/submit`, time-up flushing, final Submit behavior, and the completed Done screen.
-- Batch 3 / task 3B.4 must re-derive `locallyExpired` from fresh server state; `extra_minutes` granted after a local lock must unlock the screen.
-- Until those exist, the screen always shows "Answers are not saved yet (Phase 2 batch 3)", locks at zero without claiming to send anything, and disables sequential Next and final Submit.
+| Task | Local status | Note |
+|---|---|---|
+| 2E.1 IndexedDB | Complete | Per-attempt drafts, memory degradation, StrictMode-safe idempotent restore, and input gating until ready |
+| 2E.2–2E.3 Autosave/retry | Complete | 1 s debounce, 10 s periodic save, latest-wins coalescing, revision-aware reconnect merge, transient backoff and failed-draft retention |
+| 2E.4 Answers API | Complete | 96 KiB request cap; the 20,000-character Zod rule accepts maximum-length UTF-8 Sinhala text |
+| 2F.1–2F.2 Submit | Complete | Manual/auto hints, server-derived reason, up to 200 pending answers at concurrency 8, exact dialog copy, deadline lock and 15 s client retry window |
+| 2F.3 Done | Complete | Reason-specific confirmation, no scores, local-draft cleanup, media/fullscreen cleanup and one logout call |
+| 2F.4 Reconnect | Complete locally | Same attempt/paper plus server-vs-device revision merge; server wins when another device is ahead |
+| 2F.5 Worker scheduler | **Deferred** | Requires its own Gate 1. A closed tab is not server-side auto-submitted until this task exists |
+| 2F.6 Sequential Next | Complete | No-grace route check, five database calls on advancement, direct last-answer save and no `submit_now` |
+
+The temporary exam-state mechanism is one replaceable 10-second poll. It continues while locked, backs off silently offline, stops when `/done` unmounts `/exam`, and is supplemented by an immediate refresh after successful Next. It costs two database round trips per poll, including authentication: at 23 candidates that is about **138 database calls per minute** (23 × 6 polls × 2 calls), excluding Next and save traffic. Task 3B.4 replaces this hook with heartbeat without adding a second poll.
 
 ### Reconciled specification differences
 
-- Plan 2D.4's green/yellow/orange wording is superseded by Section 2A's words-and-icons rule; Batch 2 cannot truthfully display any saved state.
+- Plan 2D.4's former green/yellow/orange wording is superseded by Section 2A's words-and-icons rule. Batch 2 used a truthful placeholder; Batch 3 now supplies the real six-state indicator.
 - Section 2B's full exam flow assumes the 2E/2F endpoints. The approved Batch 2 boundary keeps answer/navigation state in memory and disables actions that require those endpoints.
 - Section 3's free-mode rule wins over its JSON example: `PaperBody.current_position` is `null` in free mode and is ignored by the free UI.
 - Sequential mode receives only its current question, so later questions are not exposed merely to simulate local Next.
@@ -90,7 +97,26 @@ The route calculates the deadline with the same `attemptDeadline()` and `examPha
 - The answer limit follows the specific Section 2B/API rule: warning from 19,000 characters and a hard stop at 20,000.
 - Paper loading classifies draft/scheduled as `exam_not_live`, but ended/finalized/force-ended and expired attempts as `exam_closed`. This prevents the closed in-progress route guard from bouncing `/exam` to `/waiting` and back.
 - Transient paper failures still retry every five seconds. After six consecutive failures both waiting and exam loading show "This is taking longer than expected. Tell the exam team if this continues." while quiet retries continue; a successful load resets the counter.
-- Camera, fullscreen, heartbeat, proctoring/events, autosave, announcements, worker changes, and the finished Done page remain outside this batch.
+- Camera, fullscreen, heartbeat, proctoring/events, announcements and worker changes remain outside this batch. Autosave and the finished Done page are now implemented.
+
+### Batch 3 accepted limitations and races
+
+- `POST /api/exam/next` checks the deadline before `advance_position`, but the database RPC does not repeat it. A request crossing the boundary by milliseconds can advance once; the screen immediately locks from the timer or next state poll and no extra answering time is granted. Revisit with the paper-route race during Phase 6.
+- Without task 2F.5, a candidate who closes the page cannot be auto-submitted by the server. The Phase 2 done-when line's server-side auto-submit outcome therefore remains unmet until the worker gate.
+- A force-end is observed through state refresh. The client submits immediately on observation, so polling delay consumes part of the 15-second collection window; the future worker remains the authoritative closer for disconnected candidates.
+
+### Batch 3 manual checklist
+
+1. Type Sinhala and English answers, wait for `Saved HH:mm`, reload, and verify the same answers and flags return.
+2. Go offline while typing. Verify durable storage copy, reconnect, and confirm the newest edit saves. Repeat with IndexedDB disabled and verify the keep-window-open copy.
+3. Open the same attempt in a second browser, save a newer revision there, then reconnect the first browser. Verify the newer server answer wins.
+4. In sequential mode, save text, clear it, choose Next, confirm the blank warning, and verify the server answer is blank before the next question appears. Double-click Next and verify only one advance.
+5. In free mode, review unanswered/flagged questions and verify the exact Submit dialog. Simulate one failed answer save and confirm submit still completes with that draft in `pending_answers`.
+6. Let the timer reach zero. Verify all inputs lock, pending answers flush, submit uses the `auto` hint, and success reaches Done. Test `collection_closed` and verify the terminal unsent-answer notice.
+7. Force-end while typing. Verify **The exam has ended**, immediate final submission, and the Done page's forced reason after the server derives it.
+8. Grant extra minutes after a local lock and verify the next state poll unlocks the screen and the timer uses the new deadline.
+9. Verify question images stay within about 60% of viewport height and the Waiting Room manual Retry appears after eight seconds in the unexpected-phase branch.
+10. Throttle the network and verify the 10-second state poll backs off without an additional banner, while autosave alone communicates connection state.
 
 ### Manual review additions
 

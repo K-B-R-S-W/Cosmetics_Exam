@@ -126,6 +126,9 @@ export function WaitingRoom() {
         setUnexpectedPhase(true);
         recordFailure();
         setPaperLoad("transient");
+        if (retryVisibleTimer.current === null) {
+          retryVisibleTimer.current = window.setTimeout(() => setShowPaperRetry(true), 8000);
+        }
       }
     }
   }, [loadPaper, recordFailure, refreshState, resetFailures, router]);

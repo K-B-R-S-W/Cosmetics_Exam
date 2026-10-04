@@ -34,42 +34,212 @@ function paper(mode: "free" | "sequential" = "free"): PaperBody {
   return { server_time: "2026-10-04T10:00:00.000Z", navigation_mode: mode, total_questions: 2, current_position: mode === "free" ? null : 0, questions: mode === "free" ? questions : [questions[0]!], answers: {} };
 }
 
+function json(body: unknown, status = 200) {
+  return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
+}
+
 beforeEach(() => {
   mocks.push.mockReset();
   const value = paper();
   mocks.context = { state: state(), me: { candidate: { full_name: "Candidate", mer_code: "TEST" } }, paper: value, loadMe: vi.fn(), loadPaper: vi.fn().mockResolvedValue(value), refreshState: vi.fn().mockResolvedValue(state()) };
-  vi.stubGlobal("fetch", vi.fn());
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/answers") return json({ result: "saved", server_time: "2026-10-04T10:00:00.000Z" });
+    if (url === "/api/exam/submit") return json({ submitted: true, already_submitted: false, save_results: [], server_time: "2026-10-04T10:00:00.000Z" });
+    throw new Error(`Unexpected request ${url}`);
+  }));
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("ExamScreen", () => {
-  it("keeps free-mode answers and navigation in memory and ignores current_position", () => {
+  it("saves free-mode answers, navigates locally, and ignores current_position", async () => {
     const value = { ...paper(), current_position: 99 };
     mocks.context.paper = value;
     mocks.context.loadPaper = vi.fn().mockResolvedValue(value);
     render(<ExamScreen />);
     expect(screen.getByText("Candidate · TEST")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Question 1" })).toBeTruthy();
+    await waitFor(() => expect((screen.getAllByRole("radio")[0] as HTMLInputElement).disabled).toBe(false));
     fireEvent.click(screen.getAllByRole("radio")[0]!);
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    expect(screen.getByRole("heading", { name: "Question 2" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Question 2" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Your answer"), { target: { value: "Synthetic answer" } });
     fireEvent.click(screen.getByRole("button", { name: "Review and submit" }));
     expect(screen.getByRole("heading", { name: "Review your answers" })).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Submit exam" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId("save-indicator").textContent).toContain("Waiting to save");
-    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Submit exam" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(globalThis.fetch).toHaveBeenCalledWith("/api/answers", expect.anything());
   });
 
-  it("shows only the current sequential question and disables Next", () => {
+  it("shows only the current sequential question and gates Next until local restore is ready", async () => {
     const value = paper("sequential");
     mocks.context.paper = value;
     mocks.context.loadPaper = vi.fn().mockResolvedValue(value);
     render(<ExamScreen />);
     expect(screen.getByText("Question 1 of 2")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Next question" }) as HTMLButtonElement).disabled).toBe(true);
+    const next = screen.getByRole("button", { name: "Next question" }) as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+    await waitFor(() => expect(next.disabled).toBe(false));
     expect(screen.queryByRole("button", { name: "Previous" })).toBeNull();
+  });
+
+  it("confirms a cleared answer through /api/answers before sequential Next", async () => {
+    const value = paper("sequential");
+    value.questions = [{ id: "q1", position: 0, type: "written", body_html: "<p>Explain</p>", image: null, marks: 1 }];
+    value.answers = { q1: { answer_text: "Saved text", selected_option_id: null, flagged: false, revision: 2, saved_at: "2026-10-04T09:00:00Z" } };
+    mocks.context.paper = value;
+    mocks.context.loadPaper = vi.fn().mockResolvedValue(value);
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url === "/api/answers") return json({ result: "saved", server_time: "2026-10-04T10:00:00Z" });
+      if (url === "/api/exam/next") return json({ result: "advanced", position: 1, total_questions: 2, question: { id: "q2", position: 1, type: "written", body_html: "<p>Second</p>", image: null, marks: 1 }, answer: null, server_time: "2026-10-04T10:00:01Z" });
+      throw new Error(url);
+    }));
+    render(<ExamScreen />);
+    const answer = await screen.findByLabelText("Your answer") as HTMLTextAreaElement;
+    await waitFor(() => expect(answer.disabled).toBe(false));
+    fireEvent.change(answer, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next question" }));
+    expect(screen.getByRole("dialog", { name: "Move on without an answer?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue without an answer" }));
+    expect(await screen.findByRole("heading", { name: "Question 2" })).toBeTruthy();
+    expect(calls.slice(0, 2)).toEqual(["/api/answers", "/api/exam/next"]);
+    const answerCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/answers");
+    expect(JSON.parse(String(answerCall?.[1]?.body))).toMatchObject({ answer_text: "" });
+    expect(mocks.context.refreshState).toHaveBeenCalled();
+  });
+
+  it("uses the Section 2B submit dialog copy and includes dirty failed drafts", async () => {
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/answers") return json({ error: { code: "payload_too_large", message: "Too large" } }, 413);
+      if (url === "/api/exam/submit") return json({ submitted: true, already_submitted: false, save_results: [{ question_id: "q1", result: "validation_failed" }], server_time: "2026-10-04T10:00:00Z" });
+      throw new Error(`${url} ${String(init?.body)}`);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    render(<ExamScreen />);
+    await waitFor(() => expect((screen.getAllByRole("radio")[0] as HTMLInputElement).disabled).toBe(false));
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
+    await waitFor(() => expect(screen.getByTestId("save-indicator").textContent).toContain("Could not save"));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.change(await screen.findByLabelText("Your answer"), { target: { value: "Answer" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review and submit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit exam" }));
+    const dialog = screen.getByRole("dialog", { name: "Submit your exam?" });
+    expect(dialog.textContent).toContain("You can't change your answers after you submit.");
+    fireEvent.click(screen.getAllByRole("button", { name: "Submit exam" })[1]!);
+    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/done"));
+    const submitCall = fetcher.mock.calls.find(([url]) => String(url) === "/api/exam/submit");
+    const submitted = JSON.parse(String(submitCall?.[1]?.body));
+    expect(submitted.pending_answers).toEqual(expect.arrayContaining([expect.objectContaining({ question_id: "q1" })]));
+  });
+
+  it("uses keep-window-open submit failure copy when durable storage is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => String(input) === "/api/exam/submit"
+      ? Promise.reject(new TypeError("offline"))
+      : json({ result: "saved", server_time: "2026-10-04T10:00:00Z" })));
+    render(<ExamScreen />);
+    await waitFor(() => expect((screen.getAllByRole("radio")[0] as HTMLInputElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByRole("heading", { name: "Question 2" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review and submit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit exam" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Submit exam" })[1]!);
+    expect(await screen.findByText("We couldn't submit yet. Keep this window open and try again.")).toBeTruthy();
+  });
+
+  it("locks at the deadline and submits with the auto hint", async () => {
+    const expired = { ...state(), attempt: { ...state().attempt, deadline: "2026-10-04T10:00:00.000Z" } };
+    mocks.context.state = expired;
+    mocks.context.refreshState = vi.fn().mockResolvedValue({ ...expired, phase: "submitted", attempt: { ...expired.attempt, status: "submitted", submit_reason: "auto" } });
+    render(<ExamScreen />);
+    expect(await screen.findByRole("heading", { name: "Time is up" })).toBeTruthy();
+    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/done"));
+    const submitCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/exam/submit");
+    expect(JSON.parse(String(submitCall?.[1]?.body))).toMatchObject({ reason: "auto" });
+  });
+
+  it("shows the terminal notice when the collection window is closed", async () => {
+    const expired = { ...state(), attempt: { ...state().attempt, deadline: "2026-10-04T10:00:00.000Z" } };
+    mocks.context.state = expired;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => String(input) === "/api/exam/submit"
+      ? json({ error: { code: "collection_closed", message: "Closed" } }, 409)
+      : json({ result: "saved", server_time: "2026-10-04T10:00:00Z" })));
+    render(<ExamScreen />);
+    expect(await screen.findByText("Time is up. Some answers could not be sent. Keep this page open and tell the exam team.")).toBeTruthy();
+    expect(mocks.push).not.toHaveBeenCalledWith("/done");
+  });
+
+  it("unlocks after fresh state grants extra time", async () => {
+    const expired = { ...state(), attempt: { ...state().attempt, deadline: "2026-10-04T10:00:00.000Z" } };
+    mocks.context.state = expired;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+    const view = render(<ExamScreen />);
+    expect(await screen.findByRole("heading", { name: "Time is up" })).toBeTruthy();
+    mocks.context.state = { ...expired, phase: "live", attempt: { ...expired.attempt, extra_minutes: 15, deadline: "2026-10-04T10:15:00.000Z" } };
+    view.rerender(<ExamScreen />);
+    expect(await screen.findByRole("heading", { name: "Question 1" })).toBeTruthy();
+  });
+
+  it("locks on a force-end and lets the server derive forced from an auto hint", async () => {
+    const forced = { ...state("in_progress", "closed"), exam: { ...state().exam, status: "live" as const, force_ended: true } };
+    mocks.context.state = forced;
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      void input;
+      void init;
+      return new Promise<Response>(() => undefined);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    render(<ExamScreen />);
+    expect(await screen.findByRole("heading", { name: "The exam has ended" })).toBeTruthy();
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/exam/submit", expect.anything()));
+    const submitCall = fetcher.mock.calls.find(([url]) => String(url) === "/api/exam/submit");
+    expect(JSON.parse(String(submitCall?.[1]?.body))).toMatchObject({ reason: "auto" });
+  });
+
+  it("locks when sequential Next returns exam_closed", async () => {
+    const value = paper("sequential");
+    mocks.context.paper = value;
+    mocks.context.loadPaper = vi.fn().mockResolvedValue(value);
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/answers") return json({ result: "saved", server_time: "2026-10-04T10:00:00Z" });
+      if (url === "/api/exam/next") return json({ error: { code: "exam_closed", message: "Closed" } }, 409);
+      if (url === "/api/exam/submit") return new Promise<Response>(() => undefined);
+      throw new Error(url);
+    }));
+    render(<ExamScreen />);
+    await waitFor(() => expect((screen.getAllByRole("radio")[0] as HTMLInputElement).disabled).toBe(false));
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Next question" }));
+    expect(await screen.findByRole("heading", { name: "Time is up" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Question 2" })).toBeNull();
+  });
+
+  it("guards a sequential double-tap and accepts an already_advanced lost-reply result", async () => {
+    const value = paper("sequential");
+    mocks.context.paper = value;
+    mocks.context.loadPaper = vi.fn().mockResolvedValue(value);
+    let resolveNext!: (response: Response) => void;
+    const fetcher = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/answers") return json({ result: "saved", server_time: "2026-10-04T10:00:00Z" });
+      if (url === "/api/exam/next") return new Promise<Response>((resolve) => { resolveNext = resolve; });
+      throw new Error(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    render(<ExamScreen />);
+    await waitFor(() => expect((screen.getAllByRole("radio")[0] as HTMLInputElement).disabled).toBe(false));
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/answers", expect.anything()));
+    const next = screen.getByRole("button", { name: "Next question" });
+    fireEvent.click(next);
+    fireEvent.click(next);
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/exam/next")).toHaveLength(1);
+    resolveNext(await json({ result: "already_advanced", position: 1, total_questions: 2, question: { id: "q2", position: 1, type: "written", body_html: "<p>Second</p>", image: null, marks: 1 }, answer: null, server_time: "2026-10-04T10:00:01Z" }));
+    expect(await screen.findByRole("heading", { name: "Question 2" })).toBeTruthy();
   });
 
   it("shows the ended screen for acknowledged exam_closed", async () => {
@@ -82,6 +252,7 @@ describe("ExamScreen", () => {
   });
 
   it("keeps an in-progress exam_closed attempt locked with no questions", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
     mocks.context.paper = null;
     mocks.context.state = state("in_progress");
     mocks.context.loadPaper = vi.fn().mockRejectedValue(new CandidatePaperError("exam_closed", 409));
@@ -89,7 +260,7 @@ describe("ExamScreen", () => {
     render(<ExamScreen />);
     expect(await screen.findByRole("heading", { name: "Time is up" })).toBeTruthy();
     expect(screen.queryByText("Choose")).toBeNull();
-    expect(screen.getByTestId("save-indicator").textContent).toContain("Waiting to save");
+    expect(screen.getByTestId("save-indicator").textContent).toContain("Saved");
     expect(mocks.push).not.toHaveBeenCalled();
     expect(mocks.context.loadPaper).toHaveBeenCalledTimes(1);
   });

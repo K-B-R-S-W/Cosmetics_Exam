@@ -80,7 +80,7 @@ All handlers use the **service-role** Supabase client after the auth check. The 
 The admin layout's authorization check runs only on full loads; client-side navigation can reuse the mounted layout, so it is not an authorization boundary for page data requests or route handlers. Every admin page's own data-access function and every `/api/admin/*` handler must call `requireAdmin()` or `requireSuperAdmin()` itself before loading or changing data. Do not rely on the layout or Proxy for authorization.
 
 ### 1.4 Limits and platform
-- Body limits: 64 KB by default. `POST /api/events` 200 KB. Question routes 200 KB. Candidate import 500 KB. `POST /api/admin/question-images` accepts one multipart upload whose decoded file is at most **4 MiB**; reject it before buffering when `Content-Length` exceeds **4 MiB**. Multipart overhead therefore makes the practical maximum source file slightly smaller than 4 MiB. This stays below Vercel Functions' 4.5 MB request-payload limit.
+- Body limits: 64 KB by default. `POST /api/answers` and `POST /api/exam/next` are 96 KB so a 20,000-character UTF-8 Sinhala answer is governed by Zod rather than a smaller byte cap. `POST /api/exam/submit` is 16 MiB for up to 200 such pending answers. `POST /api/events` 200 KB. Question routes 200 KB. Candidate import 500 KB. `POST /api/admin/question-images` accepts one multipart upload whose decoded file is at most **4 MiB**; reject it before buffering when `Content-Length` exceeds about 4 MiB plus 64 KiB multipart overhead. The processed file remains at most 4 MiB.
 - `export const maxDuration = 30` on the import, grade, force-end and snapshot-purge routes *(verify the Hobby limit)*.
 - Rate limits: login (1.5) and events (30 per minute per attempt). Nothing else needs one at 23 candidates.
 - Client IP for `login_attempts` and `sessions`: first value of `x-forwarded-for`.
@@ -322,6 +322,7 @@ Starts or resumes the paper. Calls `rpc('generate_paper', { p_attempt_id })`, wh
 ```
 - `free`: all questions in paper order, and saved answers for all of them. `current_position` is `null`.
 - `sequential`: exactly **one** question, the one at `attempts.current_position`, and its saved answer if any. Nothing later is sent.
+- Each candidate-safe `SavedAnswer` contains `answer_text`, `selected_option_id`, `flagged`, `revision`, and `saved_at` from `answers.updated_at`. No answer-key data is returned.
 - Implementation: after `generate_paper`, fetch `questions` and `mcq_options` by id with explicit columns (`id, type, body_html, image_path, image_alt_text, marks` and `id, text_html`). Order options by the saved `option_order`. Never join `answer_keys`. When `image_path` exists, expose only the authenticated `/api/question-images/{questionId}` URL plus alt text; never expose the private bucket path or a service key.
 
 **`GET /api/question-images/[questionId]`** verifies that the authenticated candidate's `attempt_questions` contains the question, downloads the object from the private `question-images` bucket with the service role, and streams it with the stored MIME type, `X-Content-Type-Options: nosniff`, and a private cache policy. It returns `404` for both a question outside the paper and a missing image, so paper membership cannot be probed. Admin previews use the admin image route or a short-lived signed URL after `requireAdmin()`.
@@ -347,7 +348,7 @@ Request:
   "revision": 7
 }
 ```
-`revision` is an integer of 1 or more. Over-long text is rejected with `400 validation_failed` before the database sees it (the table has a length check that would otherwise surface as a 500).
+`revision` is an integer of 1 or more. Over-long text is rejected with `400 validation_failed` before the database sees it (the table has a length check that would otherwise surface as a 500). Paper answers also return `answers.updated_at` as `saved_at`; candidates see it formatted as `Saved HH:mm` in Asia/Colombo time.
 
 Calls `rpc('save_answer', ...)`. Mapping:
 
@@ -361,9 +362,10 @@ Calls `rpc('save_answer', ...)`. Mapping:
 | `not_found` | 404 | `not_found` |
 
 **Revision rule for the client (important):**
-- On load, set each question's counter to `max(server revision from the paper response, local IndexedDB revision)`, and use `counter + 1` for every save.
+- On load, a dirty local draft wins only when the server revision equals the last revision this device confirmed. If the server revision is ahead, another device saved and the server answer wins; discard the older local draft. Use one more than the retained revision for the next save.
 - On `stale_revision`: if `server_revision >= the revision I sent`, either an older request arrived late (harmless) or my counter was behind. Set the counter to `server_revision` and re-send the latest local value once with `server_revision + 1`.
 - `server_revision` is read with one extra select, only in the stale case.
+- Retry automatically only for network failures and 5xx responses. `wrong_position`, `not_in_paper`, and `bad_option` drop that dirty revision; `wrong_position` refreshes state/current sequential question. Every other 4xx and a second consecutive `stale_revision` stop retrying until the value changes, remain dirty for `pending_answers`, and display the Failed indicator.
 
 ### 3.10 `POST /api/exam/next` — candidate (sequential mode)
 Request:
@@ -377,6 +379,8 @@ Request:
 }
 ```
 Calls `rpc('advance_position', ...)` and maps `out_result`:
+
+Before the RPC, the route applies the same `attemptDeadline()` / `examPhase()` boundary as state, with **no 15-second grace**. At or after closure it returns `409 exam_closed`. Answer saves and submit retain their database-backed collection grace.
 
 | `out_result` | HTTP | Body |
 |---|---|---|
@@ -402,7 +406,7 @@ Request:
 }
 ```
 - `reason`: `manual` (default) or `auto`. A candidate-supplied `forced` is rejected with `400`. When the exam is force-ended and still inside its 15-second collection window, the server ignores the requested reason and derives `forced` from `exams.force_ended_at`. Ordinary deadline expiry remains `auto`.
-- `pending_answers` (optional, at most 50 **per request**, not per paper): answers the client has not been able to send yet. This transport batch size does not limit question count. If more than 50 are queued, the client flushes earlier batches through `/api/answers` before this final request. The route calls `save_answer` for each provided item, then submits. In sequential mode only the current question can be saved, and the others come back as `wrong_position` in `save_results`.
+- `pending_answers` (optional, at most **200**): answers the client has not been able to send yet, each still limited to 20,000 characters. The client first drains individual saves through `/api/answers` and sends only the remainder. The route saves with concurrency at most 8, returns every per-answer result, and still calls `submit_attempt` when one or more saves fail. In sequential mode only the current question can be saved, and older items can return `wrong_position` in `save_results`.
 - Guard: the attempt must be `in_progress`. An `acknowledged` or `not_started` attempt gets `409 not_started`. A force-ended attempt may make this final request until `force_ended_at + 15 seconds`; later calls return `409 collection_closed`.
 - Then call `rpc('submit_attempt', { p_attempt_id, p_reason: effectiveReason })`, where `effectiveReason` is derived as above. It has no deadline check on purpose: the route performs the authorization/window checks before closing the attempt.
 
@@ -416,6 +420,8 @@ Request body: `{}` (empty is fine). Sent every 10 s from the waiting room and th
 - `update attempts set last_seen_at = now() where id = X and status in ('acknowledged','in_progress')`.
 - If the previous `last_seen_at` was more than 30 s ago and the attempt is `in_progress`: insert `RECONNECTED` (`counts = false`, `duration_ms` = the gap). This pairs with the worker's `DISCONNECTED` (section 7). Also run: `UPDATE violation_events SET meta = jsonb_set(meta, '{count_reason}', '"short_gap"') WHERE attempt_id = X AND type = 'DISCONNECTED' AND counts = false AND meta->>'count_reason' IS NULL AND id = (most recent DISCONNECTED for this attempt)`. The `IS NULL` guard prevents overwriting a `long_gap` that the worker's Pass 2 set in the same instant.
 - Response: the same `StateBody` as `GET /api/exam/state`. So the heartbeat is also the 5 to 10 s state poll that the waiting room needs as a backup for a missed Broadcast (2B.3), and the way a kicked client finds out (`401 session_revoked`, within 10 s).
+
+Until heartbeat task 3B.4 is built, `/exam` uses a single replaceable 10-second `GET /api/exam/state` hook with quiet offline backoff. It continues while deadline-locked, stops when `/done` unmounts the exam screen, handles session errors through the existing provider path, and refreshes immediately after successful sequential Next. Autosave does not add state reads.
 
 ### 3.13 `POST /api/events` — candidate
 One call per incident (Section 4 §3). This route also carries the snapshot.

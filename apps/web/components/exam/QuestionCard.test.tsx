@@ -32,6 +32,7 @@ describe("QuestionCard", () => {
 
   it("shows an image-unavailable state with Retry", () => {
     render(<QuestionCard question={{ ...base, type: "written", image: { url: "/api/question-images/q", alt_text: "Synthetic diagram" } }} answer={{ answer_text: null, selected_option_id: null, flagged: false }} disabled={false} onChange={vi.fn()} />);
+    expect(screen.getByAltText("Synthetic diagram").className).toContain("max-h-[60dvh]");
     fireEvent.error(screen.getByAltText("Synthetic diagram"));
     expect(screen.getByText("Image could not be loaded")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));

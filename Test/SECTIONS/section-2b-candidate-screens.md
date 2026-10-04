@@ -433,17 +433,19 @@ Replaces the content area. Heading **Review your answers**.
 | Submit | Any Submit exam | Submit your exam? | You can't change your answers after you submit. {n questions are not answered.} | **Submit exam** / **Keep working** |
 
 - The unanswered sentence appears only when something is blank, and counts only questions the paper contains.
-- **Submit flow** (2F.1, 2F.2, contract 3.11): the confirm button shows loading. The client waits for the autosave queue to drain (at most 3 s) and puts anything left into `pending_answers`, then sends `POST /api/exam/submit` with `reason: "manual"`. Success (including `already_submitted: true`) goes to `/done`. On a network error the dialog stays open with a message and the button re-enabled: "We couldn't submit yet. Your answers are saved. Try again." Failures never close the dialog by themselves.
+- **Submit flow** (2F.1, 2F.2, contract 3.11): the confirm button shows loading. The client waits for the autosave queue to drain (at most 3 s) and puts anything left—including dirty drafts whose automatic save is blocked after an unexpected 4xx—into `pending_answers`, then sends `POST /api/exam/submit` with `reason: "manual"`. Success (including `already_submitted: true`) goes to `/done`. On a network error the dialog stays open with a message and the button re-enabled: "We couldn't submit yet. Your answers are saved. Try again." When durable browser storage is unavailable, use **"We couldn't submit yet. Keep this window open and try again."** Failures never close the dialog by themselves.
 - Escape and **Keep working** close a dialog and return focus to the button that opened it.
 
 ### 7.7 Save and connection behaviour on this screen
 
 Follows Section 2A §4.5. In words:
 - Typing shows "Waiting to save" then "Saving…" then "Saved {time}".
-- No connection: "Offline. Answers are kept on this device. Reconnect to save them." plus the Warning icon. The timer and the text keep working. When the connection returns, queued answers send in order and the state goes back to Saved.
+- No connection: "Offline. Answers are kept on this device. Reconnect to save them." plus the Warning icon. If IndexedDB is unavailable, use **"Offline. Keep this window open. Reconnect to save your answers."** and never claim durable storage. The timer and the text keep working. When the connection returns, queued answers send in order and the state goes back to Saved.
+- Unexpected 4xx save failures remain dirty for final submit, stop retrying until the answer changes, and show **"Could not save this answer. Tell the exam team."** `wrong_position`, `not_in_paper`, and `bad_option` are permanent for that revision and are dropped; `wrong_position` also refreshes state and the current sequential question.
 - `stale_revision` and revision recovery (contract 3.9) are invisible to the candidate.
 - A `409 exam_closed` from a save locks the screen (§8.6).
 - A failed heartbeat shows no extra banner on the exam screen: the save indicator already says "Offline. Answers are kept on this device. Reconnect to save them." (on `/waiting` the banner in §6 applies).
+- Until heartbeat task 3B.4 replaces it, `/exam` uses one 10-second `GET /api/exam/state` poll. It continues while the screen is locked, backs off quietly during network failure, stops when `/done` unmounts the exam screen, and refreshes immediately after a successful sequential Next. Fresh state re-derives the local deadline lock, so a later `extra_minutes` deadline unlocks the screen. Autosaves do not trigger state refreshes.
 - In sequential mode, an autosave can arrive after the candidate has moved on and get `409 wrong_position` for the question they just left. The client drops that queued save silently, with no message and no retry, because the Next request already carried that answer. Any other `wrong_position` (the screen shows a question the server did not expect) reloads `GET /api/exam/paper` as in §7.3 step 6.
 
 ### 7.8 Paper loading errors (from `GET /api/exam/paper`)
@@ -519,12 +521,12 @@ Announcements are queued in `sent_at` order. Immediately before showing the next
 When the deadline passes (`phase: closed`, or the local clock passes the deadline), or a save returns `exam_closed`:
 
 1. All inputs, options and buttons become read-only. The timer shows "Time is up".
-2. A Notice appears: **Time is up. Sending your answers…**
+2. The locked screen says **Time is up** and **Keep this page open while your answers are submitted.** It does not claim that delivery has completed.
 3. The client flushes the autosave queue, then calls `POST /api/exam/submit` with `reason: "auto"` and any `pending_answers` (3.11). This only happens when the attempt is `in_progress`. For `not_started` or `acknowledged` the route guard in §1.1 shows the "This exam has ended." screen instead, because the submit route would answer `409 not_started`.
 4. On success (including `already_submitted`), go to `/done`.
-5. If the connection is down, the Notice becomes **Time is up. Reconnect to send your answers. Keep this page open. Answers can only be saved for a few seconds after time is up.** The client keeps retrying. (The server accepts saves for 15 seconds after the deadline, then refuses them. Anything still waiting on the device after that is not saved, so the text must not promise otherwise.) If the server submits first (the worker does after the grace period), the next heartbeat returns `submitted` and the client goes to `/done`.
+5. The client retries during the 15-second collection grace. Once the route returns `collection_closed`, or the grace expires with unsent answers, show **"Time is up. Some answers could not be sent. Keep this page open and tell the exam team."** Anything still waiting on the device is not claimed as saved. After the deferred worker exists, a state poll that finds the attempt submitted moves to `/done`.
 
-When the exam team ends the exam (`exam_ended` Broadcast, then state `closed`), the same locked screen says **The exam has ended. Sending your answers…** The client immediately sends its current queued answers through `POST /api/exam/submit`; the server derives `reason = "forced"` from the force-ended exam rather than trusting the candidate payload. It retries during the 15-second force-end collection window. The worker then force-submits any remaining attempts from the latest answers already received, so partial written answers are retained and graded.
+When the exam team ends the exam (`exam_ended` Broadcast, then state `closed`), the locked heading says **The exam has ended**. The client immediately sends its current queued answers through `POST /api/exam/submit` with an `auto` hint; the server derives `reason = "forced"` from the force-ended exam rather than trusting the candidate payload. It retries during the 15-second force-end collection window. The deferred worker will later submit any remaining attempts from the latest answers already received, so partial written answers are retained and graded.
 
 ### 8.7 Tab switch or focus loss: warning toast
 
@@ -595,7 +597,7 @@ Same screen as 10.2 with the title **Please sign in again** and the body **Your 
 
 ### 10.4 Unexpected error (`500`)
 
-Banner (Warning): **Something went wrong on our side. Your answers are saved on this device. Trying again…** The client retries. After 30 s of failure it adds: "Tell the exam team if this stays."
+Banner (Warning): **Something went wrong on our side. Your answers are saved on this device. Trying again…** The client retries. If IndexedDB is unavailable, replace the storage claim with **"Something went wrong on our side. Keep this window open. Trying again…"** After 30 s of failure it adds: "Tell the exam team if this stays."
 
 ---
 
@@ -644,7 +646,7 @@ Banner (Warning): **Something went wrong on our side. Your answers are saved on 
 | 12 | New task | `app/(candidate)/layout.tsx` route guard from §1.1, including the reload exception |
 | 13 | New task | Signed-out and error screens §10 |
 | 14 | New task | The Sinhala `lang` detector for content (§11). No Sinhala string file: the interface is English only |
-| 15 | 2F.6 | The plan still says `last_question` returns `submit_now: true`. The contract returns `{ result: "last_question", position }`, and the client shows Submit exam. Change the plan row |
+| 15 | 2F.6 | Reconciled: `last_question` returns `{ result: "last_question", position }` with no `submit_now`, and the client shows Submit exam |
 | 16 | 2A.3 | Already says about 200 per IP. The contract line was changed to match |
 | 17 | 2B.3 | Add the 0:00 gap rule from §6 (poll every 3 s, "The exam is starting…") |
 | 18 | 2A and 2F | Route guard row for `acknowledged` with `closed` (§1.1): show the ended screen, no submit |
@@ -675,7 +677,7 @@ Banner (Warning): **Something went wrong on our side. Your answers are saved on 
 | 8.113 | Sequential Next | Blank answer shows the dialog; offline Next shows Reconnecting and does not advance; lost reply (`already_advanced`) shows the right question |
 | 8.114 | Last question | Next becomes Submit exam; typed answer is saved before submit |
 | 8.115 | Free mode | Drawer opens on a 768 px portrait tablet; flagged and unanswered show in words; summary lists both |
-| 8.116 | Time up | Deadline locks everything, shows "Sending…", reaches Done; offline at deadline keeps retrying and ends on Done when the worker submits |
+| 8.116 | Time up | Deadline locks everything, asks the candidate to keep the page open without claiming delivery, reaches Done on client submit; after 2F.5, an offline candidate also reaches Done when the worker submits |
 | 8.117 | Kick | Admin kicks a candidate: signed-out screen within 10 s, saved answers still there after signing in again |
 | 8.118 | Done | No marks shown, camera light turns off, fullscreen exits, reload goes to login |
 | 8.119 | Sinhala, mixed and Singlish | A Sinhala, a mixed Sinhala and English, and a Singlish question and answer render correctly on the exam screen, strip and dialogs. Typing Sinhala on the tablet works and is saved as typed. The Singlish answer has no spellcheck underline |
