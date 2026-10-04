@@ -6,6 +6,7 @@ export interface CandidateSessionData {
 
 export const CANDIDATE_SESSION_COOKIE = "exam_session";
 export const SESSION_GRACE_SECONDS = 2 * 60 * 60;
+const SESSION_READ_TTL_SECONDS = SESSION_GRACE_SECONDS + 60;
 
 function sessionSecret(): string {
   const value = process.env.SESSION_SECRET;
@@ -35,5 +36,17 @@ export function sessionOptionsForExam(durationMinutes: number): SessionOptions {
       path: "/",
       maxAge: ttl - 60,
     },
+  };
+}
+
+/**
+ * iron-session 9 reads the expiry timestamp embedded in the sealed cookie.
+ * Its read-time ttl is not used to recalculate that timestamp, so routes can
+ * open a session without first querying the exam duration.
+ */
+export function candidateSessionReadOptions(): SessionOptions {
+  return {
+    ...sessionOptionsForExam(1),
+    ttl: SESSION_READ_TTL_SECONDS,
   };
 }
