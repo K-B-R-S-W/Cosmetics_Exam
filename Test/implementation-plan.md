@@ -88,9 +88,9 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | # | Task | Files |
 |---|---|---|
 | 1D.1 | Exam list page | `app/(admin)/admin/exams/page.tsx` |
-| 1D.2 | Create/edit exam form | `app/(admin)/admin/exams/[id]/page.tsx` — includes `questions_per_paper`, `shuffle`, `flag_threshold`, schedule. 🔧 **Convert Colombo time input to UTC** before storing. 🔧³ **Add `navigation_mode` toggle** (sequential / free). Locked once exam is live. 🔧¹⁹ `flag_threshold` defaults to **10**, range **1–100** (Section 4 §4.2) |
+| 1D.2 | Create/edit exam form | `app/(admin)/admin/exams/[id]/page.tsx` — includes `shuffle`, `flag_threshold`, and schedule. There is no fixed question count: every candidate receives every question the admin composes. 🔧 **Convert Colombo time input to UTC** before storing. 🔧³ **Add `navigation_mode` toggle** (sequential / free). Locked once exam is live. 🔧¹⁹ `flag_threshold` defaults to **10**, range **1–100** (Section 4 §4.2) |
 | 1D.3 | Assign candidates to exam | Same page or sub-page. 🔧⁶ **Assigning a candidate auto-creates their attempt** (DB trigger on `exam_candidates`). Unassigning removes the attempt only if still `not_started`. The admin live grid shows "Not joined" for all assigned candidates before anyone logs in. 🔧⁹ **Add `app/api/admin/exams/[id]/candidates/route.ts`** (GET, POST, DELETE). 🔧¹⁰ Unassign returns `200 { removed: [...], blocked: [...] }` (not 409) — tells the admin which candidates couldn’t be removed because their attempt has started |
-| 1D.4 | Exam API routes | `app/api/admin/exams/route.ts` — 🔧⁷ **Enforce `navigation_mode` lock server-side**: the update route must reject changes to `navigation_mode` (and `questions_per_paper`, `shuffle`, `duration_min`, `scheduled_start_at`) once the exam status is `live` or later. Without this, the UI-only lock (1D.2) is cosmetic. 🔧⁹ **Add `app/api/admin/exams/[id]/route.ts`** (GET, PATCH, DELETE). `status` only changes `draft` ↔ `scheduled` here |
+| 1D.4 | Exam API routes | `app/api/admin/exams/route.ts` — enforce settings locks server-side: navigation, shuffle, duration, scheduled time, instructions and practice status lock once live. `flag_threshold` remains editable through ended and locks at finalized; title remains editable. 🔧⁹ **Add `app/api/admin/exams/[id]/route.ts`** (GET, PATCH, DELETE). `status` only changes `draft` ↔ `scheduled` here |
 
 ### 1E — Question Builder (1 day)
 
@@ -105,7 +105,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 1E.7 | Question API routes | `app/api/admin/questions/route.ts`, `app/api/admin/answer-keys/route.ts` — 🔧⁸ **Lock questions once exam is live**: reject adding/deleting questions, changing question `type` or `body_html`, and adding/removing MCQ options. The schema cascades deletes, so deleting a question mid-exam silently removes it from every candidate’s paper and their answer. Adding a question wouldn’t appear in already-generated papers. Body text edits wouldn’t update screens that have already loaded. **Allow answer key edits** (`model_answer`, `grading_notes`, `calibration`) since they’re only used at grading time. Full request/response spec in Section 3 (API contracts). 🔧⁹ **Add `app/api/admin/questions/[id]/route.ts`** (PATCH, DELETE). `answer-keys/route.ts` is GET + PUT. 🔧¹⁰ **HTML allowlist** from Section 3 §4.3: `p, strong, em, u, s, ul, ol, li, br, sub, sup, span[style]`. Strip everything else via `sanitize-html` (1E.8) |
 | 1E.8 | Server-side HTML sanitization | 🔧 Use `sanitize-html` (not `dompurify`) — sanitize all HTML before DB write |
 
-**Done when:** an admin builds an exam with 40 questions (mixed MCQ + written), sets `questions_per_paper = 20`, assigns 23 candidates.
+**Done when:** an admin builds an exam with any number of mixed MCQ and written questions, assigns 23 candidates, and every candidate receives the complete composed paper.
 
 ---
 
@@ -137,12 +137,12 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 2B.5 | Exam state API (fallback) | `app/api/exam/state/route.ts` — 🔧²🔧⁹🔧¹⁰ Returns the same full state body as the heartbeat (server_time + exam + attempt). Heartbeat returns this same shape, so the waiting room doesn't need a separate poll |
 | ➕ 2B.6 | Consent / rules screen | `app/(candidate)/rules/page.tsx` | 🔧 Display: camera and audio are monitored live, snapshots are stored, and when they'll be deleted. 🔧² **Include specific deletion timeframe**. 🔧¹⁰ **Show the retention number from `/api/auth/me`** (14 days). 🔧³ **State which navigation mode applies** (sequential or free). 🔧⁵ **Include candidate setup instructions**: Laptops — use a Chrome Guest window, no second screen, camera and mic on. Tablets — Chrome only, "Desktop site" off, run the pre-exam check the day before (for first-time OS camera permissions). These instructions currently live only in the old main plan. Must be acknowledged before proceeding |
 
-### 2C — Paper Delivery + Question Pool (0.5 day)
+### 2C — Paper Delivery (0.5 day)
 
 | # | Task | Files |
 |---|---|---|
 | 2C.1 | Paper API | `app/api/exam/paper/route.ts` | 🔧³ **Mode-aware**: in `free` mode, return all questions. In `sequential` mode, return **only the current question** (by `current_position`) plus the total count ("Question 7 of 20"). 🔧⁹ **Options have no `label`** — the fixed `mcq_options.label` (a,b,c,d) would read "c,a,d,b" after shuffling. The UI letters options A,B,C… by position instead. **Return saved `revision`** for each answer so the client can resume its counter after reconnect |
-| 2C.2 | Question pool selection | 🔧🔧⁶ Call `supabase.rpc('generate_paper', { p_attempt_id })`. The DB function handles locking, atomic question selection, shuffle, option order, and moves the attempt to `in_progress`. If `attempt_questions` already exist, it returns the saved set (idempotent). Map raised exceptions: `not_acknowledged` → 403, `attempt_closed`/`exam_not_live` → 409, `exam_has_no_questions` → 409 |
+| 2C.2 | Complete paper creation | 🔧🔧⁶ Call `supabase.rpc('generate_paper', { p_attempt_id })`. The DB function atomically assigns every composed question, handles shuffle and option order, and moves the attempt to `in_progress`. If `attempt_questions` already exist, it returns the saved paper (idempotent). Map raised exceptions: `not_acknowledged` → 403, `attempt_closed`/`exam_not_live` → 409, `exam_has_no_questions` → 409 |
 | 2C.3 | Shuffle logic | 🔧⁶ **Handled inside `generate_paper()`** — if `shuffle` is enabled, question order and option order are both randomized atomically. The API route does not implement shuffle separately |
 
 ### 2D — Exam UI (1 day)
@@ -175,11 +175,11 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 2F.1 | Submit API | `app/api/exam/submit/route.ts` — 🔧⁶ Call `supabase.rpc('submit_attempt', { p_attempt_id, p_reason: 'manual' })`. The DB function is idempotent (returns `false` if already submitted). 🔧⁹ **Require `in_progress`** status — the DB function accepts `not_started` and `acknowledged` (for the scheduler), but the candidate submit route must reject those to prevent submitting from the waiting room. **Accept `pending_answers`** array: save each answer before submitting, so deadline-flush doesn’t race |
 | 🔧² 2F.2 | Manual submit + auto-submit | 🔧² **Manual "Submit Exam" button with confirm dialog** ("Are you sure? You cannot change your answers after submitting."). In sequential mode, the last question's Next button becomes this Submit button. Auto-submit on deadline: 🔧 **lock UI at deadline** (disable all inputs), flush answers within 15s grace, call submit with `p_reason = 'auto'` |
 | 2F.3 | Done page | `app/(candidate)/done/page.tsx` — "Submitted" confirmation |
-| 2F.4 | Reconnect flow | Login with same MER + ID → load existing attempt, saved answers, same question subset 🔧 **with same option order**, remaining time. 🔧³ **In sequential mode, resume at `current_position`** (not question 1). The paper API returns only that question |
+| 2F.4 | Reconnect flow | Login with same MER + ID → load existing attempt, saved answers, same complete paper with the same question and option order, remaining time. 🔧³ **In sequential mode, resume at `current_position`** (not question 1). The paper API returns only that question |
 | 2F.5 | Worker scheduler | `worker/src/scheduler.ts` — 30s loop: move scheduled→live exams (🔧 set `exams.ends_at`). 🔧⁴🔧⁶ **Exam state transitions**: read per-attempt deadlines from the `attempt_deadlines` view (`grace_deadline`). Force-submit each attempt after its own `grace_deadline` passes via `rpc('submit_attempt', { p_reason: 'forced' })`. Mark exam `ended` only after the **last** attempt's `grace_deadline`. Then mark `finalized` (also sets attempts `submitted → finalized`). The grading guard (6D.1) depends on `finalized` status |
 | 2F.6 | Next question API | 🔧³ `app/api/exam/next/route.ts` — 🔧⁶ Call `supabase.rpc('advance_position', { p_attempt_id, p_expected_position, p_question_id, p_answer_text, p_selected_option_id, p_revision })`. Map results: `advanced` → fetch question at `out_position` and return it in the same response; `already_advanced` → same (lost reply, safe retry); `out_of_sync` → reload current question; `last_question` → 🔧⁹ **save the answer first** (the DB function returns before saving on last question), then return `submit_now: true`; `closed` → lock UI; `wrong_question`/`not_sequential` → reload state |
 
-**Done when:** a test candidate gets 20 random questions from 40, answers some, disconnects, reconnects and sees the same 20 questions with saved answers and same shuffled option order, and gets auto-submitted at deadline. In sequential mode, reconnect resumes at the correct position and earlier questions can't be re-answered.
+**Done when:** a test candidate gets every composed question, answers some, disconnects, reconnects and sees the same paper with saved answers and the same shuffled question/option order, and gets auto-submitted at deadline. In sequential mode, reconnect resumes at the correct position and earlier questions can't be re-answered.
 
 ---
 
@@ -225,7 +225,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 3C.2 | Violation count badges | `components/admin/CandidateBadge.tsx` — 🔧🔧⁶ Read `attempts.violation_count` directly (DB trigger keeps it updated). 🔧¹⁹ **Red**: `violation_count >= flag_threshold`. **Amber**: `violation_count >= ceil(flag_threshold / 2)` and below red (Section 4 §7.1). Subscribe to `attempts` Realtime for live updates. **Toast**: when a tile turns red, show a short toast with the candidate's MER code |
 | 3C.3 | Realtime violation updates | Subscribe to `violation_events` Realtime changes |
 | ➕ 3C.4 | DISCONNECTED/RECONNECTED pairing | 🔧¹²🔧¹⁴🔧¹⁹ In the violation timeline, pair each `DISCONNECTED` row with its matching `RECONNECTED` row. Show `count_reason` meaning: `long_gap` (counted), `short_gap` (returned quickly), `overlap` (tab-switch already covers this), `reversed_by_focus` (was counted, then reversed), `dismissed`/`restored` (admin action with note). Group throttled pairs |
-| ➕ 3C.5 | Threshold control | 🔧¹⁹ A number field (1–100) on the live grid header that saves through the existing exam update route. Default for new exams: 5. The exam form (1D.2) keeps the same field. Changes are written to `admin_actions` with old and new value (Section 4 §7.1) |
+| ➕ 3C.5 | Threshold control | 🔧¹⁹ A number field (1–100) on the live grid header that saves through the existing exam update route. Default for new exams: 10. The exam form (1D.2) keeps the same field. Changes are written to `admin_actions` with old and new value (Section 4 §7.1) |
 
 **Done when:** every event type in §8.1 appears in the admin log with a snapshot, including split view and side panel cases. Alt-tabbing counts as 1 incident, not 3.
 
@@ -401,7 +401,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 7.2 | ~~Per-candidate detail page~~ | 🔧 **Removed** — duplicate of 6D.4 (`results/[attempt]/page.tsx`) |
 | 7.3 | Print/PDF page | `app/(admin)/admin/results/[attempt]/print/page.tsx` — print-styled, Noto Sans Sinhala, optional examiner answers. 🔧🔧⁷ **Reads from `current_scores`** (not raw `question_scores` — the raw table would show regraded or overridden marks incorrectly) |
 | 7.4 | Summary CSV export | `app/api/admin/results/export/route.ts` — all scores + which questions each candidate received. 🔧⁹🔧¹⁰ **Formula-injection guard**: prefix cell values starting with `=`, `+`, `-`, `@` with `'`. Include Sinhala names with UTF-8 BOM for Excel compatibility. 🔧¹⁹ **Add two columns** (Section 4 §7.3): `violations_counted` (`violation_count`) and `violations_logged` (count of all `violation_events` rows for the attempt). 🔧²¹ **Add column** (Section 5 §8.1): `unscored_count` placed after `needs_review_count` (count of written questions without a score row) |
-| 7.5 | Question subset indicator | Show which questions each candidate got (if pool used) |
+| 7.5 | Paper indicator | Show the complete ordered question list saved for the candidate |
 | ➕ 7.6 | Post-exam backup export | 🔧 Export results and PDFs. Copy to Google Drive immediately after the exam (free Supabase projects don't have reliable backups) |
 | ➕ 7.7 | Snapshot deletion | 🔧²🔧⁹ **Dual purge**: (1) `POST /api/admin/snapshots/purge` (super-admin route, `maxDuration = 30`), and (2) worker daily cron job calling the same shared function. Retention default = `SNAPSHOT_RETENTION_DAYS` = **14 days**. Deletes Storage objects and nulls the `snapshot_path` on `violation_events` rows. The rules screen promises this retention to staff |
 
@@ -424,7 +424,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | 8.5 | Test network drop | Disconnect for 2 min, reconnect |
 | 8.6 | Test LiveKit disconnect | Kill LiveKit → warning banner, exam continues |
 | 8.7 | Test multi-login | Same MER in two browsers |
-| 8.8 | Test question pool | Verify different candidates get different subsets; verify reconnect gets same subset 🔧 **with same option order** |
+| 8.8 | Test complete paper shuffle | Verify every candidate gets every composed question; when shuffle is enabled, reconnect keeps the same question and option order |
 | 8.9 | Test auto-submit | Deadline reached → auto-submit |
 | 8.10 | Test grading | Full grading run with sample answers |
 | 8.11 | Tune thresholds | Adjust `flag_threshold`, viewport % tolerance, focus delay |
@@ -433,7 +433,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | ➕ 8.14 | Test browser zoom + OS display scaling | 🔧 In pre-exam check (rehearsal), verify zoom levels and display scaling don't trigger false viewport violations |
 | ➕ 8.15 | Test incident dedup | 🔧 Alt-tab during exam → verify it logs as 1 incident, not 3 separate violations |
 | ➕ 8.16 | Test rate limit from shared IP | 🔧 Multiple candidates from same IP → verify legitimate logins aren't blocked |
-| ➕ 8.17 | Test double-refresh at exam start | 🔧 Verify `generate_paper()` DB function prevents duplicate question subsets |
+| ➕ 8.17 | Test double-refresh at exam start | 🔧 Verify `generate_paper()` prevents duplicate paper rows and preserves the first generated order |
 | ➕ 8.18 | Test option order persistence | 🔧 Reconnect → verify MCQ options are in the same shuffled order |
 | ➕ 8.19 | Test missed start signal | 🔧² Disconnect Wi-Fi during exam start → verify waiting room catches up within 5–10 seconds via poll fallback |
 | ➕ 8.20 | Test force-end with extra time | 🔧² Give one candidate extra minutes → force-end exam → verify their answers API rejects new saves immediately (not after their extended deadline). 🔧⁴ Also verify scheduler waits for their extended deadline before force-submitting |
@@ -575,7 +575,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | Rate limit: failed only | `001_initial.sql`, 2A.2–2A.3, 8.16 |
 | `system_health` table | `001_initial.sql`, 6A.6 |
 | Alert dedup | `001_initial.sql` |
-| Question pool race condition | `001_initial.sql`, 2C.2, 8.17 |
+| Paper generation race condition | `004_exam_paper_and_unassign.sql`, 2C.2, 8.17 |
 | Session revocation enforcement | 2A.4 |
 | NIC normalization | 1C.1 |
 | `@node-rs/argon2` (not native) | 0.2, 1C.1 |

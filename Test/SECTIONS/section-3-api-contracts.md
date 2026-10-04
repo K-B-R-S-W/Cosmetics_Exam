@@ -276,7 +276,7 @@ Feeds the confirm and rules screens.
   "rules": { "snapshot_retention_days": 14 }
 }
 ```
-`instructions` is plain text, shown with `white-space: pre-wrap`. It is never rendered as HTML. `question_count` is `questions_per_paper` when set, otherwise the number of questions in the exam.
+`instructions` is plain text, shown with `white-space: pre-wrap`. It is never rendered as HTML. `question_count` is the number of composed questions in the exam; every candidate receives all of them.
 
 ### 3.5 `POST /api/auth/acknowledge` — candidate
 Called once, when the candidate presses accept on the **rules** screen. The confirm screen only navigates.
@@ -308,7 +308,7 @@ The route calls `rpc('claim_broadcast', { p_broadcast_id: id, p_candidate_id: au
 Success: `200 { "display": true, "announcement": { "id": "...", "message": "...", "sent_at": "..." } }`. The message is escaped plain text. Show it once for a fixed 5 seconds, remove the component, leave a one-second empty gap, then claim the next queued id. There is no candidate announcement-history endpoint, reopen control or persistent indicator. The SQL signature is `claim_broadcast(uuid, uuid, uuid)` and returns only `out_display`, `out_message`, and `out_sent_at`.
 
 ### 3.8 `GET /api/exam/paper` — candidate
-Starts or resumes the paper. Calls `rpc('generate_paper', { p_attempt_id })`, which is idempotent: the first call builds the paper (question pool, shuffle, option order) and moves the attempt to `in_progress`; later calls return the saved one. Calling it before the exam is live fails, which is how "the paper is not loaded until the time" is enforced on the server.
+Starts or resumes the paper. Calls `rpc('generate_paper', { p_attempt_id })`, which is idempotent: the first call assigns every composed question, saves the shuffled question/option order, and moves the attempt to `in_progress`; later calls return the saved paper unchanged. Calling it before the exam is live fails, which is how "the paper is not loaded until the time" is enforced on the server.
 
 ```json
 {
@@ -513,21 +513,20 @@ Exam status moves: `draft` ↔ `scheduled` (admin, by PATCH), `draft/scheduled` 
   "duration_min": 45,
   "scheduled_start_at": "2026-10-05T04:00:00Z",
   "navigation_mode": "sequential",
-  "questions_per_paper": 20,
   "shuffle": true,
   "flag_threshold": 10,
   "is_practice": false
 }
 ```
-Ranges: `title` 1 to 150, `duration_min` 1 to 480, `flag_threshold` 1 to 100. `navigation_mode` defaults to `free`. `questions_per_paper` is `null` for "all". Creates the exam as `draft`. `201 { "exam": {...} }`.
+Ranges: `title` 1 to 150, `duration_min` 1 to 480, `flag_threshold` 1 to 100. `navigation_mode` defaults to `free`. Every candidate receives every question the admin composes; there is no fixed-count field. Creates the exam as `draft`. `201 { "exam": {...} }`.
 
 **`GET /api/admin/exams/[id]`** (NEW file)
-`200 { "exam": {...}, "question_count", "assigned_count", "warnings": [...] }`. `warnings` is non-blocking, for example `{ "code": "missing_answer_key", "question_ids": [...] }` and `{ "code": "pool_larger_than_exam" }`. Answer keys are only needed at grading time, so a missing one is a warning, not an error.
+`200 { "exam": {...}, "question_count", "assigned_count", "warnings": [...] }`. `warnings` is non-blocking, for example `{ "code": "missing_answer_key", "question_ids": [...] }`. Answer keys are only needed at grading time, so a missing one is a warning, not an error.
 
 **`PATCH /api/admin/exams/[id]`**
 Any field from the create body, plus `status: 'scheduled' | 'draft'`.
 - While `draft` or `scheduled`: all fields editable.
-- From `live` onward: only `title` and `flag_threshold`. Any other field returns `409 exam_locked` with `details.locked_fields`. This is the server-side lock for `navigation_mode`, `questions_per_paper`, `shuffle` and `duration_min` (1D.4).
+- While `live` or `ended`: only `title` and `flag_threshold`. At `finalized`, only `title`. Any other supplied field returns `409 exam_locked` with `details.locked_fields`. This locks navigation, shuffle, duration, scheduled time, instructions and practice status. A threshold change audits `old_flag_threshold` and `new_flag_threshold`.
 - `status: 'scheduled'` requires `scheduled_start_at` at least 1 minute in the future, at least one question and at least one assigned candidate (`409 not_ready` with `details.missing`). `status: 'draft'` un-schedules.
 - Setting `status` to `live`, `ended` or `finalized` here returns `400 use_control_route`.
 
@@ -535,13 +534,15 @@ Any field from the create body, plus `status: 'scheduled' | 'draft'`.
 Only while `draft` and with no started attempts, otherwise `409 exam_not_deletable`. This cascades to its questions, so the admin page asks for confirmation. (Test exams after rehearsal are removed with the cleanup script, task 8.30.)
 
 **`GET /api/admin/exams/[id]/candidates`** (NEW file)
-`200 { "items": [{ "candidate_id", "mer_code", "full_name", "outlet", "attempt_id", "attempt_status" }] }`.
+`200 { "exam": { "id", "title", "status" }, "items": [{ "candidate_id", "mer_code", "full_name", "outlet", "attempt_id", "attempt_status" }] }`.
+
+`GET /api/admin/exams/[id]/candidates?view=available&q=&page=1&page_size=50` returns active candidates not assigned to this exam: `200 { "exam": { "id", "title", "status" }, "items": [{ "candidate_id", "mer_code", "full_name", "outlet" }], "total", "scan_limit": 1000 }`. At the expected office scale, the server fetches at most 1,000 active candidates matching `q`, removes assigned IDs in memory, then paginates in memory. It never builds a long `not.in` URL. If active candidates may exceed 1,000 later, replace this bounded scan with a database RPC or view before relying on results beyond that limit.
 
 **`POST /api/admin/exams/[id]/candidates`**
-`{ "candidate_ids": ["<uuid>", ...] }` (1 to 200). Inserts into `exam_candidates`; the trigger creates each attempt. Allowed while `draft`, `scheduled` or `live` (a late assignment can still log in and gets the same shared deadline). `409 exam_locked` once `ended`. Response `200 { "added": 21, "already_assigned": 2 }`.
+`{ "candidate_ids": ["<uuid>", ...] }` (1 to 200). Before writing, the server verifies every requested candidate exists and is active. If any are missing or inactive, the whole request returns `400 validation_failed`; the message gives only the invalid count and asks the admin to refresh. Inserts into `exam_candidates`; the trigger creates each attempt. Allowed while `draft`, `scheduled` or `live` (a late assignment can still log in and gets the same shared deadline). `409 exam_locked` once `ended`. Response `200 { "added": 21, "already_assigned": 2 }`.
 
 **`DELETE /api/admin/exams/[id]/candidates`**
-`{ "candidate_ids": [...] }`. Only candidates whose attempt is still `not_started` are removed (the trigger deletes the attempt). The rest are listed in `blocked`: `200 { "removed": 3, "blocked": [{ "candidate_id", "reason": "attempt_started" }] }`. (This avoids the orphan attempt from section 0, item 9.)
+`{ "candidate_ids": [...] }`. The route calls `unassign_exam_candidates`: it waits for requested attempt-row locks, removes only assignments whose attempt is still `not_started` (the trigger deletes the attempt), and ignores unknown or unassigned IDs. The rest are listed in `blocked`: `200 { "removed": ["<candidate uuid>"], "blocked": [{ "candidate_id", "reason": "attempt_started" }] }`. The RPC rejects ended/finalized exams. The UI says blocked candidates have **already joined the exam**.
 
 ### 4.3 Questions and answer keys
 
@@ -826,7 +827,7 @@ New environment variables: `SNAPSHOT_RETENTION_DAYS` (default `14`), `NEXT_PUBLI
 | 1C.4 | Cap 100 rows per request, batches of 50 from the client, `dry_run` first, `on_duplicate` |
 | 1C.5 | Add files `app/api/admin/candidates/[id]/route.ts` (PATCH, DELETE) and optional `[id]/unlock/route.ts` |
 | 1D.3 | Add `app/api/admin/exams/[id]/candidates/route.ts` (GET, POST, DELETE). Unassign refuses started attempts (`blocked`) |
-| 1D.4 | Add `app/api/admin/exams/[id]/route.ts` (GET, PATCH, DELETE). `status` only changes `draft` ↔ `scheduled` here; lock fields from `live` onward are `navigation_mode`, `questions_per_paper`, `shuffle`, `duration_min`, `scheduled_start_at` |
+| 1D.4 | Add `app/api/admin/exams/[id]/route.ts` (GET, PATCH, DELETE). `status` only changes `draft` ↔ `scheduled` here; lock navigation, shuffle, duration, scheduled time, instructions and practice status from `live`, and lock `flag_threshold` at `finalized` |
 | 1E.6 / 1E.7 | Add `questions/[id]/route.ts`, `questions/reorder/route.ts`. Lock rule and sanitizer allowlist from 4.3. `answer-keys/route.ts` is `GET` + `PUT` |
 | 2A.2 | Add the exam-selection rules, `multiple_exams`, and the MULTI_LOGIN / RECONNECTED rule (3.3) |
 | 2A.5 / 2A.6 / 2B.6 | The confirm screen only navigates. Acknowledge is called once from the rules screen with both flags |

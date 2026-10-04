@@ -112,12 +112,11 @@ A single page with a Tabs row: **Settings**, **Questions**, **Candidates**. Unde
 | Start date and time | Date and time inputs, labelled "Colombo time". Help: "The waiting room opens when candidates sign in. The exam starts at this time, or sooner if you press Start now." |
 | Duration | Number, minutes, 1–480 |
 | Navigation | Radio: **Free** ("Candidates can go back and forth between questions") and **Sequential** ("One question at a time. No going back.") |
-| Questions per paper | Radio: **All questions** or **A random set**, then a number. Help: "Each candidate gets their own set from the pool." |
-| Shuffle | Checkbox: **Shuffle the order for each candidate** |
+| Shuffle | Checkbox: **Shuffle question and multiple-choice option order for each candidate** |
 | Flag threshold | Number, 1–100, default **10**. Help: "A candidate turns red when their counted violations reach this number, and amber at half of it." Editable while the exam is live |
 | Practice exam | Checkbox: **This is a rehearsal exam.** Help: "Practice exams carry a Practice tag and are removed by the cleanup script after the rehearsal." |
 
-**Locked fields.** From `live` onward only **Title** and **Flag threshold** can change (contract 4.2). Every other field is disabled and shows the line **Locked while the exam is live.** under it. A server `409 exam_locked` (should the page be out of date) shows the banner **This exam has started, so those settings can no longer change. Reload the page.**
+**Locked fields.** While `live` or `ended`, only **Title** and **Flag threshold** can change. At `finalized`, only **Title** can change. Every other field is disabled and shows the line **Locked while the exam is live.** under it. A server `409 exam_locked` (should the page be out of date) shows the banner **This exam has started, so those settings can no longer change. Reload the page.**
 
 **Buttons**
 - **Save** (Primary). Disabled when nothing changed. Success toast: **Saved.**
@@ -136,7 +135,6 @@ Shown for Draft and Scheduled exams, built from `GET /api/admin/exams/[id]` (`qu
 | Candidates | `assigned_count` ≥ 1 | **No candidates assigned.** (link: Assign candidates) |
 | Start time (needed to schedule) | `scheduled_start_at` is set and at least 1 minute in the future | **No start time set.** or **The start time has passed. Choose a new one.** |
 | Answer keys | no `missing_answer_key` warning | **{n} questions have no answer key yet. You can add them before grading.** (a warning, not a blocker) |
-| Question pool | no `pool_larger_than_exam` warning | **"Questions per paper" is larger than the number of questions.** |
 
 If **Schedule exam** returns `409 not_ready`, the page lists `details.missing` as the same lines in words ("Add at least one question", "The start time must be at least 1 minute from now"), not as a code.
 
@@ -145,7 +143,7 @@ If **Schedule exam** returns `409 not_ready`, the page lists `details.missing` a
 A new sub-page: `admin/exams/[id]/candidates`. Two tables stacked, with a one-line count under the tabs: **{assigned} assigned**.
 
 **Assigned** (from `GET /api/admin/exams/[id]/candidates`): checkbox, MER code, name, outlet, **Attempt** (**Not joined**, **Ready**, **In exam**, **Submitted**: the same words as the live grid, §7.2). Button **Remove selected** (Destructive, enabled with a selection).
-- Result `{ removed, blocked }`: toast **3 removed.** If anyone was blocked, a Notice stays on the page: **{k} could not be removed because they have already started the exam.** with the names.
+- Result `{ removed, blocked }`: toast **3 removed.** If anyone was blocked, a Notice stays on the page: **{k} could not be removed because they have already joined the exam.** with the names.
 
 **Add candidates**: a search box (name, MER or outlet), a **Select all shown** checkbox, the list of active candidates who are **not** assigned (checkbox, MER, name, outlet), and **Add selected ({n})** (Primary, disabled at zero). Success toast: **{n} added.** and, if any were already assigned, **{m} were already assigned.**
 
@@ -160,7 +158,7 @@ A new sub-page: `admin/exams/[id]/candidates`. Two tables stacked, with a one-li
 
 ### 4.1 Question list
 
-- Header: **{n} questions · {m} MCQ · {w} written**, and the pool line **{k} per paper** (or **All questions**).
+- Header: **{n} questions · {m} MCQ · {w} written**. Every candidate receives every question in this composed list.
 - Buttons: **Add MCQ** and **Add written question** (Secondary; the page's one Primary is **Save question** in the editor).
 - Each row (button, 56 px): drag handle, number, a type word (**MCQ** or **Written**), the first 60 characters of the question (plain text, `lang` set per content), and the key status in words: **Key complete** or **Key missing**.
 - **Reorder:** drag by the handle, **and** a **Move up** / **Move down** pair in the row's menu, so it works with a keyboard (2A §5). Saving the new order calls the reorder route.

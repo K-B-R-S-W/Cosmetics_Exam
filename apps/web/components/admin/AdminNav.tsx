@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { AdminRole } from "@/lib/auth";
 
 const NAV_ITEMS = [
-  { label: "Exams", href: null, superAdminOnly: false },
+  { label: "Exams", href: "/admin/exams", superAdminOnly: false },
   { label: "Candidates", href: "/admin/candidates", superAdminOnly: false },
   { label: "Live", href: null, superAdminOnly: false },
   { label: "Results", href: null, superAdminOnly: false },

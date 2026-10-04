@@ -257,7 +257,7 @@ Do not run `npm run build` on the box while an exam is live. Deploys happen the 
 **One week before**
 - [ ] Rehearsal done; restore drill done; load numbers in §9 recorded
 - [ ] Supabase dashboard opened (project active); backup cron has run at least once
-- [ ] Real candidates assigned, questions and examiner answer keys complete, `questions_per_paper` set
+- [ ] Real candidates assigned; the complete composed question list and examiner answer keys are ready
 - [ ] Image tags and `.env` values frozen. No more deploys except fixes found in testing.
 
 **Day before**
