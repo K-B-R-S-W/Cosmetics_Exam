@@ -80,15 +80,18 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     context.setCandidateId(candidate.id);
-    const { error: successError } = await supabase
-      .from("login_attempts")
-      .insert({ mer_code: input.mer_code, ip, success: true });
+    const [successResult, assignmentResult] = await Promise.all([
+      supabase
+        .from("login_attempts")
+        .insert({ mer_code: input.mer_code, ip, success: true }),
+      supabase
+        .from("exam_candidates")
+        .select("exams!inner(id,title,status,scheduled_start_at,duration_min)")
+        .eq("candidate_id", candidate.id),
+    ]);
+    const { error: successError } = successResult;
     if (successError) throw successError;
-
-    const { data: assignmentData, error: assignmentError } = await supabase
-      .from("exam_candidates")
-      .select("exams!inner(id,title,status,scheduled_start_at,duration_min)")
-      .eq("candidate_id", candidate.id);
+    const { data: assignmentData, error: assignmentError } = assignmentResult;
     if (assignmentError) throw assignmentError;
 
     const assigned = (assignmentData as AssignmentRow[] | null ?? []).map((row) => {

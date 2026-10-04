@@ -10,7 +10,7 @@ import { langFor } from "@/lib/lang";
 
 export function ConfirmScreen() {
   const router = useRouter();
-  const { loadMe } = useCandidate();
+  const { loadMe, resetCandidateSession } = useCandidate();
   const [me, setMe] = useState<CandidateMe | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -24,6 +24,7 @@ export function ConfirmScreen() {
 
   async function rejectIdentity() {
     await fetch("/api/auth/logout", { method: "POST", headers: { "Sec-Fetch-Site": "same-origin" } }).catch(() => null);
+    resetCandidateSession();
     router.push("/login?signed_out=1");
   }
 

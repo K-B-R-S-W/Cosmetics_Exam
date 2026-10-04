@@ -24,6 +24,7 @@ interface CandidateContextValue {
   setCheckPassed(value: boolean): void;
   refreshState(): Promise<StateBody | null>;
   loadMe(): Promise<CandidateMe>;
+  resetCandidateSession(): void;
 }
 
 const CandidateContext = createContext<CandidateContextValue | null>(null);
@@ -42,6 +43,19 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   const [loaded, setLoaded] = useState(pathname === "/login");
   const mePromise = useRef<Promise<CandidateMe> | null>(null);
   const stateLoaded = useRef(false);
+  const sessionGeneration = useRef(0);
+
+  const resetCandidateSession = useCallback(() => {
+    sessionGeneration.current += 1;
+    setState(null);
+    setMe(null);
+    setError(null);
+    setCheckPassed(false);
+    setLoaded(false);
+    mePromise.current = null;
+    stateLoaded.current = false;
+    sessionStorage.removeItem("identityConfirmed");
+  }, []);
 
   const refreshState = useCallback(async () => {
     const response = await fetch("/api/exam/state", { cache: "no-store" });
@@ -53,6 +67,8 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     }
     setError(null);
     setState(body as StateBody);
+    setLoaded(true);
+    stateLoaded.current = true;
     return body as StateBody;
   }, []);
 
@@ -79,7 +95,13 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (pathname === "/login") {
-      return;
+      const scheduledGeneration = sessionGeneration.current;
+      const timer = window.setTimeout(() => {
+        if (sessionGeneration.current === scheduledGeneration) {
+          resetCandidateSession();
+        }
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
     if (stateLoaded.current) return;
     stateLoaded.current = true;
@@ -90,9 +112,17 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [pathname, refreshState]);
+  }, [pathname, refreshState, resetCandidateSession]);
 
-  const decision = routeFor({ state, error, pathname, checkPassed });
+  const visibleState = pathname === "/login" ? null : state;
+  const visibleMe = pathname === "/login" ? null : me;
+  const visibleError = pathname === "/login" ? null : error;
+  const decision = routeFor({
+    state: visibleState,
+    error: visibleError,
+    pathname,
+    checkPassed,
+  });
   useEffect(() => {
     if ("redirect" in decision && decision.redirect !== pathname) {
       router.replace(decision.redirect);
@@ -103,14 +133,29 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     const frame = requestAnimationFrame(() => {
       document.querySelector<HTMLElement>("h1")?.focus();
       const heading = document.querySelector("h1")?.textContent?.trim() || "Online exam";
-      document.title = `${heading} · ${state?.exam.title ?? "Cosmetics.lk"}`;
+      document.title = `${heading} · ${visibleState?.exam.title ?? "Cosmetics.lk"}`;
     });
     return () => cancelAnimationFrame(frame);
-  }, [pathname, state?.exam.title]);
+  }, [pathname, visibleState?.exam.title]);
 
   const value = useMemo(
-    () => ({ state, me, checkPassed, setCheckPassed, refreshState, loadMe }),
-    [state, me, checkPassed, refreshState, loadMe],
+    () => ({
+      state: visibleState,
+      me: visibleMe,
+      checkPassed,
+      setCheckPassed,
+      refreshState,
+      loadMe,
+      resetCandidateSession,
+    }),
+    [
+      visibleState,
+      visibleMe,
+      checkPassed,
+      refreshState,
+      loadMe,
+      resetCandidateSession,
+    ],
   );
 
   if (pathname !== "/login" && !loaded) {
@@ -122,7 +167,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
       signed_out: ["You were signed out", "This account was opened on another device, or the exam team ended your session. Your saved answers are safe. Sign in again to continue, or ask the exam team for help."],
       please_sign_in: ["Please sign in again", "Your session has ended. Your saved answers are safe."],
     }[decision.screen];
-    return <CandidateErrorScreen title={content[0]} body={content[1]} signOut={decision.screen === "ended"} />;
+    return <CandidateErrorScreen title={content[0]} body={content[1]} signOut={decision.screen === "ended"} resetSession={resetCandidateSession} />;
   }
   if ("redirect" in decision) {
     return <CandidateFrame><p className="text-muted">Loading…</p></CandidateFrame>;
@@ -164,12 +209,24 @@ export function Notice({ children, warning = false }: { children: ReactNode; war
   return <div className={`border-l-4 p-4 ${warning ? "border-warn bg-warn-tint" : "border-ink bg-selected"}`} role={warning ? "alert" : "status"}>{children}</div>;
 }
 
-export function CandidateErrorScreen({ title, body, signOut = false }: { title: string; body: string; signOut?: boolean }) {
+export function CandidateErrorScreen({
+  title,
+  body,
+  signOut = false,
+  resetSession,
+}: {
+  title: string;
+  body: string;
+  signOut?: boolean;
+  resetSession?: () => void;
+}) {
   const router = useRouter();
+  const context = useContext(CandidateContext);
   async function leave() {
     if (signOut) {
       await fetch("/api/auth/logout", { method: "POST", headers: { "Sec-Fetch-Site": "same-origin" } }).catch(() => null);
     }
+    (resetSession ?? context?.resetCandidateSession)?.();
     router.push("/login");
   }
   return <CandidateFrame><h1 tabIndex={-1} className="text-title font-bold">{title}</h1><p className="mt-4 text-muted">{body}</p><Button className="mt-6" onClick={leave}>{signOut ? "Sign out" : "Sign in"}</Button></CandidateFrame>;

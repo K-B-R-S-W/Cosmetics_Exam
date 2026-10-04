@@ -5,11 +5,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LoginForm } from "./LoginForm";
 
-const mocks = vi.hoisted(() => ({ push: vi.fn(), searchGet: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  push: vi.fn(),
+  searchGet: vi.fn(),
+  refreshState: vi.fn(),
+  resetCandidateSession: vi.fn(),
+}));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.push }),
   useSearchParams: () => ({ get: mocks.searchGet }),
 }));
+vi.mock("@/components/candidate/CandidateContext", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/candidate/CandidateContext")>();
+  return {
+    ...actual,
+    useCandidate: () => ({
+      refreshState: mocks.refreshState,
+      resetCandidateSession: mocks.resetCandidateSession,
+    }),
+  };
+});
 
 const fetchMock = vi.fn();
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -18,6 +33,8 @@ beforeEach(() => {
   mocks.push.mockReset();
   mocks.searchGet.mockReset().mockReturnValue(null);
   fetchMock.mockReset();
+  mocks.refreshState.mockReset().mockResolvedValue(null);
+  mocks.resetCandidateSession.mockReset();
   vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); sessionStorage.clear(); localStorage.clear(); });
@@ -56,5 +73,7 @@ describe("LoginForm", () => {
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/confirm"));
     const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
     expect(secondBody.nic).toBe("200012345678");
+    expect(mocks.resetCandidateSession).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshState).toHaveBeenCalledTimes(1);
   });
 });

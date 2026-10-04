@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
-import { CandidateFrame, Notice } from "@/components/candidate/CandidateContext";
+import { CandidateFrame, Notice, useCandidate } from "@/components/candidate/CandidateContext";
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
 import { formatColombo } from "@/lib/format-time";
@@ -21,6 +21,7 @@ const COPY: Record<string, string> = {
 
 export function LoginForm() {
   const router = useRouter();
+  const { refreshState, resetCandidateSession } = useCandidate();
   const search = useSearchParams();
   const [mer, setMer] = useState("");
   const [nic, setNic] = useState("");
@@ -55,6 +56,8 @@ export function LoginForm() {
       if (response.ok) {
         pickerNic.current = "";
         setNic("");
+        resetCandidateSession();
+        await refreshState();
         router.push(body.next === "confirm" ? "/confirm" : "/check");
         return;
       }

@@ -20,7 +20,7 @@ const RULES = [
 
 export function RulesScreen() {
   const router = useRouter();
-  const { loadMe } = useCandidate();
+  const { loadMe, refreshState } = useCandidate();
   const [me, setMe] = useState<CandidateMe | null>(null);
   const [accepted, setAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -32,11 +32,19 @@ export function RulesScreen() {
       router.replace("/confirm");
       return;
     }
-    loadMe().then((value) => {
-      if (value.attempt.status !== "not_started") router.replace("/check");
-      else setMe(value);
+    loadMe().then(async (value) => {
+      if (value.attempt.status !== "not_started") {
+        await refreshState();
+        router.replace(
+          value.attempt.status === "submitted" || value.attempt.status === "finalized"
+            ? "/done"
+            : "/check",
+        );
+      } else {
+        setMe(value);
+      }
     }).catch(() => setMessage("We can't reach the server. Check your internet connection and try again."));
-  }, [loadMe, router]);
+  }, [loadMe, refreshState, router]);
 
   async function accept() {
     setBusy(true);
@@ -46,9 +54,13 @@ export function RulesScreen() {
       const body = (await response.json()) as ApiErrorPayload;
       if (response.ok) {
         sessionStorage.removeItem("identityConfirmed");
+        await refreshState();
         router.push("/check");
       } else if (body.error.code === "exam_closed") setClosed(true);
-      else if (body.error.code === "already_submitted") router.push("/done");
+      else if (body.error.code === "already_submitted") {
+        await refreshState();
+        router.push("/done");
+      }
       else setMessage("We can't reach the server. Check your internet connection and try again.");
     } catch {
       setMessage("We can't reach the server. Check your internet connection and try again.");

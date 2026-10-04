@@ -34,7 +34,21 @@ function query(result: DbResult) {
 }
 
 function client(queues: Record<string, DbResult[]>) {
-  return { from: vi.fn((table: string) => query(queues[table]?.shift() ?? { data: null })) };
+  const inserts: Array<{ table: string; value: unknown }> = [];
+  const calls: string[] = [];
+  return {
+    inserts,
+    calls,
+    from: vi.fn((table: string) => {
+      calls.push(table);
+      const chain = query(queues[table]?.shift() ?? { data: null });
+      chain.insert = vi.fn((value: unknown) => {
+        inserts.push({ table, value });
+        return chain;
+      });
+      return chain;
+    }),
+  };
 }
 
 function request(body: unknown) {
@@ -61,12 +75,19 @@ describe("POST /api/auth/login", () => {
     ["malformed ID", candidate, false, "hash"],
   ])("returns the identical credential response for %s", async (_label, row, matches, expectedHash) => {
     mocks.verifyNic.mockResolvedValue(matches);
-    mocks.createClient.mockReturnValue(client({ candidates: [{ data: row }], login_attempts: [{ data: null }] }));
+    const db = client({ candidates: [{ data: row }], login_attempts: [{ data: null }] });
+    mocks.createClient.mockReturnValue(db);
     const response = await POST(request({ mer_code: " test-001 ", nic: "invalid synthetic" }));
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: { code: "invalid_credentials", message: "Your MER code or ID number doesn't match our records. Check both and try again. If it still doesn't work, ask the exam team.", details: null } });
     expect(mocks.verifyNic).toHaveBeenCalledTimes(1);
     expect(mocks.verifyNic).toHaveBeenCalledWith("invalid synthetic", expectedHash);
+    expect(db.inserts).toEqual([
+      {
+        table: "login_attempts",
+        value: { mer_code: "TEST-001", ip: "192.0.2.10", success: false },
+      },
+    ]);
     expect(response.headers.get("X-Request-Id")).toBeTruthy();
   });
 
@@ -77,6 +98,7 @@ describe("POST /api/auth/login", () => {
     const response = await POST(request({ mer_code: "TEST-001", nic: "200012345678" }));
     expect(response.status).toBe(429);
     expect(db.from).not.toHaveBeenCalled();
+    expect(mocks.verifyNic).not.toHaveBeenCalled();
     expect((await response.json()).error.details.retry_after_s).toBe(42);
   });
 
@@ -97,9 +119,20 @@ describe("POST /api/auth/login", () => {
     mocks.createClient.mockReturnValue(db);
     const response = await POST(request({ mer_code: "TEST-001", nic: "200012345678" }));
     expect(response.status).toBe(200);
+    expect(mocks.verifyNic).toHaveBeenCalledTimes(1);
     expect(await response.json()).toMatchObject({ next: "check", attempt: { status: "in_progress" } });
     expect(mocks.createSession).toHaveBeenCalledWith("new", 45);
     expect(db.from).toHaveBeenCalledWith("violation_events");
+    expect(db.inserts).toContainEqual({
+      table: "login_attempts",
+      value: { mer_code: "TEST-001", ip: "192.0.2.10", success: true },
+    });
+    expect(db.calls.indexOf("login_attempts")).toBeLessThan(
+      db.calls.indexOf("attempts"),
+    );
+    expect(db.calls.indexOf("exam_candidates")).toBeLessThan(
+      db.calls.indexOf("attempts"),
+    );
   });
 
   it("does not create or revoke sessions for an already submitted attempt", async () => {
@@ -108,6 +141,7 @@ describe("POST /api/auth/login", () => {
     mocks.createClient.mockReturnValue(db);
     const response = await POST(request({ mer_code: "TEST-001", nic: "200012345678" }));
     expect(response.status).toBe(409);
+    expect(mocks.verifyNic).toHaveBeenCalledTimes(1);
     expect(mocks.createSession).not.toHaveBeenCalled();
     expect(db.from).not.toHaveBeenCalledWith("sessions");
   });
