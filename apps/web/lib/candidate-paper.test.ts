@@ -49,7 +49,7 @@ function client({
     { id: q1, type: "written", body_html: '<p onclick="bad()">සිංහල<script>secret</script></p><blockquote>Quoted</blockquote><code>Code</code>', image_path: null, image_alt_text: null, marks: "2.50", mcq_options: [] },
     { id: q2, type: "mcq", body_html: "<p>Choose</p>", image_path: "questions/a/image.png", image_alt_text: "Synthetic product", marks: 1, mcq_options: [{ id: o1, text_html: '<p><a href="javascript:bad()">First</a></p>' }, { id: o2, text_html: "<p>Second</p>" }] },
   ];
-  const answers = [{ question_id: q2, answer_text: null, selected_option_id: o2, flagged: false, revision: 4 }];
+  const answers = [{ question_id: q2, answer_text: null, selected_option_id: o2, flagged: false, revision: 4, updated_at: "2026-10-04T09:59:00.000Z" }];
   const from = vi.fn((table: string) => {
     if (table === "exams") return query({ data: { id: auth.examId, status, navigation_mode: mode, ends_at: endsAt, force_ended_at: forceEnded }, error: null });
     if (table === "questions") return query({ data: questions, error: null });
@@ -73,6 +73,7 @@ describe("loadCandidatePaper", () => {
     expect(paper.questions[1]?.body_html).toBe("<p>සිංහල</p>QuotedCode");
     expect(paper.questions[0]?.options?.[1]?.text_html).toBe("<p>First</p>");
     expect(paper.answers[q2]?.revision).toBe(4);
+    expect(paper.answers[q2]?.saved_at).toBe("2026-10-04T09:59:00.000Z");
     const serialized = JSON.stringify(paper);
     for (const forbidden of ["answer_keys", "correct_option_id", "model_answer", "grading_notes", "calibration", "image_path", "label", "secret", "onclick", "javascript:", "blockquote", "<code"]) {
       expect(serialized).not.toContain(forbidden);

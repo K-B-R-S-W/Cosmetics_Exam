@@ -7,6 +7,9 @@ export interface LogContext {
   durationMs?: number;
   actorId?: string;
   errorCode?: string;
+  itemCount?: number;
+  successCount?: number;
+  failureCount?: number;
 }
 
 function write(level: LogLevel, event: string, context: LogContext = {}): void {
@@ -20,6 +23,9 @@ function write(level: LogLevel, event: string, context: LogContext = {}): void {
     duration_ms: context.durationMs,
     actor_id: context.actorId,
     error_code: context.errorCode,
+    item_count: context.itemCount,
+    success_count: context.successCount,
+    failure_count: context.failureCount,
   };
 
   const serialized = JSON.stringify(entry);

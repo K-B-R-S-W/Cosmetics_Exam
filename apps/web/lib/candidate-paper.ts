@@ -29,7 +29,7 @@ type AssignmentRow = {
   option_order: string[] | null;
 };
 
-type QuestionRow = {
+export type CandidateQuestionRow = {
   id: string;
   type: CandidateQuestion["type"];
   body_html: string;
@@ -39,7 +39,7 @@ type QuestionRow = {
   mcq_options: Array<{ id: string; text_html: string }> | null;
 };
 
-type AnswerRow = SavedAnswer & { question_id: string };
+type AnswerRow = Omit<SavedAnswer, "saved_at"> & { question_id: string; updated_at: string };
 
 const RPC_ERRORS: Record<string, ApiError> = {
   attempt_not_found: new ApiError("not_found", 404, "The attempt was not found."),
@@ -64,8 +64,33 @@ function assertAttemptCanOpen(auth: CandidateAuthContext): void {
   }
 }
 
-function asOptions(value: QuestionRow["mcq_options"]): Array<{ id: string; text_html: string }> {
+function asOptions(value: CandidateQuestionRow["mcq_options"]): Array<{ id: string; text_html: string }> {
   return Array.isArray(value) ? value : [];
+}
+
+export function toCandidateQuestion(
+  question: CandidateQuestionRow,
+  assignment: Pick<AssignmentRow, "position" | "option_order">,
+): CandidateQuestion {
+  const optionById = new Map(asOptions(question.mcq_options).map((option) => [option.id, option]));
+  const orderedOptions = question.type === "mcq"
+    ? (assignment.option_order ?? []).map((id) => {
+        const option = optionById.get(id);
+        if (!option) throw new Error("paper_option_missing");
+        return { id: option.id, text_html: sanitizeOptionHtml(option.text_html) };
+      })
+    : undefined;
+  return {
+    id: question.id,
+    position: assignment.position,
+    type: question.type,
+    body_html: sanitizeQuestionHtml(question.body_html),
+    image: question.image_path && question.image_alt_text
+      ? { url: `/api/question-images/${question.id}`, alt_text: question.image_alt_text }
+      : null,
+    marks: Number(question.marks),
+    ...(orderedOptions ? { options: orderedOptions } : {}),
+  };
 }
 
 export async function loadCandidatePaper(
@@ -124,7 +149,7 @@ export async function loadCandidatePaper(
     .in("id", visibleQuestionIds);
   const answerRequest = supabase
     .from("answers")
-    .select("question_id,answer_text,selected_option_id,flagged,revision")
+    .select("question_id,answer_text,selected_option_id,flagged,revision,updated_at")
     .eq("attempt_id", auth.attemptId)
     .in("question_id", visibleQuestionIds);
   const [questionResult, answerResult] = await Promise.all([questionRequest, answerRequest]);
@@ -132,39 +157,21 @@ export async function loadCandidatePaper(
   if (answerResult.error) throw answerResult.error;
 
   const questionsById = new Map(
-    ((questionResult.data ?? []) as QuestionRow[]).map((question) => [question.id, question]),
+    ((questionResult.data ?? []) as CandidateQuestionRow[]).map((question) => [question.id, question]),
   );
   const questions = visibleAssignments.map((assignment): CandidateQuestion => {
     const question = questionsById.get(assignment.question_id);
     if (!question) throw new Error("paper_question_missing");
-    const optionById = new Map(asOptions(question.mcq_options).map((option) => [option.id, option]));
-    const orderedOptions = question.type === "mcq"
-      ? (assignment.option_order ?? []).map((id) => {
-          const option = optionById.get(id);
-          if (!option) throw new Error("paper_option_missing");
-          return { id: option.id, text_html: sanitizeOptionHtml(option.text_html) };
-        })
-      : undefined;
-    return {
-      id: question.id,
-      position: assignment.position,
-      type: question.type,
-      body_html: sanitizeQuestionHtml(question.body_html),
-      image: question.image_path && question.image_alt_text
-        ? { url: `/api/question-images/${question.id}`, alt_text: question.image_alt_text }
-        : null,
-      marks: Number(question.marks),
-      ...(orderedOptions ? { options: orderedOptions } : {}),
-    };
+    return toCandidateQuestion(question, assignment);
   });
 
   const visibleIds = new Set(visibleQuestionIds);
   const answers = Object.fromEntries(
     ((answerResult.data ?? []) as AnswerRow[])
       .filter((answer) => visibleIds.has(answer.question_id))
-      .map(({ question_id, answer_text, selected_option_id, flagged, revision }) => [
+      .map(({ question_id, answer_text, selected_option_id, flagged, revision, updated_at }) => [
         question_id,
-        { answer_text, selected_option_id, flagged, revision },
+        { answer_text, selected_option_id, flagged, revision, saved_at: updated_at },
       ]),
   );
 

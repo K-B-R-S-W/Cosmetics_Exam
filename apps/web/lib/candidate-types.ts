@@ -70,6 +70,28 @@ export interface SavedAnswer {
   selected_option_id: string | null;
   flagged: boolean;
   revision: number;
+  saved_at: string;
+}
+
+export interface AnswerInput {
+  question_id: string;
+  answer_text: string | null;
+  selected_option_id: string | null;
+  flagged: boolean;
+  revision: number;
+}
+
+export type SaveAnswerResult =
+  | { result: "saved"; server_time: string }
+  | { result: "stale_revision"; server_revision: number; server_time: string };
+
+export interface NextQuestionBody {
+  result: "advanced" | "already_advanced" | "out_of_sync";
+  position: number;
+  total_questions: number;
+  question: CandidateQuestion;
+  answer: SavedAnswer | null;
+  server_time: string;
 }
 
 export interface PaperBody {
