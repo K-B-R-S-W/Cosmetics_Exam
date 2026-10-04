@@ -1,5 +1,5 @@
 -- =====================================================================
--- 001_smoke_test.sql  —  run AFTER 001_initial.sql, in the Supabase SQL editor.
+-- 001_smoke_test.sql  —  run AFTER migrations 001, 002, 003 and 004 in the Supabase SQL editor.
 -- Everything runs inside a transaction that is ROLLED BACK, so no data is left behind.
 -- Success = the last notice says "SMOKE TEST PASSED". Any failure raises an error naming the check.
 -- =====================================================================
@@ -31,9 +31,22 @@ declare
     'public.advance_position(uuid,integer,uuid,text,uuid,integer)',
     'public.submit_attempt(uuid,text)',
     'public.create_broadcast(uuid,text,text,uuid[])',
-    'public.claim_broadcast(uuid,uuid,uuid)'
+    'public.claim_broadcast(uuid,uuid,uuid)',
+    'public.unassign_exam_candidates(uuid,uuid[])'
   ];
 begin
+  assert not exists (
+    select 1
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and not exists (
+         select 1
+           from unnest(coalesce(p.proconfig, array[]::text[])) as config(value)
+          where config.value like 'search_path=%'
+       )
+  ), 'grant 0: every public function must set search_path in proconfig';
+
   assert not has_schema_privilege('anon', 'public', 'USAGE'),
     'grant 0a: anon must not have public schema usage';
   assert has_schema_privilege('authenticated', 'public', 'USAGE'),
@@ -129,15 +142,22 @@ declare
   v_exam    uuid := gen_random_uuid();
   v_cand    uuid := gen_random_uuid();
   v_cand2   uuid := gen_random_uuid();
+  v_unknown uuid := gen_random_uuid();
   v_q1      uuid := gen_random_uuid();
   v_q2      uuid := gen_random_uuid();
   v_q3      uuid := gen_random_uuid();
   v_opt     uuid := gen_random_uuid();
+  v_opt2    uuid := gen_random_uuid();
   v_att     uuid;
   v_first   uuid;
   v_second  uuid;
+  v_third   uuid;
   v_res     text;
   v_pos     int;
+  v_removed uuid[];
+  v_blocked uuid[];
+  v_paper_before jsonb;
+  v_paper_after jsonb;
   v_broadcast uuid;
   v_recipient_count int;
   v_claim uuid := gen_random_uuid();
@@ -149,10 +169,17 @@ begin
             from information_schema.columns
            where table_schema = 'public' and table_name = 'exams' and column_name = 'flag_threshold'),
     '0: exams.flag_threshold must default to 10';
+  assert not exists (
+    select 1
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'exams'
+       and column_name = 'questions_per_paper'
+  ), '0: questions_per_paper must be removed by migration 004';
 
-  -- Live sequential exam, 3 questions in the pool, 2 per paper
-  insert into public.exams (id, title, duration_min, status, started_at, ends_at, navigation_mode, questions_per_paper)
-  values (v_exam, 'Smoke test', 30, 'live', now(), now() + interval '30 minutes', 'sequential', 2);
+  -- Live sequential exam. Every candidate receives all three composed questions.
+  insert into public.exams (id, title, duration_min, status, started_at, ends_at, navigation_mode, shuffle)
+  values (v_exam, 'Smoke test', 30, 'live', now(), now() + interval '30 minutes', 'sequential', false);
 
   insert into public.questions (id, exam_id, position, type, body_html, marks) values
     (v_q1, v_exam, 0, 'mcq',     '<p>Q1</p>', 1),
@@ -188,7 +215,9 @@ begin
   update public.questions
      set image_path = null, image_alt_text = null, image_mime = null, image_size_bytes = null
    where id = v_q2;
-  insert into public.mcq_options (id, question_id, position, label, text_html) values (v_opt, v_q1, 0, 'a', 'Yes');
+  insert into public.mcq_options (id, question_id, position, label, text_html) values
+    (v_opt,  v_q1, 0, 'a', 'Yes'),
+    (v_opt2, v_q1, 1, 'b', 'No');
 
   insert into public.candidates (id, mer_code, full_name, nic_hash) values
     (v_cand, 'SMOKE-1', 'Smoke Tester', 'x'),
@@ -267,13 +296,140 @@ begin
 
   update public.attempts set status = 'acknowledged', acknowledged_at = now() where id = v_att;
   perform public.generate_paper(v_att);
-  perform public.generate_paper(v_att);   -- second call must not create a second paper
-  assert (select count(*) from public.attempt_questions where attempt_id = v_att) = 2, '2b: pool should give 2 of 3 questions';
-  assert (select status from public.attempts where id = v_att) = 'in_progress', '2c: attempt should be in_progress';
+  select jsonb_agg(
+           jsonb_build_object(
+             'question_id', question_id,
+             'position', position,
+             'option_order', option_order
+           ) order by position
+         )
+    into v_paper_before
+    from public.attempt_questions
+   where attempt_id = v_att;
+
+  perform public.generate_paper(v_att);   -- reconnect must return the saved paper
+  select jsonb_agg(
+           jsonb_build_object(
+             'question_id', question_id,
+             'position', position,
+             'option_order', option_order
+           ) order by position
+         )
+    into v_paper_after
+    from public.attempt_questions
+   where attempt_id = v_att;
+
+  assert (select count(*) from public.attempt_questions where attempt_id = v_att) = 3,
+    '2b: every composed question must be assigned';
+  assert (select array_agg(question_id order by position) = array[v_q1, v_q2, v_q3]
+            from public.attempt_questions where attempt_id = v_att),
+    '2c: shuffle=false must preserve authored question order';
+  assert (select option_order = to_jsonb(array[v_opt, v_opt2])
+            from public.attempt_questions
+           where attempt_id = v_att and question_id = v_q1),
+    '2c: shuffle=false must preserve authored MCQ option order';
+  assert v_paper_after = v_paper_before,
+    '2d: reconnect must preserve question and option order';
+  assert (select status from public.attempts where id = v_att) = 'in_progress',
+    '2d: attempt should be in_progress';
+
+  -- 2e. Mixed unassign is atomic: the unstarted attempt is removed, the started
+  -- attempt is blocked, duplicate and unknown ids are ignored.
+  select removed, blocked into v_removed, v_blocked
+    from public.unassign_exam_candidates(
+      v_exam,
+      array[v_cand, v_cand2, v_unknown, v_cand2]
+    );
+  assert v_removed = array[v_cand2], '2e: unstarted candidate must be removed';
+  assert v_blocked = array[v_cand], '2e: started candidate must be blocked';
+  assert not exists (
+    select 1 from public.exam_candidates
+     where exam_id = v_exam and candidate_id = v_cand2
+  ), '2e: removed assignment must be deleted';
+  assert not exists (
+    select 1 from public.attempts
+     where exam_id = v_exam and candidate_id = v_cand2
+  ), '2e: trigger must delete the removed not_started attempt';
+  assert exists (
+    select 1 from public.exam_candidates
+     where exam_id = v_exam and candidate_id = v_cand
+  ), '2e: blocked assignment must remain';
+
+  -- 2f. A live exam with no composed questions fails clearly.
+  declare
+    v_empty_exam uuid := gen_random_uuid();
+    v_empty_cand uuid := gen_random_uuid();
+    v_empty_att  uuid;
+  begin
+    insert into public.exams (id, title, duration_min, status, started_at, ends_at)
+    values (v_empty_exam, 'Empty smoke exam', 30, 'live', now(), now() + interval '30 minutes');
+    insert into public.candidates (id, mer_code, full_name, nic_hash)
+    values (v_empty_cand, 'SMOKE-EMPTY', 'Empty Exam Tester', 'z');
+    insert into public.exam_candidates (exam_id, candidate_id)
+    values (v_empty_exam, v_empty_cand);
+    update public.attempts
+       set status = 'acknowledged', acknowledged_at = now()
+     where exam_id = v_empty_exam and candidate_id = v_empty_cand
+     returning id into v_empty_att;
+    begin
+      perform public.generate_paper(v_empty_att);
+      assert false, '2f: an exam with zero questions must be rejected';
+    exception when others then
+      assert sqlerrm = 'exam_has_no_questions',
+        '2f: expected exam_has_no_questions, got ' || sqlerrm;
+    end;
+
+    update public.exams set status = 'ended' where id = v_empty_exam;
+    begin
+      perform 1 from public.unassign_exam_candidates(v_empty_exam, array[v_empty_cand]);
+      assert false, '2f: ended exams must reject unassignment';
+    exception when others then
+      assert sqlerrm = 'exam_locked',
+        '2f: expected exam_locked from ended unassign, got ' || sqlerrm;
+    end;
+  end;
+
+  -- 2g. Report environment-specific timing for a paper of about 100 questions.
+  -- It is informational only; project load makes a fixed threshold brittle.
+  declare
+    v_perf_exam uuid := gen_random_uuid();
+    v_perf_cand uuid := gen_random_uuid();
+    v_perf_att  uuid;
+    v_started   timestamptz;
+    v_elapsed_ms numeric;
+  begin
+    insert into public.exams (id, title, duration_min, status, started_at, ends_at, shuffle)
+    values (v_perf_exam, '100-question timing exam', 30, 'live', now(), now() + interval '30 minutes', true);
+    insert into public.questions (exam_id, position, type, body_html)
+    select v_perf_exam, n - 1, 'written', '<p>Timing question ' || n || '</p>'
+      from generate_series(1, 100) as n;
+    insert into public.candidates (id, mer_code, full_name, nic_hash)
+    values (v_perf_cand, 'SMOKE-PERF', 'Timing Tester', 'p');
+    insert into public.exam_candidates (exam_id, candidate_id)
+    values (v_perf_exam, v_perf_cand);
+    update public.attempts
+       set status = 'acknowledged', acknowledged_at = now()
+     where exam_id = v_perf_exam and candidate_id = v_perf_cand
+     returning id into v_perf_att;
+
+    v_started := clock_timestamp();
+    perform public.generate_paper(v_perf_att);
+    v_elapsed_ms := extract(epoch from (clock_timestamp() - v_started)) * 1000;
+
+    assert (select count(*) from public.attempt_questions where attempt_id = v_perf_att) = 100,
+      '2g: 100-question paper must contain all questions';
+    perform set_config(
+      'app.smoke_generate_paper_ms',
+      round(v_elapsed_ms, 2)::text,
+      true
+    );
+    raise notice 'generate_paper 100-question timing: % ms', round(v_elapsed_ms, 2);
+  end;
 
   -- 3. Sequential navigation
   select question_id into v_first  from public.attempt_questions where attempt_id = v_att and position = 0;
   select question_id into v_second from public.attempt_questions where attempt_id = v_att and position = 1;
+  select question_id into v_third  from public.attempt_questions where attempt_id = v_att and position = 2;
 
   select out_result, out_position into v_res, v_pos from public.advance_position(v_att, 0, v_first, 'answer one', null, 1);
   assert v_res = 'advanced' and v_pos = 1, '3a: first Next should advance to 1, got ' || v_res;
@@ -285,18 +441,21 @@ begin
     '3c: editing an earlier question must be rejected';
 
   select out_result, out_position into v_res, v_pos from public.advance_position(v_att, 1, v_second, 'answer two', null, 1);
-  assert v_res = 'last_question', '3d: last question should use Submit, got ' || v_res;
+  assert v_res = 'advanced' and v_pos = 2, '3d: second Next should advance to 2, got ' || v_res;
+
+  select out_result, out_position into v_res, v_pos from public.advance_position(v_att, 2, v_third, 'answer three', null, 1);
+  assert v_res = 'last_question', '3e: last question should use Submit, got ' || v_res;
 
   -- 4. Revision rule: a stale revision never overwrites
-  assert public.save_answer(v_att, v_second, 'rev 5', null, false, 5) = 'saved',          '4a: first save';
-  assert public.save_answer(v_att, v_second, 'old',   null, false, 3) = 'stale_revision', '4b: stale revision';
-  assert (select answer_text from public.answers where attempt_id = v_att and question_id = v_second) = 'rev 5',
+  assert public.save_answer(v_att, v_third, 'rev 5', null, false, 5) = 'saved',          '4a: first save';
+  assert public.save_answer(v_att, v_third, 'old',   null, false, 3) = 'stale_revision', '4b: stale revision';
+  assert (select answer_text from public.answers where attempt_id = v_att and question_id = v_third) = 'rev 5',
     '4c: stale revision must not overwrite';
 
   -- 5. Submit, then everything is closed
   assert public.submit_attempt(v_att, 'manual') = true,  '5a: submit';
   assert public.submit_attempt(v_att, 'manual') = false, '5b: second submit is a no-op';
-  assert public.save_answer(v_att, v_second, 'late', null, false, 9) = 'closed', '5c: save after submit must be closed';
+  assert public.save_answer(v_att, v_third, 'late', null, false, 9) = 'closed', '5c: save after submit must be closed';
 
   -- 6. Scores: an override always wins, even over a later AI row
   insert into public.question_scores (attempt_id, question_id, source, marks, max_marks) values (v_att, v_first, 'ai', 1, 2);
@@ -492,18 +651,22 @@ begin
   -- 13. Admin force-end collection window accepts the candidate's final partial answer,
   -- then closes after 15 seconds.
   update public.attempts
-     set status = 'in_progress', submit_reason = null, submitted_at = null, current_position = 1
+     set status = 'in_progress', submit_reason = null, submitted_at = null, current_position = 2
    where id = v_att;
   update public.exams
      set status = 'ended', ends_at = now(), force_ended_at = now()
    where id = v_exam;
-  assert public.save_answer(v_att, v_second, 'partial final answer', null, false, 10) = 'saved',
+  assert public.save_answer(v_att, v_third, 'partial final answer', null, false, 10) = 'saved',
     '13a: force-end window must accept the latest partial answer';
   update public.exams set force_ended_at = now() - interval '16 seconds' where id = v_exam;
-  assert public.save_answer(v_att, v_second, 'too late', null, false, 11) = 'closed',
+  assert public.save_answer(v_att, v_third, 'too late', null, false, 11) = 'closed',
     '13b: force-end window must close after 15 seconds';
 
   raise notice 'SMOKE TEST PASSED';
 end $$;
+
+select
+  'SMOKE TEST PASSED' as result,
+  current_setting('app.smoke_generate_paper_ms')::numeric as generate_paper_100_question_ms;
 
 rollback;

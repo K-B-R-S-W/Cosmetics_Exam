@@ -7,9 +7,15 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 - `001_initial.sql` — save as `supabase/migrations/001_initial.sql` and run first.
 - `002_grading.sql` — save as `supabase/migrations/002_grading.sql` and run second.
 - `003_function_search_path.sql` — run third. It fixes each application function's execution search path without changing its behavior.
-- `001_smoke_test.sql` — run last in the SQL editor; it rolls itself back.
+- `004_exam_paper_and_unassign.sql` — run fourth. It assigns every composed question to every paper, removes the superseded `questions_per_paper` column, and adds atomic candidate unassignment.
+- `001_smoke_test.sql` — run last in the SQL editor; it rolls itself back and reports the observed `generate_paper()` time for 100 questions.
 
-> **Development verification status (4 October 2026):** `001_initial.sql`, `002_grading.sql`, and `001_smoke_test.sql` ran without errors on a fresh Supabase development project; the smoke test passed, the Dashboard reported zero tables without RLS, `/api/health` returned HTTP 200, and a manually created `super_admin` Auth user was linked to its `admin_profiles` row. `003_function_search_path.sql` was then applied successfully in the SQL Editor.
+> **Development verification status (4 October 2026):** `001_initial.sql`, `002_grading.sql`, `003_function_search_path.sql`, `004_exam_paper_and_unassign.sql`, and the revised `001_smoke_test.sql` ran without errors on the Supabase development project. The smoke test passed, the Dashboard reported zero tables without RLS, `/api/health` returned HTTP 200, and a manually created `super_admin` Auth user was linked to its `admin_profiles` row.
+>
+> Function hardening was verified after applying 003 with:
+> `select proname, proconfig from pg_proc join pg_namespace on pg_namespace.oid = pg_proc.pronamespace where pg_namespace.nspname = 'public' order by proname;`
+> All 15 public functions had an explicit `search_path`: 13 used `public, pg_temp`; `is_admin()` and `is_super_admin()` used `public`.
+> The additional all-functions assertion and SQL Editor result-grid `SELECT` added afterward will be exercised the next time the smoke test runs.
 
 ---
 
@@ -19,11 +25,12 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 2. SQL editor → paste `001_initial.sql` → **Run**.
 3. SQL editor → paste `002_grading.sql` → **Run**.
 4. SQL editor → paste `003_function_search_path.sql` → **Run**.
-5. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect the final notice **SMOKE TEST PASSED**.
-6. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
+5. SQL editor → paste `004_exam_paper_and_unassign.sql` → **Run**.
+6. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect a `generate_paper 100-question timing: ... ms` notice and the final notice **SMOKE TEST PASSED**.
+7. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
    `insert into public.admin_profiles (id, name, role) values ('<auth user uuid>', 'Name', 'super_admin');`
    Use `'admin'` for ordinary admins.
-7. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` are in `supabase_realtime`.
+8. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` are in `supabase_realtime`.
 
 If an already-created database still has the old exam default, run this only after the implementation migration step becomes due:
 
@@ -44,7 +51,8 @@ Fresh databases created by the current `001_initial.sql` already use `10` and do
 | Announcements | Plain text, 1–5,000 characters, unlimited sends, exact all/custom recipient snapshots, one-time claims, and a client-side fixed five-second toast |
 | Flagging | `exams.flag_threshold` defaults to 10 and remains configurable from 1 to 100. No automatic kick, eject, penalty or disqualification |
 | Attempts | Assignment creates the candidate attempt automatically; unassignment removes it only while `not_started` |
-| Engine rules | `generate_paper`, `save_answer`, `advance_position`, and `submit_attempt` enforce paper, revision, deadline, navigation and submit behavior atomically with the database clock |
+| Exam papers | Every candidate receives every composed question. `shuffle` controls question order and MCQ option order only; reconnects retain the saved order |
+| Engine rules | `generate_paper`, `unassign_exam_candidates`, `save_answer`, `advance_position`, and `submit_attempt` enforce paper, assignment, revision, deadline, navigation and submit behavior atomically with the database clock |
 | Views | `current_scores`, `attempt_progress`, and `attempt_deadlines` are `security_invoker` views |
 | Realtime | `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` |
 | Storage | Private `snapshots` and `question-images` buckets; candidates receive question images only through an authorized API route |
@@ -66,6 +74,7 @@ The Security Advisor warnings for `is_admin()` and `is_super_admin()` are accept
 | 1A.1 | Save the checked-in `001_initial.sql` as the migration. Never hand-write schema from task tables |
 | 1A.2b | Run the checked-in `002_grading.sql` after `001_initial.sql` |
 | 1A.2c | Run `003_function_search_path.sql` after the schema migrations; every new function must set its own safe search path |
+| 1D.2–1D.3 | Run `004_exam_paper_and_unassign.sql`; every paper contains all composed questions and mixed unassignment is atomic |
 | 1A.2 | Run the checked-in smoke test after all migrations and require `SMOKE TEST PASSED` |
 | 1A.3 | Verify RLS plus the explicit `anon`, `authenticated`, and `service_role` ACL assertions in the smoke test |
 | 1A.4 | Verify the six Realtime publication tables listed above |
@@ -113,6 +122,7 @@ The migration and smoke test are intentionally not embedded here. Use these chec
 - [`001_initial.sql`](./001_initial.sql)
 - [`002_grading.sql`](./002_grading.sql)
 - [`003_function_search_path.sql`](../../supabase/migrations/003_function_search_path.sql)
+- [`004_exam_paper_and_unassign.sql`](../../supabase/migrations/004_exam_paper_and_unassign.sql)
 - [`001_smoke_test.sql`](./001_smoke_test.sql)
 
 This prevents the documentation copy from drifting away from the executable source of truth.
