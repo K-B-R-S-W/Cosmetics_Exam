@@ -1,11 +1,13 @@
+import Link from "next/link";
+
 import type { AdminRole } from "@/lib/auth";
 
 const NAV_ITEMS = [
-  { label: "Exams", superAdminOnly: false },
-  { label: "Candidates", superAdminOnly: false },
-  { label: "Live", superAdminOnly: false },
-  { label: "Results", superAdminOnly: false },
-  { label: "Health", superAdminOnly: true },
+  { label: "Exams", href: null, superAdminOnly: false },
+  { label: "Candidates", href: "/admin/candidates", superAdminOnly: false },
+  { label: "Live", href: null, superAdminOnly: false },
+  { label: "Results", href: null, superAdminOnly: false },
+  { label: "Health", href: null, superAdminOnly: true },
 ] as const;
 
 export function AdminNav({ role }: { role: AdminRole }) {
@@ -19,12 +21,21 @@ export function AdminNav({ role }: { role: AdminRole }) {
           (item) => !item.superAdminOnly || role === "super_admin",
         ).map((item) => (
           <li key={item.label}>
-            <span
-              aria-disabled="true"
-              className="flex min-h-11 cursor-not-allowed items-center rounded-control px-3 text-md text-muted"
-            >
-              {item.label}
-            </span>
+            {item.href ? (
+              <Link
+                href={item.href}
+                className="flex min-h-11 items-center rounded-control px-3 text-md text-ink hover:bg-selected"
+              >
+                {item.label}
+              </Link>
+            ) : (
+              <span
+                aria-disabled="true"
+                className="flex min-h-11 cursor-not-allowed items-center rounded-control px-3 text-md text-muted"
+              >
+                {item.label}
+              </span>
+            )}
           </li>
         ))}
       </ul>

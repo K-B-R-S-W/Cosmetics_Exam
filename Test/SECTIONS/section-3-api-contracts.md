@@ -235,11 +235,11 @@ Request:
 ```json
 { "mer_code": "MER-0412", "nic": "199012345678", "exam_id": "<uuid, optional>" }
 ```
-`mer_code`: 1 to 32 chars, trimmed, uppercased. `nic`: 1 to 20 chars, normalized by the 1C.1 utility.
+`mer_code`: 1 to 64 chars, trimmed, uppercased. `nic`: 1 to 20 chars, normalized by the 1C.1 utility.
 
 Steps, in order:
 1. **Rate limit** (failed attempts only, last 10 minutes): 5 per MER, about 200 per IP (Section 6 §7; plan 2A.3). Over the limit returns `429 rate_limited` with `retry_after_s`. The IP limit is high on purpose: all 23 people share one office network.
-2. Find the active candidate by `mer_code`. Always run one argon2 verify, even for an unknown MER (against a dummy hash), so response time does not reveal which MER codes exist.
+2. Find the active candidate by `mer_code`. Always run one argon2 verify, even for an unknown MER, so response time does not reveal which MER codes exist. The unknown-MER path verifies against a **real dummy hash created with the current Argon2 policy and `NIC_PEPPER`**. Create it once per server process and cache the resulting promise/hash; never generate a fresh dummy hash per login and never use a malformed or cheaper hash.
 3. Failure: insert `login_attempts (success=false)` and return `401 invalid_credentials`. The same code covers unknown MER, wrong ID, and inactive candidate.
 4. Success: insert `login_attempts (success=true)`.
 5. **Pick the exam.** Eligible = assigned exams with status `scheduled` or `live`.
@@ -465,20 +465,23 @@ All admin routes: `requireAdmin()` (or `requireSuperAdmin()` where stated) insid
 
 ### 4.1 Candidates
 
-**`GET /api/admin/candidates?q=&exam_id=&active=&page=1&page_size=50`**
+**`GET /api/admin/candidates?q=&exam_id=&active=&page=1&page_size=50&include=exam_options`**
 `page_size` max 200. `q` matches MER code, name or outlet. `exam_id` limits to candidates assigned to that exam.
-`200 { "items": [{ "id", "mer_code", "full_name", "outlet", "active", "created_at", "assigned_exam_count" }], "total": 23 }`. `nic_hash` is never returned.
+`200 { "items": [{ "id", "mer_code", "full_name", "outlet", "active", "created_at", "assigned_exam_count" }], "total": 23 }`. `nic_hash` is never returned. `exam_options` is included only when the exact query `include=exam_options` is present (the list page requests it on its first load); searches, filters and later pages omit it.
+
+**`GET /api/admin/candidates/[id]`** (NEW)
+Returns `200 { "candidate": { "id", "mer_code", "full_name", "outlet", "active", "created_at", "assigned_exam_count" } }`. It never returns `nic_hash`; `404 not_found` for an unknown UUID.
 
 **`POST /api/admin/candidates`**
 `{ "mer_code": "MER-0412", "full_name": "A. Perera", "outlet": "Galle", "nic": "199012345678" }`
-The MER code is trimmed and uppercased. The ID is normalized, checked against the old format (9 digits then `V` or `X`) or the new one (12 digits), hashed with the pepper, and the plain value is discarded. `201 { "candidate": {...} }`.
+The MER code is trimmed and uppercased. Limits are MER code **64**, full name **200**, and outlet **200** characters; these are validation limits, not transliteration rules, and Sinhala/English/mixed content is preserved exactly. The ID is normalized, checked against the old format (9 digits then `V` or `X`) or the new one (12 digits), hashed with the pepper, and the plain value is discarded. `201 { "candidate": {...} }`.
 Errors: `409 duplicate_mer`, `400 invalid_nic`.
 
 **`PATCH /api/admin/candidates/[id]`** (NEW file)
 `{ "full_name"?, "outlet"?, "nic"?, "active"? }`. The MER code cannot be changed (it is the login key): to change it, create a new candidate. Setting `active: false` blocks login without deleting history.
 
 **`DELETE /api/admin/candidates/[id]`** (NEW)
-Allowed only if the candidate has no attempt that has left `not_started`. Otherwise `409 has_attempts` (the cascade would erase their answers and scores): deactivate instead.
+Allowed only if the candidate has no attempt that has left `not_started`. Otherwise `409 has_attempts` (the cascade would erase their answers and scores): deactivate instead. The UI steers admins to deactivate whenever any exam history exists. This remains a known guard-then-delete race: a newly started attempt between the guard query and delete can still be cascaded; removing that limitation later requires a transactional database function or restrictive schema change.
 
 **`POST /api/admin/candidates/import`**
 ```json
@@ -486,6 +489,10 @@ Allowed only if the candidate has no attempt that has left `not_started`. Otherw
 ```
 - At most **100 rows per request** (argon2 time against the function limit). The page parses the CSV in the browser (Papaparse) and sends batches of 50 in sequence, with `dry_run: true` first to show errors before anything is written.
 - `on_duplicate`: `skip` (default) or `update` (updates name, outlet and ID hash for an existing MER code).
+- The browser's Check step finds repeated normalized MER codes across the **whole file** before batching. The first occurrence is checked normally; every later occurrence is a row error and is never sent for import. The server independently rejects later repetitions within each batch as a backstop.
+- `dry_run: true` performs validation and the existing-MER pre-query only: it does **no Argon2 hashing and no writes**.
+- A real batch hashes only rows that will be applied, then performs one bulk upsert. Counts come from the pre-query. `skip` uses `ignoreDuplicates`; `update` replaces name, outlet and NIC hash for matching MERs.
+- The bulk upsert is one database statement. If it fails, the whole batch is reported as not applied; the route does not report or imply partial success.
 - Response `200 { "dry_run": true, "created": 18, "updated": 0, "skipped": 2, "errors": [{ "row": 7, "mer_code": "MER-0099", "code": "invalid_nic", "message": "..." }] }`. Rows are independent: one bad row does not stop the others.
 
 **`POST /api/admin/candidates/[id]/unlock`** (NEW, optional)
@@ -871,6 +878,7 @@ New environment variables: `SNAPSHOT_RETENTION_DAYS` (default `14`), `NEXT_PUBLI
 17. Override then regrade the same question: the override stays current and `override_present` is `true`.
 18. The CSV opens in Excel with Sinhala names intact and no cell starts with an unescaped `=`.
 19. Pull the worker: `DISCONNECTED` appears about 30 s after a candidate closes the tab, and `RECONNECTED` with a duration appears when they return.
+20. On the real web host, measure Argon2 hash and verify latency with the production policy. Exercise the expected concurrent exam-start login burst and record Node thread-pool concurrency, peak memory and response latency; the rehearsal fails if async verifications exhaust memory or make login unacceptably slow.
 
 ---
 
