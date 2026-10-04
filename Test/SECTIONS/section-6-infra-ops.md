@@ -209,6 +209,7 @@ During setup, insert a harmless test alert and confirm it appears and resolves i
 - `NEXT_PUBLIC_*` values are baked in at build time. After changing one, redeploy.
 - `SESSION_SECRET` and `NIC_PEPPER` must **never change** after candidates are imported (the pepper) or during an exam (the session secret logs everyone out). Store both in a password manager now.
 - `LIVEKIT_URL` is what the token route returns to the browser. It must be `wss://cosmetics.duckdns.org`.
+- After deploying behind Vercel or the Caddy fallback, send a harmless browser write from the public URL and verify `assertSameOrigin()` accepts that public origin and rejects a different origin. If the proxy changes the effective request origin, set `ALLOWED_ORIGINS` to the exact public origin and repeat the check.
 - Hobby plan limits and terms *(verify)*. If Vercel is a problem on exam day, the fallback is to host the app on the EC2 behind Caddy. That fallback has never been tested, so decide in the rehearsal whether to keep it.
 
 **Rate limit and the shared IP.** All 23 candidates sit behind one office IP. The per-IP login limit (counting failed attempts only, task 2A.3) must be well above what 23 people can produce in 10 minutes (suggest about 200), while the per-MER limit stays strict (suggest about 5). Check the numbers before the rehearsal.
@@ -342,3 +343,4 @@ Do not run `npm run build` on the box while an exam is live. Deploys happen the 
 | 8.94 | **Capacity:** all candidates connected for 30 minutes, three admins subscribed, numbers from §9 recorded, no swap thrash. |
 | 8.95 | **LiveKit network matrix:** publish and monitor on normal Wi-Fi, mobile data, and a restrictive network; record ICE candidate selection, TURN/UDP fallback, WSS/TLS through Caddy, reconnect, camera/microphone recovery, and candidate/admin Realtime recovery. The current config does not claim TURN/TLS. If the restrictive network blocks both UDP and ICE/TCP, enable TURN/TLS as in §4.3 and repeat the matrix before marking LiveKit production-ready. |
 | 8.96 | **Shared-IP login:** 23 logins from one IP within two minutes all succeed; 6 wrong attempts on one MER are limited. |
+| 8.97 | **Public-origin CSRF check:** on the deployed Vercel URL and, if enabled, the Caddy fallback, a harmless browser write from the public origin passes `assertSameOrigin()` and a mismatched origin returns `403 forbidden`. If the proxy changes the effective request origin, set `ALLOWED_ORIGINS` to the exact public origin and repeat before production use. |

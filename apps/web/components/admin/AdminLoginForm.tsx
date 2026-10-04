@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
+import { normalizeAdminReturnPath } from "@/lib/admin-return-path";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 
 export const LOGIN_MESSAGES = {
@@ -17,22 +18,6 @@ export const LOGIN_MESSAGES = {
 } as const;
 
 export type LoginReason = "not-configured" | "session-ended";
-
-export function normalizeAdminReturnPath(value: string | undefined): string {
-  if (!value || value.includes("\\") || /[\u0000-\u001f]/.test(value)) {
-    return "/admin";
-  }
-
-  if (
-    value === "/admin" ||
-    value.startsWith("/admin/") ||
-    value.startsWith("/admin?")
-  ) {
-    return value;
-  }
-
-  return "/admin";
-}
 
 interface AdminLoginFormProps {
   reason?: LoginReason;

@@ -77,6 +77,8 @@ Browser `POST`, `PUT`, `PATCH`, and `DELETE` handlers call the shared `assertSam
 
 All handlers use the **service-role** Supabase client after the auth check. The candidate and admin browsers never write to Supabase directly. (Admins do read some tables directly, see section 5.)
 
+The admin layout's authorization check runs only on full loads; client-side navigation can reuse the mounted layout, so it is not an authorization boundary for page data requests or route handlers. Every admin page's own data-access function and every `/api/admin/*` handler must call `requireAdmin()` or `requireSuperAdmin()` itself before loading or changing data. Do not rely on the layout or Proxy for authorization.
+
 ### 1.4 Limits and platform
 - Body limits: 64 KB by default. `POST /api/events` 200 KB. Question routes 200 KB. Candidate import 500 KB. `POST /api/admin/question-images` accepts one multipart upload whose decoded file is at most **4 MiB**; reject it before buffering when `Content-Length` already exceeds the route's multipart ceiling. The 4 MiB file cap leaves room below Vercel Functions' 4.5 MB request-payload limit for multipart framing and `alt_text`.
 - `export const maxDuration = 30` on the import, grade, force-end and snapshot-purge routes *(verify the Hobby limit)*.

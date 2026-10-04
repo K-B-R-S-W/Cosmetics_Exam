@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AdminLoginForm,
   LOGIN_MESSAGES,
-  normalizeAdminReturnPath,
 } from "@/components/admin/AdminLoginForm";
+import { normalizeAdminReturnPath } from "@/lib/admin-return-path";
 
 const mocks = vi.hoisted(() => ({
   replace: vi.fn(),

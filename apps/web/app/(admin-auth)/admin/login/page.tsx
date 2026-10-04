@@ -4,6 +4,7 @@ import {
   AdminLoginForm,
   type LoginReason,
 } from "@/components/admin/AdminLoginForm";
+import { normalizeAdminReturnPath } from "@/lib/admin-return-path";
 
 interface LoginPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -11,22 +12,6 @@ interface LoginPageProps {
 
 function firstValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
-}
-
-function normalizeAdminReturnPath(value: string | undefined): string {
-  if (!value || value.includes("\\") || /[\u0000-\u001f]/.test(value)) {
-    return "/admin";
-  }
-
-  if (
-    value === "/admin" ||
-    value.startsWith("/admin/") ||
-    value.startsWith("/admin?")
-  ) {
-    return value;
-  }
-
-  return "/admin";
 }
 
 export default async function AdminLoginPage({ searchParams }: LoginPageProps) {

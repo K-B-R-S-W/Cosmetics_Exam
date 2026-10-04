@@ -512,6 +512,7 @@ Detailed task breakdown for each phase. Tasks are ordered by dependency within e
 | ➕ 8.94 | Test capacity | 🔧²² Section 6 §9: 23 candidates connected for 30 min, 3 admins subscribed; monitor every 15 min (`free -m`, `docker stats`, CloudWatch CPU credits); verify no swap thrash; resize to `t3.medium` if needed |
 | ➕ 8.95 | Test mobile-data publisher | 🔧²² One candidate on mobile data publishes video; admin sees tile on live grid |
 | ➕ 8.96 | Test shared-IP login | 🔧²² 23 logins from one IP within 2 min all succeed; 6 wrong attempts on one MER limited by per-MER threshold |
+| ➕ 8.97 | Test deployed Origin checks | On the deployed Vercel URL and, if enabled, the Caddy fallback, verify a harmless browser write from the public origin passes `assertSameOrigin()` and a mismatched origin returns `403 forbidden`. If the proxy changes the effective request origin, set `ALLOWED_ORIGINS` to the exact public origin and repeat before production use |
 
 
 **Done when:** full rehearsal passes with no blocking issues; runbook is finalized; 🔧²² restore drill passed; capacity numbers recorded; alert test message received (Section 6 §12).
