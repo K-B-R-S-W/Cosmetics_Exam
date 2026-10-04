@@ -91,6 +91,27 @@ describe("WaitingRoom", () => {
     expect(mocks.loadPaper).toHaveBeenCalledTimes(3);
   });
 
+  it("shows the long-delay notice after six failures and resets it after success", async () => {
+    currentState = state("live", null);
+    for (let failure = 0; failure < 6; failure += 1) {
+      mocks.loadPaper.mockRejectedValueOnce(new Error("deterministic server failure"));
+    }
+    mocks.loadPaper.mockResolvedValueOnce({});
+    render(<WaitingRoom />);
+    await flush();
+    for (let failure = 1; failure < 6; failure += 1) {
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      await flush();
+    }
+    expect(mocks.loadPaper).toHaveBeenCalledTimes(6);
+    expect(screen.getByText("This is taking longer than expected. Tell the exam team if this continues.")).toBeTruthy();
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    await flush();
+    expect(mocks.loadPaper).toHaveBeenCalledTimes(7);
+    expect(screen.queryByText("This is taking longer than expected. Tell the exam team if this continues.")).toBeNull();
+    expect(mocks.push).toHaveBeenCalledWith("/exam");
+  });
+
   it.each([
     ["not_acknowledged", 403, "/rules"],
     ["attempt_closed", 409, "/done"],
@@ -107,6 +128,29 @@ describe("WaitingRoom", () => {
     await act(() => vi.advanceTimersByTimeAsync(20_000));
     expect(mocks.loadPaper).toHaveBeenCalledTimes(1);
     if (destination) expect(mocks.push).toHaveBeenCalledWith(destination);
+  });
+
+  it("lets the route guard own closed exam_not_live without retrying", async () => {
+    currentState = state("live", null, "in_progress");
+    mocks.loadPaper.mockRejectedValue(new CandidatePaperError("exam_not_live", 409));
+    mocks.refreshState.mockResolvedValue(state("closed", null, "in_progress"));
+    render(<WaitingRoom />);
+    await flush();
+    await act(() => vi.advanceTimersByTimeAsync(20_000));
+    expect(mocks.loadPaper).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("This is taking longer than expected. Tell the exam team if this continues.")).toBeNull();
+  });
+
+  it("immediately notices and retries unexpected exam_not_live phases", async () => {
+    currentState = state("live", null);
+    mocks.loadPaper.mockRejectedValue(new CandidatePaperError("exam_not_live", 409));
+    mocks.refreshState.mockResolvedValue({ ...state("live", null), phase: "submitted", attempt: { ...state("live", null).attempt, status: "acknowledged" } });
+    render(<WaitingRoom />);
+    await flush();
+    expect(screen.getByText("This is taking longer than expected. Tell the exam team if this continues.")).toBeTruthy();
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    await flush();
+    expect(mocks.loadPaper).toHaveBeenCalledTimes(2);
   });
 
   it("shows the ended screen without making a submit call", () => {

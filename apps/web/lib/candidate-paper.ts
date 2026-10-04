@@ -84,8 +84,15 @@ export async function loadCandidatePaper(
   if (examError) throw examError;
   const exam = examData as ExamRow;
 
-  if (exam.status !== "live" || exam.force_ended_at !== null) {
+  if (exam.status === "draft" || exam.status === "scheduled") {
     throw RPC_ERRORS.exam_not_live;
+  }
+  if (
+    exam.status === "ended" ||
+    exam.status === "finalized" ||
+    exam.force_ended_at !== null
+  ) {
+    throw new ApiError("exam_closed", 409, "The exam has ended.");
   }
   const deadline = attemptDeadline(exam.ends_at, auth.extraMinutes ?? 0);
   if (

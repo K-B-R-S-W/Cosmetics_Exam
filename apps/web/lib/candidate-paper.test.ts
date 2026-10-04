@@ -108,9 +108,24 @@ describe("loadCandidatePaper", () => {
     expect(supabase.from).not.toHaveBeenCalled();
   });
 
-  it("rejects an exam that is not live or was force-ended before generation", async () => {
-    for (const supabase of [client({ status: "scheduled" }), client({ forceEnded: "2026-10-04T09:00:00.000Z" })]) {
+  it("maps draft and scheduled exams to exam_not_live before generation", async () => {
+    for (const supabase of [client({ status: "draft" }), client({ status: "scheduled" })]) {
       await expect(loadCandidatePaper(auth, { supabase: supabase as never })).rejects.toMatchObject({ code: "exam_not_live" });
+      expect(supabase.rpc).not.toHaveBeenCalled();
+    }
+  });
+
+  it("maps ended, finalized, and force-ended exams to exam_closed before generation", async () => {
+    for (const supabase of [
+      client({ status: "ended" }),
+      client({ status: "finalized" }),
+      client({ forceEnded: "2026-10-04T09:00:00.000Z" }),
+    ]) {
+      await expect(loadCandidatePaper(auth, { supabase: supabase as never })).rejects.toMatchObject({
+        code: "exam_closed",
+        status: 409,
+        message: "The exam has ended.",
+      });
       expect(supabase.rpc).not.toHaveBeenCalled();
     }
   });

@@ -11,6 +11,7 @@ import { Timer } from "@/components/exam/Timer";
 import { Button } from "@/components/ui/Button";
 import type { PaperBody } from "@/lib/candidate-types";
 import { langFor } from "@/lib/lang";
+import { PAPER_RETRY_DELAY_MS, PAPER_RETRY_NOTICE, usePaperRetryTracker } from "@/lib/paper-retry";
 import { refineServerClock } from "@/lib/time";
 
 function initialAnswers(paper: PaperBody): Record<string, DraftAnswer> {
@@ -44,6 +45,7 @@ export function ExamScreen() {
   const [locallyExpired, setLocallyExpired] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const retryVisibleTimer = useRef<number | null>(null);
+  const { recordFailure, resetFailures, showTakingLonger } = usePaperRetryTracker();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -52,6 +54,7 @@ export function ExamScreen() {
       const next = await loadPaper();
       refineServerClock(next.server_time);
       setTransientError(false);
+      resetFailures();
       setShowRetry(false);
       if (retryVisibleTimer.current !== null) {
         window.clearTimeout(retryVisibleTimer.current);
@@ -63,6 +66,7 @@ export function ExamScreen() {
       await refreshState().catch(() => null);
     } catch (error) {
       if (isTransientPaperFailure(error)) {
+        recordFailure();
         setTransientError(true);
         setRetryCycle((value) => value + 1);
         if (retryVisibleTimer.current === null) retryVisibleTimer.current = window.setTimeout(() => setShowRetry(true), 8000);
@@ -78,7 +82,7 @@ export function ExamScreen() {
     } finally {
       setLoading(false);
     }
-  }, [loadPaper, refreshState, router]);
+  }, [loadPaper, recordFailure, refreshState, resetFailures, router]);
 
   useEffect(() => { if (!me) void loadMe().catch(() => null); }, [loadMe, me]);
   useEffect(() => {
@@ -88,7 +92,7 @@ export function ExamScreen() {
   }, [load, loadedPaper]);
   useEffect(() => {
     if (!transientError) return;
-    const retry = window.setTimeout(() => void load(), 5000);
+    const retry = window.setTimeout(() => void load(), PAPER_RETRY_DELAY_MS);
     return () => window.clearTimeout(retry);
   }, [load, retryCycle, transientError]);
   useEffect(() => () => {
@@ -111,7 +115,7 @@ export function ExamScreen() {
   if (!state) return <main className="exam-shell"><p className="m-auto text-muted">Loading…</p></main>;
   if (fatalError === "exam_has_no_questions") return <CandidateErrorScreen title="This exam has no questions yet." body="Tell the exam team." signOut />;
   if (fatalError === "exam_closed" && state.attempt.status === "acknowledged") return <CandidateErrorScreen title="This exam has ended." body="The exam is closed." signOut />;
-  if (transientError) return <main className="exam-shell"><section className="m-auto max-w-md p-6"><h1 tabIndex={-1} className="text-title font-bold">Loading your exam…</h1><p className="mt-4 text-muted">We couldn&apos;t load the exam yet.</p>{showRetry ? <Button className="mt-6" onClick={() => void load()}>Retry</Button> : null}</section></main>;
+  if (transientError) return <main className="exam-shell"><section className="m-auto max-w-md p-6"><h1 tabIndex={-1} className="text-title font-bold">Loading your exam…</h1><p className="mt-4 text-muted">We couldn&apos;t load the exam yet.</p>{showTakingLonger ? <p className="mt-3 text-warn" role="status">{PAPER_RETRY_NOTICE}</p> : null}{showRetry ? <Button className="mt-6" onClick={() => void load()}>Retry</Button> : null}</section></main>;
 
   return (
     <main className="exam-shell bg-paper">

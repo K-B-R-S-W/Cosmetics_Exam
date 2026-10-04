@@ -42,4 +42,14 @@ describe("GET /api/exam/paper", () => {
     expect((await response.json()).error).toMatchObject({ code, message });
     expect(mocks.loadCandidatePaper).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["exam_closed", "The exam has ended."],
+    ["exam_not_live", "The exam hasn't started yet."],
+  ])("preserves the %s paper-state response", async (code, message) => {
+    mocks.loadCandidatePaper.mockRejectedValueOnce(new ApiError(code, 409, message));
+    const response = await GET();
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toEqual({ code, message, details: null });
+  });
 });

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { useExamBroadcast } from "@/lib/broadcast";
 import { formatColombo } from "@/lib/format-time";
 import { langFor } from "@/lib/lang";
+import { PAPER_RETRY_DELAY_MS, PAPER_RETRY_NOTICE, usePaperRetryTracker } from "@/lib/paper-retry";
 import { formatCountdown, refineServerClock, useServerClock } from "@/lib/time";
 
 const ANNOUNCE_AT_SECONDS = [600, 300, 120, 60];
@@ -23,12 +24,14 @@ export function WaitingRoom() {
   const [paperLoad, setPaperLoad] = useState<"idle" | "loading" | "transient">("idle");
   const [paperError, setPaperError] = useState<string | null>(null);
   const [notLiveNotice, setNotLiveNotice] = useState(false);
+  const [unexpectedPhase, setUnexpectedPhase] = useState(false);
   const [showPaperRetry, setShowPaperRetry] = useState(false);
   const firstStart = useRef<string | null | undefined>(undefined);
   const previousSeconds = useRef<number | null>(null);
   const announced = useRef(new Set<number>());
   const handoffActive = useRef(false);
   const retryVisibleTimer = useRef<number | null>(null);
+  const { recordFailure, resetFailures, showTakingLonger } = usePaperRetryTracker();
 
   const refresh = useCallback(async () => {
     try {
@@ -88,14 +91,17 @@ export function WaitingRoom() {
     setPaperLoad("loading");
     setPaperError(null);
     setNotLiveNotice(false);
+    setUnexpectedPhase(false);
     try {
       await loadPaper();
       await refreshState();
+      resetFailures();
       if (retryVisibleTimer.current !== null) window.clearTimeout(retryVisibleTimer.current);
       router.push("/exam");
     } catch (error) {
       handoffActive.current = false;
       if (!(error instanceof CandidatePaperError) || error.status >= 500 || error.code === "service_unavailable") {
+        recordFailure();
         setPaperLoad("transient");
         if (retryVisibleTimer.current === null) {
           retryVisibleTimer.current = window.setTimeout(() => setShowPaperRetry(true), 8000);
@@ -112,8 +118,17 @@ export function WaitingRoom() {
         setPaperError(null);
         setNotLiveNotice(true);
       }
+      else if (error.code === "exam_not_live" && next?.phase === "closed") {
+        // refreshState updates the provider; its route guard owns the closed transition.
+      }
+      else if (error.code === "exam_not_live") {
+        setPaperError(null);
+        setUnexpectedPhase(true);
+        recordFailure();
+        setPaperLoad("transient");
+      }
     }
-  }, [loadPaper, refreshState, router]);
+  }, [loadPaper, recordFailure, refreshState, resetFailures, router]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -125,7 +140,7 @@ export function WaitingRoom() {
 
   useEffect(() => {
     if (paperLoad !== "transient") return;
-    const retry = window.setTimeout(() => { handoffActive.current = false; setPaperLoad("idle"); }, 5000);
+    const retry = window.setTimeout(() => { handoffActive.current = false; setPaperLoad("idle"); }, PAPER_RETRY_DELAY_MS);
     return () => window.clearTimeout(retry);
   }, [paperLoad]);
 
@@ -146,7 +161,7 @@ export function WaitingRoom() {
       <div className="mt-8">
         {state.phase === "live" || atZero ? <Notice>The exam is starting…{delayed ? <span className="mt-2 block">This is taking longer than expected. Stay on this page. Tell the exam team if this continues.</span> : null}</Notice> : startAt && remainingMs !== null ? <><p className="text-muted">The exam starts in</p><p className="mt-2 text-timer font-bold" data-tabular-numbers="true">{formatCountdown(remainingMs)}</p><p className="mt-2 text-muted">{formatColombo(startAt)}</p></> : <Notice>The exam team will start the exam. Stay on this page.</Notice>}
       </div>
-      {paperLoad === "transient" ? <div className="mt-5"><Notice warning>Loading your exam…</Notice>{showPaperRetry ? <Button className="mt-3" variant="secondary" onClick={() => { handoffActive.current = false; setPaperLoad("idle"); }}>Retry</Button> : null}</div> : null}
+      {paperLoad === "transient" ? <div className="mt-5"><Notice warning>Loading your exam…{showTakingLonger || unexpectedPhase ? <span className="mt-2 block">{PAPER_RETRY_NOTICE}</span> : null}</Notice>{showPaperRetry ? <Button className="mt-3" variant="secondary" onClick={() => { handoffActive.current = false; setPaperLoad("idle"); }}>Retry</Button> : null}</div> : null}
       <p className="sr-only" aria-live="polite">{announcement}</p>
       {state.phase === "waiting" ? <p className="mt-8 text-muted">Stay on this page.</p> : null}
     </CandidateFrame>

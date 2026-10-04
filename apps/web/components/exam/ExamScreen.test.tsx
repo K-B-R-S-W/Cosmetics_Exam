@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PaperBody, StateBody } from "@/lib/candidate-types";
 
 const mocks = vi.hoisted(() => ({ push: vi.fn(), context: {} as Record<string, unknown> }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => mocks }));
 vi.mock("@/lib/time", () => ({ refineServerClock: vi.fn(), useServerClock: () => () => Date.parse("2026-10-04T10:00:00.000Z") }));
 vi.mock("@/components/candidate/CandidateContext", () => {
   class CandidatePaperError extends Error {
@@ -41,7 +41,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("ExamScreen", () => {
   it("keeps free-mode answers and navigation in memory and ignores current_position", () => {
@@ -90,6 +90,33 @@ describe("ExamScreen", () => {
     expect(await screen.findByRole("heading", { name: "Time is up" })).toBeTruthy();
     expect(screen.queryByText("Choose")).toBeNull();
     expect(screen.getByText("Answers are not saved yet (Phase 2 batch 3)")).toBeTruthy();
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(mocks.context.loadPaper).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends exam_not_live with waiting state back to the waiting room", async () => {
+    mocks.context.paper = null;
+    mocks.context.loadPaper = vi.fn().mockRejectedValue(new CandidatePaperError("exam_not_live", 409));
+    mocks.context.refreshState = vi.fn().mockResolvedValue({
+      ...state("acknowledged"),
+      phase: "waiting",
+      exam: { ...state().exam, status: "scheduled" },
+    });
+    render(<ExamScreen />);
+    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/waiting"));
+  });
+
+  it("shows the long-delay notice after six transient failures", async () => {
+    vi.useFakeTimers();
+    mocks.context.paper = null;
+    mocks.context.loadPaper = vi.fn().mockRejectedValue(new Error("deterministic server failure"));
+    render(<ExamScreen />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    for (let failure = 1; failure < 6; failure += 1) {
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+    }
+    expect(mocks.context.loadPaper).toHaveBeenCalledTimes(6);
+    expect(screen.getByText("This is taking longer than expected. Tell the exam team if this continues.")).toBeTruthy();
   });
 
   it("loads the paper again when context has no in-memory paper", async () => {

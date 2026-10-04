@@ -75,6 +75,7 @@ The route calculates the deadline with the same `attemptDeadline()` and `examPha
 - `/api/answers`, autosave, IndexedDB/offline queue, real save indicator, and persisted flags.
 - `/api/exam/next`, sequential advancement, blank-answer confirmation, and double-tap/server-idempotency handling.
 - `/api/exam/submit`, time-up flushing, final Submit behavior, and the completed Done screen.
+- Batch 3 / task 3B.4 must re-derive `locallyExpired` from fresh server state; `extra_minutes` granted after a local lock must unlock the screen.
 - Until those exist, the screen always shows "Answers are not saved yet (Phase 2 batch 3)", locks at zero without claiming to send anything, and disables sequential Next and final Submit.
 
 ### Reconciled specification differences
@@ -86,7 +87,14 @@ The route calculates the deadline with the same `attemptDeadline()` and `examPha
 - The optional image dimensions are omitted because the schema does not store them. The UI reserves an image region and retains aspect ratio after load.
 - Candidate image responses use `Cache-Control: private, max-age=300, no-transform`; all JSON candidate responses remain `no-store`.
 - The answer limit follows the specific Section 2B/API rule: warning from 19,000 characters and a hard stop at 20,000.
+- Paper loading classifies draft/scheduled as `exam_not_live`, but ended/finalized/force-ended and expired attempts as `exam_closed`. This prevents the closed in-progress route guard from bouncing `/exam` to `/waiting` and back.
+- Transient paper failures still retry every five seconds. After six consecutive failures both waiting and exam loading show "This is taking longer than expected. Tell the exam team if this continues." while quiet retries continue; a successful load resets the counter.
 - Camera, fullscreen, heartbeat, proctoring/events, autosave, announcements, worker changes, and the finished Done page remain outside this batch.
+
+### Manual review additions
+
+1. Force-end the exam while a candidate is `in_progress`, then reload `/exam`. Expect the "Time is up" lock with no redirect loop and no repeated paper requests in the network tab.
+2. Set the exam status to `ended` while a candidate is `in_progress`, then reload `/exam`. Expect the same locked state, no redirect loop, and no repeated paper requests.
 
 ### How to prepare the paper-burst test exam
 
