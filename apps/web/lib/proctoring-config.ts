@@ -1,0 +1,15 @@
+export const MIN_INCIDENT_MS = 1_000;
+export const FOCUS_GRACE_MS = 1_000;
+export const VIEWPORT_INTERVAL_MS = 1_000;
+export const VIEWPORT_TOLERANCE = 0.98;
+export const VIEWPORT_CONFIRM_TICKS = 2;
+export const MEDIA_LOSS_GRACE_MS = 5_000;
+export const INSTANT_DEDUP_MS = 3_000;
+export const EVENT_QUEUE_MAX = 50;
+export const EVENT_RETRY_MS = [2_000, 5_000, 10_000, 30_000] as const;
+export const SNAPSHOT_WIDTH = 320;
+export const SNAPSHOT_HEIGHT = 240;
+export const SNAPSHOT_QUALITY = 0.6;
+export const BLACK_LUMA = 12;
+export const MAX_SNAPSHOTS_PER_ATTEMPT = 60;
+export const SNAPSHOT_RETENTION_DAYS = 14;
