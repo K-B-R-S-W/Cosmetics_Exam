@@ -10,8 +10,14 @@ vi.mock("next/navigation", () => ({ useRouter: () => router }));
 const fetchMock = vi.fn();
 const EXAM = { id: "00000000-0000-4000-8000-000000000010", title: "Synthetic Exam", instructions: "Rules", scheduled_start_at: "2099-10-05T04:00:00.000Z", started_at: null, ends_at: null, force_ended_at: null, duration_min: 45, status: "draft", navigation_mode: "free", shuffle: false, flag_threshold: 10, is_practice: false, created_at: "2026-10-04T00:00:00.000Z", question_count: 0, assigned_count: 1 } as const;
 
-beforeEach(() => { fetchMock.mockReset(); router.push.mockReset(); router.refresh.mockReset(); vi.stubGlobal("fetch", fetchMock); });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+beforeEach(() => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.parse("2099-10-05T03:00:00.000Z"));
+  fetchMock.mockReset();
+  router.push.mockReset();
+  router.refresh.mockReset();
+  vi.stubGlobal("fetch", fetchMock);
+});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("ExamForm", () => {
   it("shows Section 2C readiness and converts Colombo time on save", async () => {

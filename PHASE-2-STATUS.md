@@ -96,6 +96,7 @@ The temporary exam-state mechanism is one replaceable 10-second poll. It continu
 - Candidate image responses use `Cache-Control: private, max-age=300, no-transform`; all JSON candidate responses remain `no-store`.
 - The answer limit follows the specific Section 2B/API rule: warning from 19,000 characters and a hard stop at 20,000.
 - Client-to-server calls need contract tests that capture the actual serialized request and parse it with the real strict server schema. Shape-only mocks missed an extra `flagged` field in sequential Next even though both the UI test and route-schema test passed separately.
+- Tests must not hard-code absolute dates that are compared with the real clock; pin or inject the test clock so fixtures do not expire.
 - Paper loading classifies draft/scheduled as `exam_not_live`, but ended/finalized/force-ended and expired attempts as `exam_closed`. This prevents the closed in-progress route guard from bouncing `/exam` to `/waiting` and back.
 - Transient paper failures still retry every five seconds. After six consecutive failures both waiting and exam loading show "This is taking longer than expected. Tell the exam team if this continues." while quiet retries continue; a successful load resets the counter.
 - Camera, fullscreen, heartbeat, proctoring/events, announcements and worker changes remain outside this batch. Autosave and the finished Done page are now implemented.

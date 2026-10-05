@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ requireAdmin: vi.fn(), assertSameOrigin: vi.fn(), from: vi.fn(), audit: vi.fn() }));
 vi.mock("server-only", () => ({}));
@@ -19,7 +19,15 @@ function updateQuery(data: Record<string, unknown> | null) {
 }
 
 describe("exam detail route", () => {
-  beforeEach(() => { vi.clearAllMocks(); mocks.requireAdmin.mockResolvedValue({ id: "admin-1" }); mocks.audit.mockResolvedValue(undefined); mocks.from.mockImplementation(() => loadQuery()); });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-05T03:00:00.000Z"));
+    vi.clearAllMocks();
+    mocks.requireAdmin.mockResolvedValue({ id: "admin-1" });
+    mocks.audit.mockResolvedValue(undefined);
+    mocks.from.mockImplementation(() => loadQuery());
+  });
+  afterEach(() => { vi.useRealTimers(); });
   it("refuses scheduling without every Section 2C blocker satisfied", async () => {
     const { PATCH } = await import("./route");
     const response = await PATCH(new Request(`http://localhost/api/admin/exams/${exam.id}`, { method: "PATCH", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ status: "scheduled" }) }), { params: Promise.resolve({ id: exam.id }) });
