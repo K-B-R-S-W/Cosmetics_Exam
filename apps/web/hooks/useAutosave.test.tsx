@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import { StrictMode, type ReactNode } from "react";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SavedAnswer } from "@/lib/candidate-types";
@@ -10,6 +11,22 @@ import { mergeReconnectDraft, useAutosave } from "./useAutosave";
 
 const attemptId = "00000000-0000-4000-8000-000000000003";
 const questionId = "00000000-0000-4000-8000-000000000011";
+const nextQuestionId = "00000000-0000-4000-8000-000000000012";
+
+function dirtyDraft(id = questionId): StoredAnswerDraft {
+  return {
+    attempt_id: attemptId,
+    question_id: id,
+    answer_text: `Local ${id}`,
+    selected_option_id: null,
+    flagged: true,
+    revision: 4,
+    confirmed_revision: 3,
+    dirty: true,
+    saved_at: null,
+    updated_at: 1,
+  };
+}
 
 function response(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
@@ -27,7 +44,7 @@ function options(fetcher: typeof fetch, serverAnswers: Record<string, SavedAnswe
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
   Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
@@ -283,13 +300,14 @@ describe("useAutosave", () => {
   it("collects 100 dirty answers for the final pending_answers payload", async () => {
     const ids = Array.from({ length: 100 }, (_, index) => `question-${index}`);
     const fetcher = vi.fn() as unknown as typeof fetch;
+    const store = createAnswerDraftStore(undefined);
     const { result } = renderHook(() => useAutosave({
       attemptId,
       questionIds: ids,
       serverAnswers: {},
       currentQuestionId: ids[0]!,
       enabled: false,
-      store: createAnswerDraftStore(undefined),
+      store,
       fetcher,
     }));
     await flush();
@@ -317,5 +335,104 @@ describe("useAutosave", () => {
     hook.rerender({ ids: ["00000000-0000-4000-8000-000000000012"] });
     await flush();
     expect(hook.result.current.answers["00000000-0000-4000-8000-000000000012"]).toEqual({ answer_text: null, selected_option_id: null, flagged: false });
+  });
+
+  it("restores a dirty IndexedDB draft when the paper question arrives after initialization", async () => {
+    vi.useRealTimers();
+    const store = createAnswerDraftStore(new IDBFactory());
+    await store.put(dirtyDraft());
+    const fetcher = vi.fn(() => new Promise<Response>(() => undefined)) as unknown as typeof fetch;
+    const server: SavedAnswer = { answer_text: "Server", selected_option_id: null, flagged: false, revision: 3, saved_at: "2026-10-04T09:00:00Z" };
+    const hook = renderHook(({ ids, answers }) => useAutosave({
+      attemptId,
+      questionIds: ids,
+      serverAnswers: answers,
+      currentQuestionId: ids[0] ?? null,
+      store,
+      fetcher,
+    }), { initialProps: { ids: [] as string[], answers: {} as Record<string, SavedAnswer> } });
+    await flush();
+
+    hook.rerender({ ids: [questionId], answers: { [questionId]: server } });
+    await flush();
+
+    expect(hook.result.current.ready).toBe(true);
+    expect(hook.result.current.answers[questionId]).toMatchObject({ answer_text: `Local ${questionId}`, flagged: true });
+    expect(hook.result.current.pendingAnswers()).toHaveLength(1);
+    await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    expect((await store.loadAttempt(attemptId)).find((row) => row.question_id === questionId)).toMatchObject({ answer_text: `Local ${questionId}`, dirty: true });
+  });
+
+  it("uses the newer server answer when a late paper arrives after another device saved", async () => {
+    vi.useRealTimers();
+    const store = createAnswerDraftStore(new IDBFactory());
+    await store.put(dirtyDraft());
+    const fetcher = vi.fn() as unknown as typeof fetch;
+    const server: SavedAnswer = { answer_text: "Newer server", selected_option_id: null, flagged: false, revision: 4, saved_at: "2026-10-04T09:00:00Z" };
+    const hook = renderHook(({ ids, answers }) => useAutosave({
+      attemptId,
+      questionIds: ids,
+      serverAnswers: answers,
+      currentQuestionId: ids[0] ?? null,
+      store,
+      fetcher,
+    }), { initialProps: { ids: [] as string[], answers: {} as Record<string, SavedAnswer> } });
+    await flush();
+
+    hook.rerender({ ids: [questionId], answers: { [questionId]: server } });
+    await flush();
+
+    await waitFor(() => expect(hook.result.current.answers[questionId]).toMatchObject({ answer_text: "Newer server", flagged: false }));
+    expect(hook.result.current.pendingAnswers()).toEqual([]);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect((await store.loadAttempt(attemptId)).find((row) => row.question_id === questionId)).toMatchObject({ answer_text: "Newer server", dirty: false });
+  });
+
+  it("restores a late dirty IndexedDB draft under React StrictMode", async () => {
+    vi.useRealTimers();
+    const store = createAnswerDraftStore(new IDBFactory());
+    await store.put(dirtyDraft());
+    const fetcher = vi.fn(() => new Promise<Response>(() => undefined)) as unknown as typeof fetch;
+    const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
+    const hook = renderHook(({ ids }) => useAutosave({
+      attemptId,
+      questionIds: ids,
+      serverAnswers: { [questionId]: { answer_text: "Server", selected_option_id: null, flagged: false, revision: 3, saved_at: "2026-10-04T09:00:00Z" } },
+      currentQuestionId: ids[0] ?? null,
+      store,
+      fetcher,
+    }), { initialProps: { ids: [] as string[] }, wrapper });
+    await flush();
+
+    hook.rerender({ ids: [questionId] });
+    await flush();
+
+    await waitFor(() => expect(hook.result.current.ready).toBe(true));
+    expect(hook.result.current.answers[questionId]?.answer_text).toBe(`Local ${questionId}`);
+    expect(hook.result.current.pendingAnswers()).toHaveLength(1);
+  });
+
+  it("restores a stored draft when a new sequential question arrives later", async () => {
+    vi.useRealTimers();
+    const store = createAnswerDraftStore(new IDBFactory());
+    await store.put({ ...dirtyDraft(nextQuestionId), revision: 1, confirmed_revision: 0 });
+    expect(await store.loadAttempt(attemptId)).toEqual([expect.objectContaining({ question_id: nextQuestionId, dirty: true })]);
+    const fetcher = vi.fn(() => new Promise<Response>(() => undefined)) as unknown as typeof fetch;
+    const hook = renderHook(({ ids }) => useAutosave({
+      attemptId,
+      questionIds: ids,
+      serverAnswers: {},
+      currentQuestionId: ids[0] ?? null,
+      store,
+      fetcher,
+    }), { initialProps: { ids: [questionId] } });
+    await waitFor(() => expect(hook.result.current.ready).toBe(true));
+
+    hook.rerender({ ids: [nextQuestionId] });
+    await flush();
+
+    await waitFor(() => expect(hook.result.current.answers[nextQuestionId]?.answer_text).toBe(`Local ${nextQuestionId}`));
+    expect(hook.result.current.ready).toBe(true);
+    expect(hook.result.current.pendingAnswers()).toEqual([expect.objectContaining({ question_id: nextQuestionId })]);
   });
 });

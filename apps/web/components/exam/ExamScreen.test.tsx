@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PaperBody, StateBody } from "@/lib/candidate-types";
+import { getAnswerDraftStore } from "@/lib/indexeddb";
 
 const mocks = vi.hoisted(() => ({ push: vi.fn(), context: {} as Record<string, unknown> }));
 vi.mock("next/navigation", () => ({ useRouter: () => mocks }));
@@ -142,6 +143,7 @@ describe("ExamScreen", () => {
       : json({ result: "saved", server_time: "2026-10-04T10:00:00Z" })));
     render(<ExamScreen />);
     await waitFor(() => expect((screen.getAllByRole("radio")[0] as HTMLInputElement).disabled).toBe(false));
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(await screen.findByRole("heading", { name: "Question 2" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Review and submit" }));
@@ -168,7 +170,7 @@ describe("ExamScreen", () => {
       ? json({ error: { code: "collection_closed", message: "Closed" } }, 409)
       : json({ result: "saved", server_time: "2026-10-04T10:00:00Z" })));
     render(<ExamScreen />);
-    expect(await screen.findByText("Time is up. Some answers could not be sent. Keep this page open and tell the exam team.")).toBeTruthy();
+    expect(await screen.findByText("Time is up. Keep this page open and tell the exam team.")).toBeTruthy();
     expect(mocks.push).not.toHaveBeenCalledWith("/done");
   });
 
@@ -297,5 +299,36 @@ describe("ExamScreen", () => {
     render(<ExamScreen />);
     await waitFor(() => expect(mocks.context.loadPaper).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole("heading", { name: "Question 1" })).toBeTruthy();
+  });
+
+  it("restores a dirty draft when the paper arrives after the exam screen mounts", async () => {
+    const store = getAnswerDraftStore();
+    await store.clearAttempt("a");
+    await store.put({
+      attempt_id: "a",
+      question_id: "q1",
+      answer_text: "Restored after late paper load",
+      selected_option_id: null,
+      flagged: false,
+      revision: 1,
+      confirmed_revision: 0,
+      dirty: true,
+      saved_at: null,
+      updated_at: 1,
+    });
+    const value = paper("sequential");
+    value.total_questions = 1;
+    value.questions = [{ id: "q1", position: 0, type: "written", body_html: "<p>Explain</p>", image: null, marks: 1 }];
+    let resolvePaper!: (value: PaperBody) => void;
+    mocks.context.paper = null;
+    mocks.context.loadPaper = vi.fn(() => new Promise<PaperBody>((resolve) => { resolvePaper = resolve; }));
+
+    render(<ExamScreen />);
+    await waitFor(() => expect(mocks.context.loadPaper).toHaveBeenCalledOnce());
+    await act(async () => resolvePaper(value));
+
+    const answer = await screen.findByLabelText("Your answer") as HTMLTextAreaElement;
+    expect(answer.value).toBe("Restored after late paper load");
+    await store.clearAttempt("a");
   });
 });

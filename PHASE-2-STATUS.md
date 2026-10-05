@@ -75,14 +75,14 @@ The route calculates the deadline with the same `attemptDeadline()` and `examPha
 
 | Task | Local status | Note |
 |---|---|---|
-| 2E.1 IndexedDB | Complete | Per-attempt drafts, memory degradation, StrictMode-safe idempotent restore, and input gating until ready |
+| 2E.1 IndexedDB | Complete | Per-attempt rows load independently of paper delivery; late and sequential questions use the revision merge, including under StrictMode, and inputs stay gated until ready |
 | 2E.2–2E.3 Autosave/retry | Complete | 1 s debounce, 10 s periodic save, latest-wins coalescing, revision-aware reconnect merge, transient backoff and failed-draft retention |
 | 2E.4 Answers API | Complete | 96 KiB request cap; the 20,000-character Zod rule accepts maximum-length UTF-8 Sinhala text |
 | 2F.1–2F.2 Submit | Complete | Manual/auto hints, server-derived reason, up to 200 pending answers at concurrency 8, exact dialog copy, deadline lock and 15 s client retry window |
 | 2F.3 Done | Complete | Reason-specific confirmation, no scores, local-draft cleanup, media/fullscreen cleanup and one logout call |
 | 2F.4 Reconnect | Complete locally | Same attempt/paper plus server-vs-device revision merge; server wins when another device is ahead |
 | 2F.5 Worker scheduler | **Deferred** | Requires its own Gate 1. A closed tab is not server-side auto-submitted until this task exists |
-| 2F.6 Sequential Next | Complete | No-grace route check, five database calls on advancement, direct last-answer save and no `submit_now` |
+| 2F.6 Sequential Next | Complete | No-grace route check, five database calls on advancement, direct last-answer save, no `submit_now`, and 1/2/4/8/10 s transient retry backoff |
 
 The temporary exam-state mechanism is one replaceable 10-second poll. It continues while locked, backs off silently offline, stops when `/done` unmounts `/exam`, and is supplemented by an immediate refresh after successful Next. It costs two database round trips per poll, including authentication: at 23 candidates that is about **138 database calls per minute** (23 × 6 polls × 2 calls), excluding Next and save traffic. Task 3B.4 replaces this hook with heartbeat without adding a second poll.
 
@@ -112,7 +112,7 @@ The temporary exam-state mechanism is one replaceable 10-second poll. It continu
 3. Open the same attempt in a second browser, save a newer revision there, then reconnect the first browser. Verify the newer server answer wins.
 4. In sequential mode, save text, clear it, choose Next, confirm the blank warning, and verify the server answer is blank before the next question appears. Double-click Next and verify only one advance.
 5. In free mode, review unanswered/flagged questions and verify the exact Submit dialog. Simulate one failed answer save and confirm submit still completes with that draft in `pending_answers`.
-6. Let the timer reach zero. Verify all inputs lock, pending answers flush, submit uses the `auto` hint, and success reaches Done. Test `collection_closed` and verify the terminal unsent-answer notice.
+6. Let the timer reach zero. Verify all inputs lock, pending answers flush, submit uses the `auto` hint, and success reaches Done. Test `collection_closed` both with and without a pending device draft and verify the matching terminal notice.
 7. Force-end while typing. Verify **The exam has ended**, immediate final submission, and the Done page's forced reason after the server derives it.
 8. Grant extra minutes after a local lock and verify the next state poll unlocks the screen and the timer uses the new deadline.
 9. Verify question images stay within about 60% of viewport height and the Waiting Room manual Retry appears after eight seconds in the unexpected-phase branch.

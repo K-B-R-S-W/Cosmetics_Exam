@@ -84,8 +84,11 @@ export function useAutosave({
   );
   const [states, setStates] = useState<Record<string, SaveIndicatorState>>({});
   const [durable, setDurable] = useState(store.durable);
-  const [ready, setReady] = useState(false);
+  const [loadedAttempt, setLoadedAttempt] = useState<string | null>(null);
+  const [preparedQuestionKey, setPreparedQuestionKey] = useState<string | null>(null);
   const records = useRef(new Map<string, StoredAnswerDraft>());
+  const localRows = useRef(new Map<string, StoredAnswerDraft>());
+  const attemptLoad = useRef<{ attemptId: string; promise: Promise<StoredAnswerDraft[]> } | null>(null);
   const inFlight = useRef(new Map<string, Promise<void>>());
   const debounceTimers = useRef(new Map<string, number>());
   const retryTimers = useRef(new Map<string, number>());
@@ -93,7 +96,9 @@ export function useAutosave({
   const staleRetries = useRef(new Map<string, number>());
   const blocked = useRef(new Set<string>());
   const mounted = useRef(true);
-  const initializedAttempt = useRef<string | null>(null);
+  const questionKey = useMemo(() => questionIds.join("\u0000"), [questionIds]);
+  const ready = loadedAttempt === attemptId
+    && preparedQuestionKey === questionKey;
 
   const setQuestionState = useCallback((questionId: string, kind: SaveIndicatorState["kind"], savedAt?: string | null) => {
     if (!mounted.current) return;
@@ -230,44 +235,49 @@ export function useAutosave({
 
   useEffect(() => {
     mounted.current = true;
-    if (initializedAttempt.current === attemptId) return;
-    setReady(false);
+    if (attemptLoad.current?.attemptId !== attemptId) {
+      attemptLoad.current = { attemptId, promise: store.loadAttempt(attemptId) };
+    }
+    const load = attemptLoad.current;
     let active = true;
-    void store.loadAttempt(attemptId).then(async (localRows) => {
-      if (!active) return;
-      const local = new Map(localRows.map((row) => [row.question_id, row]));
-      const merged = questionIds.map((questionId) => mergeReconnectDraft(attemptId, questionId, serverAnswers[questionId], local.get(questionId)));
-      records.current = new Map(merged.map((row) => [row.question_id, row]));
-      await Promise.all(merged.map((row) => store.put(row)));
-      if (!active) return;
-      initializedAttempt.current = attemptId;
-      setAnswers(Object.fromEntries(merged.map((row) => [row.question_id, { answer_text: row.answer_text, selected_option_id: row.selected_option_id, flagged: row.flagged }])));
-      setStates(Object.fromEntries(merged.map((row) => [row.question_id, { kind: row.dirty ? "waiting" : "saved", durable: store.durable, savedAt: row.saved_at } satisfies SaveIndicatorState])));
+    void load.promise.then((rows) => {
+      if (!active || attemptLoad.current !== load) return;
+      localRows.current = new Map(rows.map((row) => [row.question_id, row]));
+      records.current = new Map();
+      setAnswers({});
+      setStates({});
       setDurable(store.durable);
-      setReady(true);
-      for (const row of merged) if (row.dirty) void sendRef.current(row.question_id);
+      setLoadedAttempt(attemptId);
     });
     return () => { active = false; };
-  }, [attemptId, questionIds, serverAnswers, store]);
+  }, [attemptId, store]);
 
   useEffect(() => {
-    if (!ready) return;
+    if (loadedAttempt !== attemptId) return;
     const missing = questionIds.filter((questionId) => !records.current.has(questionId));
-    if (missing.length === 0) return;
-    const rows = missing.map((questionId) => storedFromServer(attemptId, questionId, serverAnswers[questionId]));
+    const rows = missing.map((questionId) => mergeReconnectDraft(
+      attemptId,
+      questionId,
+      serverAnswers[questionId],
+      localRows.current.get(questionId),
+    ));
     for (const row of rows) records.current.set(row.question_id, row);
-    void Promise.all(rows.map((row) => store.put(row))).then(() => {
-      if (!mounted.current) return;
+    if (rows.length > 0) {
       setAnswers((current) => ({
         ...current,
         ...Object.fromEntries(rows.map((row) => [row.question_id, { answer_text: row.answer_text, selected_option_id: row.selected_option_id, flagged: row.flagged }])),
       }));
       setStates((current) => ({
         ...current,
-        ...Object.fromEntries(rows.map((row) => [row.question_id, { kind: "saved", durable: store.durable, savedAt: row.saved_at } satisfies SaveIndicatorState])),
+        ...Object.fromEntries(rows.map((row) => [row.question_id, { kind: row.dirty ? "waiting" : "saved", durable: store.durable, savedAt: row.saved_at } satisfies SaveIndicatorState])),
       }));
-    });
-  }, [attemptId, questionIds, ready, serverAnswers, store]);
+      void Promise.all(rows.map((row) => store.put(row))).then(() => {
+        if (!mounted.current || loadedAttempt !== attemptId) return;
+        for (const row of rows) if (row.dirty) void sendRef.current(row.question_id);
+      });
+    }
+    setPreparedQuestionKey(questionKey);
+  }, [attemptId, loadedAttempt, questionIds, questionKey, serverAnswers, store]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {

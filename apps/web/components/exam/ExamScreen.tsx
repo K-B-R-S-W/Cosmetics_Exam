@@ -17,6 +17,7 @@ import { PAPER_RETRY_DELAY_MS, PAPER_RETRY_NOTICE, usePaperRetryTracker } from "
 import { refineServerClock } from "@/lib/time";
 
 const GRACE_MS = 15_000;
+const NEXT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 10_000] as const;
 
 type NextBody = NextQuestionBody | { result: "last_question"; position: number; server_time: string };
 
@@ -104,6 +105,7 @@ export function ExamScreen() {
   const autoSubmitStarted = useRef(false);
   const lockStartedAt = useRef<number | null>(null);
   const nextRetry = useRef<number | null>(null);
+  const nextRetryCount = useRef(0);
   const submitRetry = useRef<number | null>(null);
   const submitAttemptRef = useRef<(reason: "manual" | "auto") => Promise<void>>(async () => undefined);
   const advanceRef = useRef<(allowBlank?: boolean) => Promise<void>>(async () => undefined);
@@ -222,8 +224,8 @@ export function ExamScreen() {
     actionLock.current = true;
     setActionBusy(true);
     setActionError(null);
-    const pending = await autosave.flushAll(3_000);
     try {
+      const pending = await autosave.flushAll(3_000);
       const response = await fetch("/api/exam/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -238,7 +240,9 @@ export function ExamScreen() {
       }
       const code = apiCode(body);
       if (code === "collection_closed") {
-        setTerminalNotice("Time is up. Some answers could not be sent. Keep this page open and tell the exam team.");
+        setTerminalNotice(autosave.pendingAnswers().length > 0
+          ? "Time is up. Some answers could not be sent. Keep this page open and tell the exam team."
+          : "Time is up. Keep this page open and tell the exam team.");
         return;
       }
       if (code === "session_revoked" || code === "unauthenticated") await refreshState().catch(() => null);
@@ -252,7 +256,11 @@ export function ExamScreen() {
         const deadline = state?.exam.force_ended || !state?.attempt.deadline
           ? (lockStartedAt.current ?? Date.now()) + GRACE_MS
           : new Date(state.attempt.deadline).getTime() + GRACE_MS;
-        if (Date.now() >= deadline) setTerminalNotice("Time is up. Some answers could not be sent. Keep this page open and tell the exam team.");
+        if (Date.now() >= deadline) {
+          setTerminalNotice(autosave.pendingAnswers().length > 0
+            ? "Time is up. Some answers could not be sent. Keep this page open and tell the exam team."
+            : "Time is up. Keep this page open and tell the exam team.");
+        }
         else submitRetry.current = window.setTimeout(() => { actionLock.current = false; void submitAttemptRef.current("auto"); }, 1_000);
       }
     } finally {
@@ -313,6 +321,7 @@ export function ExamScreen() {
         return;
       }
       const next = body as NextBody;
+      nextRetryCount.current = 0;
       await autosave.confirmDirectSave(visibleQuestion.id, input.revision, next.server_time);
       if (next.result === "last_question") {
         setDialog("submit");
@@ -331,11 +340,14 @@ export function ExamScreen() {
     } catch {
       setActionError("Reconnecting…");
       setNextRetrying(true);
+      const delay = NEXT_RETRY_DELAYS_MS[Math.min(nextRetryCount.current, NEXT_RETRY_DELAYS_MS.length - 1)]!;
+      nextRetryCount.current += 1;
       nextRetry.current = window.setTimeout(() => {
+        nextRetry.current = null;
         actionLock.current = false;
         setNextRetrying(false);
         void advanceRef.current(true);
-      }, 1_000);
+      }, delay);
     } finally {
       actionLock.current = false;
       setActionBusy(false);
