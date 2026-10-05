@@ -1203,9 +1203,13 @@ begin
   update public.attempts set last_seen_at = now() - interval '3 minutes'
    where id = v_attempt;
   perform public.record_disconnects();
+  assert (select count(*) = 2 from public.violation_events
+           where attempt_id = v_attempt and type = 'DISCONNECTED'),
+    '16k: the second Pass 1 call must insert a second disconnect';
   select id into v_disconnect from public.violation_events
-   where attempt_id = v_attempt and type = 'DISCONNECTED'
-   order by occurred_at desc, id desc limit 1;
+   where attempt_id = v_attempt
+     and type = 'DISCONNECTED'
+     and meta->>'count_reason' is null;
   assert (select meta->>'count_reason' is null from public.violation_events where id = v_disconnect),
     '16k: Pass 1 must open a later disconnect after reconnect';
   select out_result into v_result from public.candidate_heartbeat(v_session);

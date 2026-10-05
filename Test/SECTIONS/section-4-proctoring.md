@@ -60,6 +60,7 @@ Event types are exactly those in `001_initial.sql` (the `violation_events.type` 
 Notes:
 - `duration_ms` for an attention incident is the length of the **whole incident** (section 3.2), not of the first signal.
 - The admin grid's **Offline** label (heartbeat older than 25 s) is a display state only. The logged `DISCONNECTED` event starts at 30 s.
+- Every database writer of `DISCONNECTED` or `RECONNECTED` explicitly uses `clock_timestamp()` for `occurred_at`. Their latest-row and gap-end checks order or compare that column, while the table's `now()` default is fixed at transaction start and can misorder multiple writes in one transaction.
 
 ---
 

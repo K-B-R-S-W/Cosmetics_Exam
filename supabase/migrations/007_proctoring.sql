@@ -434,11 +434,14 @@ begin
     raise exception 'invalid_type';
   end if;
 
-  insert into public.violation_events (attempt_id, type, counts, meta)
+  -- RECONNECTED participates in latest-row ordering, so use the wall clock
+  -- rather than the transaction-start default.
+  insert into public.violation_events (attempt_id, type, counts, occurred_at, meta)
   values (
     v_attempt.id,
     p_type,
     p_type = 'MULTI_LOGIN' and v_attempt.status = 'in_progress',
+    clock_timestamp(),
     p_meta
   )
   returning id into v_event_id;
@@ -487,11 +490,16 @@ begin
      limit 1;
 
     if v_last_type is distinct from 'DISCONNECTED' then
-      insert into public.violation_events (attempt_id, type, counts, meta)
+      -- Every DISCONNECTED/RECONNECTED writer must use clock_timestamp():
+      -- latest-row lookups order by occurred_at, including inside one transaction.
+      insert into public.violation_events (
+        attempt_id, type, counts, occurred_at, meta
+      )
       values (
         v_attempt.id,
         'DISCONNECTED',
         false,
+        clock_timestamp(),
         jsonb_build_object('last_seen_at', v_attempt.last_seen_at)
       );
       v_inserted := v_inserted + 1;
