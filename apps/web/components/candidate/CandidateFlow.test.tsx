@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CandidateProvider, useCandidate } from "./CandidateContext";
@@ -166,6 +167,19 @@ afterEach(() => {
 });
 
 describe("CandidateProvider flow state", () => {
+  it.each([
+    ["unauthenticated", "Please sign in again"],
+    ["session_revoked", "You were signed out"],
+  ])("renders the %s screen after a Strict Mode state failure", async (code, heading) => {
+    navigation.path = "/done";
+    fetchMock.mockResolvedValue(json({ error: { code, message: "Synthetic auth failure" } }, 401));
+
+    render(<StrictMode><CandidateProvider><div>Done page</div></CandidateProvider></StrictMode>);
+
+    expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
+    expect(screen.queryByText("Loading…")).toBeNull();
+  });
+
   it("refreshes acknowledged state before navigating and stays on check", async () => {
     const view = render(<App />);
     enterLogin("A");

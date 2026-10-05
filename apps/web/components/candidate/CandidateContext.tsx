@@ -54,6 +54,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   const [loaded, setLoaded] = useState(pathname === "/login");
   const mePromise = useRef<Promise<CandidateMe> | null>(null);
   const paperPromise = useRef<Promise<PaperBody> | null>(null);
+  const statePromise = useRef<Promise<StateBody | null> | null>(null);
   const stateLoaded = useRef(false);
   const sessionGeneration = useRef(0);
   const activeAttemptId = state?.attempt.id;
@@ -69,23 +70,38 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     setLoaded(false);
     mePromise.current = null;
     paperPromise.current = null;
+    statePromise.current = null;
     stateLoaded.current = false;
     sessionStorage.removeItem("identityConfirmed");
   }, [activeAttemptId]);
 
-  const refreshState = useCallback(async () => {
-    const response = await fetch("/api/exam/state", { cache: "no-store" });
-    const body = (await payload(response)) as StateBody | ApiErrorPayload | null;
-    if (!response.ok) {
-      const code = body && "error" in body ? body.error.code : "internal_error";
-      setError(code);
-      throw new Error(code);
+  const refreshState = useCallback(() => {
+    if (!statePromise.current) {
+      const generation = sessionGeneration.current;
+      const request = (async () => {
+        const response = await fetch("/api/exam/state", { cache: "no-store" });
+        const body = (await payload(response)) as StateBody | ApiErrorPayload | null;
+        if (!response.ok) {
+          const code = body && "error" in body ? body.error.code : "internal_error";
+          if (sessionGeneration.current === generation) setError(code);
+          throw new Error(code);
+        }
+        if (sessionGeneration.current === generation) {
+          setError(null);
+          setState(body as StateBody);
+        }
+        return body as StateBody;
+      })();
+      const settled = request.finally(() => {
+        if (sessionGeneration.current === generation) {
+          stateLoaded.current = true;
+          setLoaded(true);
+        }
+        if (statePromise.current === settled) statePromise.current = null;
+      });
+      statePromise.current = settled;
     }
-    setError(null);
-    setState(body as StateBody);
-    setLoaded(true);
-    stateLoaded.current = true;
-    return body as StateBody;
+    return statePromise.current;
   }, []);
 
   const loadMe = useCallback(async () => {
@@ -147,14 +163,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
       return () => window.clearTimeout(timer);
     }
     if (stateLoaded.current) return;
-    stateLoaded.current = true;
-    let active = true;
-    refreshState()
-      .catch(() => null)
-      .finally(() => active && setLoaded(true));
-    return () => {
-      active = false;
-    };
+    void refreshState().catch(() => null);
   }, [pathname, refreshState, resetCandidateSession]);
 
   const visibleState = pathname === "/login" ? null : state;
