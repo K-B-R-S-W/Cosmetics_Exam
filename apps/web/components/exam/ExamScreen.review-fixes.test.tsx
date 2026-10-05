@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { submitInputSchema } from "@/lib/candidate-answer-schemas";
 import type { PaperBody, StateBody } from "@/lib/candidate-types";
 
 const mocks = vi.hoisted(() => ({
@@ -88,9 +89,22 @@ afterEach(() => {
 
 describe("ExamScreen Commit C review fixes", () => {
   it("releases the submit action lock when flushing drafts rejects", async () => {
-    const flushAll = vi.fn().mockRejectedValueOnce(new Error("storage failed")).mockResolvedValueOnce([]);
+    const pending = [{
+      question_id: "00000000-0000-4000-8000-000000000011",
+      answer_text: "Synthetic pending answer",
+      selected_option_id: null,
+      flagged: false,
+      revision: 2,
+    }];
+    const flushAll = vi.fn().mockRejectedValueOnce(new Error("storage failed")).mockResolvedValueOnce(pending);
     mocks.autosave.flushAll = flushAll;
-    vi.stubGlobal("fetch", vi.fn(() => json({ submitted: true, already_submitted: false, save_results: [], server_time: "2026-10-04T10:00:00Z" })));
+    const fetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestBody = JSON.parse(String(init?.body));
+      const parsed = submitInputSchema.safeParse(requestBody);
+      if (!parsed.success) return json({ error: { code: "validation_failed", message: "Invalid request" } }, 400);
+      return json({ submitted: true, already_submitted: false, save_results: [], server_time: "2026-10-04T10:00:00Z" });
+    });
+    vi.stubGlobal("fetch", fetcher);
     render(<ExamScreen />);
 
     fireEvent.click(screen.getByRole("button", { name: "Submit exam" }));
@@ -100,6 +114,10 @@ describe("ExamScreen Commit C review fixes", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Submit exam" })[1]!);
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/done"));
     expect(flushAll).toHaveBeenCalledTimes(2);
+    const requestBody = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+    expect(submitInputSchema.parse(requestBody)).toEqual(requestBody);
+    expect(Object.keys(requestBody).sort()).toEqual(["pending_answers", "reason"]);
+    expect(requestBody).toMatchObject({ reason: "manual", pending_answers: pending });
   });
 
   it("retries sequential Next after 1, 2, 4, 8 and 10 seconds and resets after success", async () => {

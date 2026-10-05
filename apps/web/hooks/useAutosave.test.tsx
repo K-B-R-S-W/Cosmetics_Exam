@@ -5,6 +5,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { answerInputSchema } from "@/lib/candidate-answer-schemas";
 import type { SavedAnswer } from "@/lib/candidate-types";
 import { createAnswerDraftStore, type StoredAnswerDraft } from "@/lib/indexeddb";
 import { mergeReconnectDraft, useAutosave } from "./useAutosave";
@@ -83,6 +84,9 @@ describe("useAutosave", () => {
     expect(fetcher).not.toHaveBeenCalled();
     await act(() => vi.advanceTimersByTimeAsync(1));
     expect(fetcher).toHaveBeenCalledTimes(1);
+    const requestBody = JSON.parse(String(vi.mocked(fetcher).mock.calls[0]?.[1]?.body));
+    expect(answerInputSchema.parse(requestBody)).toEqual(requestBody);
+    expect(Object.keys(requestBody).sort()).toEqual(["answer_text", "flagged", "question_id", "revision", "selected_option_id"]);
     expect(result.current.currentState.kind).toBe("saving");
     expect(result.current.currentState.kind).not.toBe("saved");
     await act(async () => resolveRequest(await response({ result: "saved", server_time: "2026-10-04T08:32:00Z" })));

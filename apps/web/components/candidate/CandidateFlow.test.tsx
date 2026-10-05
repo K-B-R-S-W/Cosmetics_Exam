@@ -225,6 +225,18 @@ describe("CandidateProvider flow state", () => {
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/exam/paper")).toHaveLength(1));
   });
 
+  it("calls the state endpoint as a bodyless GET", async () => {
+    activeCandidate = "A";
+    navigation.path = "/confirm";
+    render(<CandidateProvider><PaperProbe /></CandidateProvider>);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url) === "/api/exam/state")).toBe(true));
+
+    const stateCall = fetchMock.mock.calls.find(([url]) => String(url) === "/api/exam/state");
+    expect(stateCall?.[1]).toEqual({ cache: "no-store" });
+    expect(stateCall?.[1]).not.toHaveProperty("body");
+    expect(stateCall?.[1]).not.toHaveProperty("method");
+  });
+
   it("does not overwrite the tab title while the exam screen owns it", async () => {
     activeCandidate = "A";
     navigation.path = "/exam";

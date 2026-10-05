@@ -306,7 +306,13 @@ export function ExamScreen() {
       const response = await fetch("/api/exam/next", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...input, expected_position: visibleQuestion.position }),
+        body: JSON.stringify({
+          question_id: input.question_id,
+          answer_text: input.answer_text,
+          selected_option_id: input.selected_option_id,
+          revision: input.revision,
+          expected_position: visibleQuestion.position,
+        }),
       });
       const body = await response.json().catch(() => null) as NextBody | ApiErrorPayload | null;
       if (!response.ok) {

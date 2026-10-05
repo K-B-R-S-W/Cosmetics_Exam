@@ -2,10 +2,16 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { answerInputSchema, nextInputSchema } from "@/lib/candidate-answer-schemas";
 import type { PaperBody, StateBody } from "@/lib/candidate-types";
 import { getAnswerDraftStore } from "@/lib/indexeddb";
 
 const mocks = vi.hoisted(() => ({ push: vi.fn(), context: {} as Record<string, unknown> }));
+const CONTRACT_QUESTION_ONE = "00000000-0000-4000-8000-000000000011";
+const CONTRACT_QUESTION_TWO = "00000000-0000-4000-8000-000000000012";
+const CONTRACT_OPTION_ONE = "00000000-0000-4000-8000-000000000021";
+const CONTRACT_OPTION_TWO = "00000000-0000-4000-8000-000000000022";
 vi.mock("next/navigation", () => ({ useRouter: () => mocks }));
 vi.mock("@/lib/time", () => ({ refineServerClock: vi.fn(), useServerClock: () => () => Date.parse("2026-10-04T10:00:00.000Z") }));
 vi.mock("@/components/candidate/CandidateContext", () => {
@@ -86,16 +92,27 @@ describe("ExamScreen", () => {
 
   it("confirms a cleared answer through /api/answers before sequential Next", async () => {
     const value = paper("sequential");
-    value.questions = [{ id: "q1", position: 0, type: "written", body_html: "<p>Explain</p>", image: null, marks: 1 }];
-    value.answers = { q1: { answer_text: "Saved text", selected_option_id: null, flagged: false, revision: 2, saved_at: "2026-10-04T09:00:00Z" } };
+    value.questions = [{ id: CONTRACT_QUESTION_ONE, position: 0, type: "written", body_html: "<p>Explain</p>", image: null, marks: 1 }];
+    value.answers = { [CONTRACT_QUESTION_ONE]: { answer_text: "Saved text", selected_option_id: null, flagged: false, revision: 2, saved_at: "2026-10-04T09:00:00Z" } };
     mocks.context.paper = value;
     mocks.context.loadPaper = vi.fn().mockResolvedValue(value);
     const calls: string[] = [];
-    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       calls.push(url);
-      if (url === "/api/answers") return json({ result: "saved", server_time: "2026-10-04T10:00:00Z" });
-      if (url === "/api/exam/next") return json({ result: "advanced", position: 1, total_questions: 2, question: { id: "q2", position: 1, type: "written", body_html: "<p>Second</p>", image: null, marks: 1 }, answer: null, server_time: "2026-10-04T10:00:01Z" });
+      const requestBody = JSON.parse(String(init?.body));
+      if (url === "/api/answers") {
+        const parsed = answerInputSchema.safeParse(requestBody);
+        return parsed.success
+          ? json({ result: "saved", server_time: "2026-10-04T10:00:00Z" })
+          : json({ error: { code: "validation_failed", message: "Invalid request" } }, 400);
+      }
+      if (url === "/api/exam/next") {
+        const parsed = nextInputSchema.safeParse(requestBody);
+        return parsed.success
+          ? json({ result: "advanced", position: 1, total_questions: 2, question: { id: CONTRACT_QUESTION_TWO, position: 1, type: "written", body_html: "<p>Second</p>", image: null, marks: 1 }, answer: null, server_time: "2026-10-04T10:00:01Z" })
+          : json({ error: { code: "validation_failed", message: "Invalid request" } }, 400);
+      }
       throw new Error(url);
     }));
     render(<ExamScreen />);
@@ -108,8 +125,75 @@ describe("ExamScreen", () => {
     expect(await screen.findByRole("heading", { name: "Question 2" })).toBeTruthy();
     expect(calls.slice(0, 2)).toEqual(["/api/answers", "/api/exam/next"]);
     const answerCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/answers");
-    expect(JSON.parse(String(answerCall?.[1]?.body))).toMatchObject({ answer_text: "" });
+    const answerBody = JSON.parse(String(answerCall?.[1]?.body));
+    expect(answerInputSchema.parse(answerBody)).toEqual(answerBody);
+    expect(answerBody).toMatchObject({ question_id: CONTRACT_QUESTION_ONE, answer_text: "" });
+    const nextCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/exam/next");
+    const nextBody = JSON.parse(String(nextCall?.[1]?.body));
+    expect(nextInputSchema.parse(nextBody)).toEqual(nextBody);
+    expect(Object.keys(nextBody).sort()).toEqual(["answer_text", "expected_position", "question_id", "revision", "selected_option_id"]);
+    expect(nextBody).toMatchObject({ question_id: CONTRACT_QUESTION_ONE, answer_text: "", expected_position: 0 });
     expect(mocks.context.refreshState).toHaveBeenCalled();
+  });
+
+  it.each(["advanced", "already_advanced", "invalid_state"] as const)("sends a strict-schema Next body and handles %s", async (result) => {
+    const value: PaperBody = {
+      ...paper("sequential"),
+      questions: [{
+        id: CONTRACT_QUESTION_ONE,
+        position: 0,
+        type: "mcq",
+        body_html: "<p>Choose</p>",
+        image: null,
+        marks: 1,
+        options: [
+          { id: CONTRACT_OPTION_ONE, text_html: "<p>One</p>" },
+          { id: CONTRACT_OPTION_TWO, text_html: "<p>Two</p>" },
+        ],
+      }],
+      answers: {},
+    };
+    const nextPaper: PaperBody = {
+      ...value,
+      current_position: 1,
+      questions: [{ id: CONTRACT_QUESTION_TWO, position: 1, type: "written", body_html: "<p>Second</p>", image: null, marks: 1 }],
+    };
+    mocks.context.paper = value;
+    mocks.context.loadPaper = vi.fn().mockResolvedValue(nextPaper);
+    const captured: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const requestBody = JSON.parse(String(init?.body));
+      if (url === "/api/answers") {
+        const parsed = answerInputSchema.safeParse(requestBody);
+        return parsed.success
+          ? json({ result: "saved", server_time: "2026-10-04T10:00:00Z" })
+          : json({ error: { code: "validation_failed", message: "Invalid request" } }, 400);
+      }
+      if (url === "/api/exam/next") {
+        captured.push(requestBody);
+        const parsed = nextInputSchema.safeParse(requestBody);
+        if (!parsed.success) return json({ error: { code: "validation_failed", message: "Invalid request" } }, 400);
+        if (result === "invalid_state") return json({ error: { code: "invalid_state", message: "Reload" } }, 409);
+        return json({ result, position: 1, total_questions: 2, question: nextPaper.questions[0], answer: null, server_time: "2026-10-04T10:00:01Z" });
+      }
+      throw new Error(url);
+    }));
+
+    render(<ExamScreen />);
+    await waitFor(() => expect((screen.getAllByRole("radio")[0] as HTMLInputElement).disabled).toBe(false));
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Next question" }));
+
+    expect(await screen.findByRole("heading", { name: "Question 2" })).toBeTruthy();
+    expect(captured).toHaveLength(1);
+    expect(nextInputSchema.parse(captured[0])).toEqual(captured[0]);
+    expect(Object.keys(captured[0] as object).sort()).toEqual(["answer_text", "expected_position", "question_id", "revision", "selected_option_id"]);
+    expect(captured[0]).toMatchObject({
+      question_id: CONTRACT_QUESTION_ONE,
+      selected_option_id: CONTRACT_OPTION_ONE,
+      expected_position: 0,
+    });
   });
 
   it("uses the Section 2B submit dialog copy and includes dirty failed drafts", async () => {
