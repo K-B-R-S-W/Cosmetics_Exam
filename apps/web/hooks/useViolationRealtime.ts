@@ -17,10 +17,20 @@ type MaterialAttempt = Record<string, unknown> & {
   violation_count: number;
 };
 
+const MATERIAL_ATTEMPT_COLUMNS = [
+  "status",
+  "violation_count",
+  "current_position",
+  "extra_minutes",
+  "acknowledged_at",
+  "joined_at",
+  "submitted_at",
+  "submit_reason",
+] as const;
+
 function materialAttempt(row: Record<string, unknown>): MaterialAttempt {
-  const material = Object.fromEntries(
-    Object.entries(row).filter(([key]) => key !== "last_seen_at"),
-  );
+  const material: Record<string, unknown> = {};
+  for (const key of MATERIAL_ATTEMPT_COLUMNS) material[key] = row[key];
   return {
     ...material,
     id: String(row.id),

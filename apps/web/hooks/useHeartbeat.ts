@@ -12,17 +12,21 @@ export function useHeartbeat(
 ) {
   const callbacks = useRef({ onState, onAuthError });
   const flight = useRef<Promise<StateBody | null> | null>(null);
+  const stopped = useRef(false);
   useEffect(() => { callbacks.current = { onState, onAuthError }; }, [onState, onAuthError]);
 
   const heartbeatNow = useCallback(() => {
-    if (!enabled) return Promise.resolve(null);
+    if (!enabled || stopped.current) return Promise.resolve(null);
     if (!flight.current) {
       const request = (async () => {
         const response = await fetch("/api/heartbeat", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
         const body = await response.json().catch(() => null) as StateBody | ApiErrorPayload | null;
         if (!response.ok) {
           const code = body && "error" in body ? body.error.code : "internal_error";
-          if (code === "unauthenticated" || code === "session_revoked") callbacks.current.onAuthError(code);
+          if (code === "unauthenticated" || code === "session_revoked") {
+            stopped.current = true;
+            callbacks.current.onAuthError(code);
+          }
           throw new Error(code);
         }
         callbacks.current.onState(body as StateBody);
@@ -35,11 +39,15 @@ export function useHeartbeat(
   }, [enabled]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      stopped.current = false;
+      return;
+    }
+    stopped.current = false;
     let active = true; let timer: number | null = null; let failures = 0;
     const schedule = (delay: number) => { timer = window.setTimeout(async () => {
       try { await heartbeatNow(); failures = 0; } catch { failures += 1; }
-      if (active) schedule(failures === 0 ? HEARTBEAT_MS : Math.min(HEARTBEAT_MS * 2 ** failures, MAX_BACKOFF_MS));
+      if (active && !stopped.current) schedule(failures === 0 ? HEARTBEAT_MS : Math.min(HEARTBEAT_MS * 2 ** failures, MAX_BACKOFF_MS));
     }, delay); };
     schedule(HEARTBEAT_MS);
     return () => { active = false; if (timer !== null) window.clearTimeout(timer); };

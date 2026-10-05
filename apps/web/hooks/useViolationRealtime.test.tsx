@@ -77,6 +77,28 @@ describe("useViolationRealtime", () => {
     expect(onFlagged).not.toHaveBeenCalled();
   });
 
+  it("ignores extra Phase 4 seed fields outside the material allowlist", async () => {
+    const onRefresh = vi.fn();
+    const onFlagged = vi.fn();
+    renderHook(() => useViolationRealtime({
+      examId: "exam-1",
+      threshold: 10,
+      initialAttempts: [{
+        ...attempt("attempt-1", 4),
+        candidate_name: "Synthetic Candidate",
+        outlet: "Synthetic Outlet",
+        answered_count: 7,
+      }],
+      onRefresh,
+      onFlagged,
+    }));
+
+    act(() => emitAttempt(attempt("attempt-1", 4, "two")));
+    await act(() => vi.advanceTimersByTimeAsync(2_100));
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(onFlagged).not.toHaveBeenCalled();
+  });
+
   it("uses the seeded count for a real threshold crossing", async () => {
     const onRefresh = vi.fn();
     const onFlagged = vi.fn();
