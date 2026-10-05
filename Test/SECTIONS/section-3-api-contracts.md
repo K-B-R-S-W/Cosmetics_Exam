@@ -149,6 +149,7 @@ New or changed files compared with the plan are marked **NEW**.
 
 - `POST /api/events`: (1) candidate-session authorization query; (2) one `record_candidate_event` RPC. A reserved JPEG then causes one private Storage upload, not another table call. Only a failed upload adds one `mark_violation_snapshot_failed` RPC. The event insert and `bump_violation_count` trigger update are inside call 2.
 - `POST /api/heartbeat`: (1) candidate-session authorization query; (2) one `candidate_heartbeat` RPC. The RPC contains the attempt update and, after a qualifying gap, the `RECONNECTED` insert plus the shared disconnect classifier: gaps under two minutes become non-counting `short_gap`; gaps of two minutes or more use the same overlap-or-`long_gap` rule as the worker. It replaces the Phase 2 state request rather than adding traffic.
+- After a successful sequential Next, the client renders the returned question first, then queues one immediate `POST /api/heartbeat`. This adds two Data API calls (candidate authorization plus `candidate_heartbeat`) per successful Next and never delays the next question.
 - `PATCH /api/admin/events/[id]`: the cached admin check pays at most one Auth `getUser` request plus one `admin_profiles` query per request; after validation there is one `dismiss_violation_event` RPC. The event update, count-trigger attempt update and `admin_actions` insert are one database transaction.
 
 Candidate page flow and which routes each page uses:
@@ -430,7 +431,7 @@ Request body: `{}` (empty is fine). Sent every 10 s from the waiting room and th
 - The heartbeat replaces the temporary 10-second state poll; it is never run beside it. At 23 candidates, six heartbeats per minute, and two Data API calls each (candidate auth plus one RPC), the steady cost is about **138 calls per minute**, the same as the poll it replaces. It stops on Done. A `401 unauthenticated` or `session_revoked` must settle the provider's loading state and render the existing signed-out screen, including under React Strict Mode.
 - PostgREST may deserialize RPC timestamps with transport-specific formatting. The Commit 2 route must normalize `server_time`, exam timestamps and `attempt.deadline` through `Date#toISOString()` before returning `StateBody`; its contract test parses the real RPC-shaped output rather than a pre-normalized mock.
 
-Until heartbeat task 3B.4 is built, `/exam` uses a single replaceable 10-second `GET /api/exam/state` hook with quiet offline backoff. It continues while deadline-locked, stops when `/done` unmounts the exam screen, handles session errors through the existing provider path, and refreshes immediately after successful sequential Next. Autosave does not add state reads.
+The candidate provider now uses this heartbeat as its single replaceable state-sync loop on `/waiting` and `/exam`. It continues while deadline-locked, stops on `/done`, handles session errors through the existing provider path, and runs once immediately after successful sequential Next without delaying the newly rendered question. Autosave does not add state reads.
 
 ### 3.13 `POST /api/events` — candidate
 One call per incident (Section 4 §3). This route also carries the snapshot.

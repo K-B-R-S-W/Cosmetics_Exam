@@ -1,6 +1,6 @@
 # Section 4 - Proctoring Spec
 
-> Status: reconciled for Phase 3. The canonical database changes are in `supabase/migrations/007_proctoring.sql`, which is awaiting review and execution. Anything marked *(test)* depends on browser behaviour that must be confirmed in the rehearsal (Phase 8). Appendix A is retained only as superseded design history and must not be run.
+> Status: migration 007 and its full smoke block are verified on the development Supabase project. Phase 3 application and worker code is locally implemented; anything marked *(test)* still depends on browser/device rehearsal (Phase 8). Appendix A is retained only as superseded design history and must not be run.
 
 ---
 

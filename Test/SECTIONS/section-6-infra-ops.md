@@ -124,7 +124,7 @@ On EC2 the instance only sees its private address. `use_external_ip: true` makes
 
 ## 5. The worker service
 
-Task 2F.5 implements only the restart-safe 10-second exam lifecycle scheduler. The single-instance guard (6A.1) and 30-second database heartbeat (6A.6) remain separate deployment work. **Do not deploy or run the scheduler against production until both are implemented and the guard/crash tests in §13 pass.** Scheduler start handoff is polling-only; it does not send a Realtime Broadcast.
+Task 2F.5 implements the restart-safe 10-second exam lifecycle scheduler. Phase 3 adds a separate 30-second proctoring lane with its own non-overlap guard, so a slow disconnect pass cannot skip a lifecycle tick. The proctoring lane calls `record_disconnects`, `resolve_disconnects`, and `reverse_recent_disconnects`; each call is isolated and neither lane broadcasts. The single-instance guard (6A.1) and 30-second database heartbeat (6A.6) remain separate deployment work. **Do not deploy or run the worker against production until both are implemented and the guard/crash tests in §13 pass.**
 
 The scheduler logs only state changes and errors, never one routine line per 10-second tick. An unready scheduled exam stays scheduled; its error log contains only the exam ID and missing category names. One failed lifecycle RPC is isolated and does not prevent the other exams or attempts in that tick from being processed.
 

@@ -385,6 +385,13 @@ export function ExamScreen() {
       </header>
       {moveNotice ? <Notice>{moveNotice}</Notice> : null}
       {actionError && !dialog ? <Notice warning>{actionError}</Notice> : null}
+      {proctoring.attentionWarning ? (
+        <div className="mx-5 mt-4 flex items-center justify-between gap-4 border-l-4 border-warn bg-warn-tint p-4" role="alert">
+          <p>You left the exam page. This was recorded and the exam team can see it. Please stay on this page.</p>
+          <Button variant="quiet" onClick={proctoring.dismissAttentionWarning}>Dismiss</Button>
+        </div>
+      ) : null}
+      {proctoring.pasteBlocked ? <p className="mx-5 mt-3 text-sm text-warn" role="status">Pasting is turned off during this exam.</p> : null}
       {locked ? (
         <section className="m-auto max-w-md p-6 text-center"><h1 tabIndex={-1} className="text-title font-bold">{state.exam.force_ended ? "The exam has ended" : "Time is up"}</h1><p className="mt-4 text-muted">{terminalNotice ?? (actionError || "Keep this page open while your answers are submitted.")}</p></section>
       ) : loading || !loadedPaper || !visibleQuestion ? (

@@ -24,7 +24,7 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 >
 > **Migration 006 verification (5 October 2026):** migration 006 applied cleanly to the Supabase development project. The revised smoke test, including block 15, returned **SMOKE TEST PASSED** and measured `generate_paper` with 100 questions at **4.87 ms**. A separate privileges check confirmed `start_exam`, `submit_due_attempt`, and `finalize_exam_if_closed` are executable by `service_role` only; both `anon` and `authenticated` reported false.
 >
-> **Migration 007 status (5 October 2026):** migration 007 applied cleanly to the Supabase development project, but the smoke test exposed a transaction-clock ordering defect at block 16k. The checked-in migration now gives every `DISCONNECTED`/`RECONNECTED` database writer an explicit `clock_timestamp()` and the hardened block selects the unresolved row rather than relying on UUID tie-breaking; this revision still awaits re-running migration 007 and the smoke test. Block 16 covers grants, JSON-object metadata, heartbeat auth outcomes, short and long gap classification, submitted-attempt exclusion, snapshot/rate rules, and real-admin dismiss/restore including null metadata, audit rows and reversal guards. The `FOR UPDATE SKIP LOCKED` behaviour and cross-function lock ordering cannot be proved by the single-session smoke transaction and still require the documented two-session rehearsal.
+> **Migration 007 verification (5 October 2026):** migration 007 applied cleanly to the Supabase development project. After the transaction-clock correction, the full smoke test, including block 16, returned **SMOKE TEST PASSED** and measured `generate_paper` with 100 questions at **4.29 ms**. Block 16 covers grants, JSON-object metadata, heartbeat auth outcomes, short and long gap classification, submitted-attempt exclusion, snapshot/rate rules, and real-admin dismiss/restore including null metadata, audit rows and reversal guards. The `FOR UPDATE SKIP LOCKED` behaviour and cross-function lock ordering cannot be proved by the single-session smoke transaction and still require the documented two-session rehearsal.
 
 ---
 
@@ -142,6 +142,8 @@ The migration and smoke test are intentionally not embedded here. Use these chec
 - [`003_function_search_path.sql`](../../supabase/migrations/003_function_search_path.sql)
 - [`004_exam_paper_and_unassign.sql`](../../supabase/migrations/004_exam_paper_and_unassign.sql)
 - [`005_question_rpcs.sql`](../../supabase/migrations/005_question_rpcs.sql)
+- [`006_exam_scheduler.sql`](../../supabase/migrations/006_exam_scheduler.sql)
+- [`007_proctoring.sql`](../../supabase/migrations/007_proctoring.sql)
 - [`001_smoke_test.sql`](./001_smoke_test.sql)
 
 This prevents the documentation copy from drifting away from the executable source of truth.

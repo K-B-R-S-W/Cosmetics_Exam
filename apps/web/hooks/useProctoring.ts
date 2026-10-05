@@ -5,7 +5,8 @@ import { captureSnapshot } from "@/lib/snapshot";
 import {
   EVENT_QUEUE_MAX, EVENT_RETRY_MS, FOCUS_GRACE_MS, INSTANT_DEDUP_MS,
   MEDIA_LOSS_GRACE_MS, MIN_INCIDENT_MS, VIEWPORT_CONFIRM_TICKS,
-  VIEWPORT_INTERVAL_MS, VIEWPORT_TOLERANCE,
+  VIEWPORT_INTERVAL_MS, VIEWPORT_TOLERANCE, WARNING_TOAST_MS,
+  PASTE_NOTICE_MS,
 } from "@/lib/proctoring-config";
 import { isSnapshotEligible, type ClientEventType } from "@/lib/proctoring-rules";
 
@@ -28,16 +29,34 @@ type Options = {
 };
 
 const storageKey = "proctoringEventQueue";
-const systemNow = () => Date.now();
+const systemNow = () => performance.now();
 const noMediaTracks: NonNullable<Options["mediaTracks"]> = [];
+const episodeTypes = new Set<ClientEventType>(["MULTI_SCREEN", "CAMERA_LOST", "MIC_LOST"]);
+
+export function candidateEventBody(event: QueuedEvent, now: number) {
+  return {
+    id: event.id,
+    type: event.type,
+    merged_types: event.merged_types,
+    occurred_ago_ms: Math.max(0, now - event.opened_at_ms),
+    duration_ms: event.duration_ms,
+    meta: event.meta,
+    snapshot_jpeg_base64: event.snapshot_jpeg_base64 ?? null,
+  };
+}
 
 export function useProctoring({ enabled, inProgress, video = null, mediaTracks = noMediaTracks, now = systemNow }: Options) {
   const [fullscreenLost, setFullscreenLost] = useState(false);
+  const [attentionWarning, setAttentionWarning] = useState(false);
+  const [pasteBlocked, setPasteBlocked] = useState(false);
   const queue = useRef<QueuedEvent[]>([]);
   const active = useRef<QueuedEvent | null>(null);
+  const episodes = useRef(new Map<ClientEventType, QueuedEvent>());
   const signals = useRef(new Set<ClientEventType>());
   const sending = useRef(false);
   const retryTimer = useRef<number | null>(null);
+  const warningTimer = useRef<number | null>(null);
+  const pasteTimer = useRef<number | null>(null);
   const drainRef = useRef<() => Promise<void>>(async () => undefined);
   const lastInstant = useRef(new Map<ClientEventType, number>());
 
@@ -58,6 +77,21 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
   }, [video]);
 
   const openSignal = useCallback((type: ClientEventType, meta: Record<string, unknown> | null = null) => {
+    if (episodeTypes.has(type)) {
+      if (episodes.current.has(type)) return;
+      const shot = snapshot(type);
+      episodes.current.set(type, {
+        id: crypto.randomUUID(),
+        type,
+        merged_types: [],
+        opened_at_ms: now(),
+        duration_ms: null,
+        meta: shot.skipped ? { ...(meta ?? {}), snapshot_skipped: shot.skipped } : meta,
+        snapshot_jpeg_base64: shot.image,
+        retries: 0,
+      });
+      return;
+    }
     const current = active.current;
     if (current) {
       signals.current.add(type);
@@ -70,6 +104,14 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
   }, [now, snapshot]);
 
   const closeSignal = useCallback((type: ClientEventType, force = false) => {
+    if (episodeTypes.has(type)) {
+      const episode = episodes.current.get(type);
+      if (!episode) return;
+      episode.duration_ms = Math.max(0, now() - episode.opened_at_ms);
+      enqueue(episode);
+      episodes.current.delete(type);
+      return;
+    }
     signals.current.delete(type);
     const current = active.current;
     if (!current || (signals.current.size > 0 && !force)) return;
@@ -80,10 +122,18 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
       if (shot.skipped) current.meta = { ...(current.meta ?? {}), snapshot_at: "end", snapshot_skipped: shot.skipped };
       else current.meta = { ...(current.meta ?? {}), snapshot_at: "end" };
     }
-    if (force || current.type === "FULLSCREEN_EXIT" || current.duration_ms >= MIN_INCIDENT_MS || current.merged_types.length > 0) enqueue(current);
+    const shouldSend = force || current.type === "FULLSCREEN_EXIT" || current.duration_ms >= MIN_INCIDENT_MS || current.merged_types.length > 0;
+    if (shouldSend) {
+      enqueue(current);
+      if (inProgress && [current.type, ...current.merged_types].some((value) => value === "TAB_HIDDEN" || value === "FOCUS_LOST")) {
+        setAttentionWarning(true);
+        if (warningTimer.current !== null) window.clearTimeout(warningTimer.current);
+        warningTimer.current = window.setTimeout(() => setAttentionWarning(false), WARNING_TOAST_MS);
+      }
+    }
     active.current = null;
     signals.current.clear();
-  }, [enqueue, now, snapshot]);
+  }, [enqueue, inProgress, now, snapshot]);
 
   const instant = useCallback((type: ClientEventType, meta: Record<string, unknown> | null = null) => {
     const timestamp = now();
@@ -99,11 +149,7 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
     try {
       const response = await fetch("/api/events", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: event.id, type: event.type, merged_types: event.merged_types,
-          occurred_ago_ms: Math.max(0, now() - event.opened_at_ms), duration_ms: event.duration_ms,
-          meta: event.meta, snapshot_jpeg_base64: event.snapshot_jpeg_base64 ?? null,
-        }),
+        body: JSON.stringify(candidateEventBody(event, now())),
       });
       if (response.ok || [400, 401, 403].includes(response.status)) queue.current.shift();
       else if (response.status === 429 || response.status >= 500) throw new Error("retry");
@@ -120,6 +166,7 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
 
   const flush = useCallback(async (timeoutMs = 2_000) => {
     if (active.current) closeSignal(active.current.type, true);
+    for (const type of [...episodes.current.keys()]) closeSignal(type, true);
     const deadline = Date.now() + timeoutMs;
     while (queue.current.length > 0 && Date.now() < deadline) { await drain(); await new Promise((resolve) => setTimeout(resolve, 0)); }
   }, [closeSignal, drain]);
@@ -136,10 +183,26 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
     let focusTimer: number | null = null;
     const blur = () => { focusTimer = window.setTimeout(() => { if (!document.hasFocus()) openSignal("FOCUS_LOST"); }, FOCUS_GRACE_MS); };
     const focus = () => { if (focusTimer !== null) window.clearTimeout(focusTimer); closeSignal("FOCUS_LOST"); };
-    const fullscreen = () => { const lost = !document.fullscreenElement; setFullscreenLost(lost); if (lost) openSignal("FULLSCREEN_EXIT"); else closeSignal("FULLSCREEN_EXIT", true); };
-    const block = (event: Event) => { event.preventDefault(); instant(event.type === "copy" ? "COPY" : event.type === "paste" ? "PASTE" : "CONTEXT_MENU"); };
+    const fullscreen = () => {
+      const lost = !document.fullscreenElement;
+      setFullscreenLost(lost);
+      if (lost) {
+        screen.orientation?.unlock?.();
+        openSignal("FULLSCREEN_EXIT");
+      } else closeSignal("FULLSCREEN_EXIT", true);
+    };
+    const block = (event: Event) => {
+      event.preventDefault();
+      if (event.type === "paste") {
+        setPasteBlocked(true);
+        if (pasteTimer.current !== null) window.clearTimeout(pasteTimer.current);
+        pasteTimer.current = window.setTimeout(() => setPasteBlocked(false), PASTE_NOTICE_MS);
+      }
+      instant(event.type === "copy" ? "COPY" : event.type === "paste" ? "PASTE" : "CONTEXT_MENU");
+    };
     document.addEventListener("visibilitychange", visibility); window.addEventListener("blur", blur); window.addEventListener("focus", focus); document.addEventListener("fullscreenchange", fullscreen);
     document.addEventListener("copy", block); document.addEventListener("paste", block); document.addEventListener("contextmenu", block);
+    fullscreen();
     return () => { document.removeEventListener("visibilitychange", visibility); window.removeEventListener("blur", blur); window.removeEventListener("focus", focus); document.removeEventListener("fullscreenchange", fullscreen); document.removeEventListener("copy", block); document.removeEventListener("paste", block); document.removeEventListener("contextmenu", block); };
   }, [closeSignal, enabled, instant, openSignal]);
 
@@ -171,16 +234,33 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
   }, [closeSignal, enabled, mediaTracks, openSignal]);
 
   useEffect(() => { if (enabled && inProgress) instant("RELOAD"); }, [enabled, inProgress, instant]);
-  useEffect(() => { if (!enabled && active.current) closeSignal(active.current.type, true); }, [closeSignal, enabled]);
+  useEffect(() => {
+    if (enabled) return;
+    if (active.current) closeSignal(active.current.type, true);
+    for (const type of [...episodes.current.keys()]) closeSignal(type, true);
+  }, [closeSignal, enabled]);
   useEffect(() => {
     const pagehide = () => {
       if (active.current) closeSignal(active.current.type, true);
+      for (const type of [...episodes.current.keys()]) closeSignal(type, true);
       const event = queue.current[0]; if (!event) return;
-      navigator.sendBeacon?.("/api/events", new Blob([JSON.stringify({ ...event, occurred_ago_ms: Math.max(0, now() - event.opened_at_ms) })], { type: "application/json" }));
+      navigator.sendBeacon?.("/api/events", new Blob([JSON.stringify(candidateEventBody(event, now()))], { type: "application/json" }));
     };
     window.addEventListener("pagehide", pagehide); return () => window.removeEventListener("pagehide", pagehide);
   }, [closeSignal, now]);
-  useEffect(() => () => { if (retryTimer.current !== null) window.clearTimeout(retryTimer.current); }, []);
+  useEffect(() => () => {
+    if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
+    if (warningTimer.current !== null) window.clearTimeout(warningTimer.current);
+    if (pasteTimer.current !== null) window.clearTimeout(pasteTimer.current);
+  }, []);
 
-  return { fullscreenLost, flush, sendInstant: instant, pendingCount: () => queue.current.length };
+  return {
+    fullscreenLost,
+    attentionWarning,
+    pasteBlocked,
+    dismissAttentionWarning: () => setAttentionWarning(false),
+    flush,
+    sendInstant: instant,
+    pendingCount: () => queue.current.length,
+  };
 }

@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CandidateErrorScreen, CandidateFrame, CandidatePaperError, Notice, useCandidate } from "@/components/candidate/CandidateContext";
 import { Button } from "@/components/ui/Button";
+import { FullscreenOverlay } from "@/components/exam/FullscreenOverlay";
+import { useProctoring } from "@/hooks/useProctoring";
 import { useExamBroadcast } from "@/lib/broadcast";
 import { formatColombo } from "@/lib/format-time";
 import { langFor } from "@/lib/lang";
@@ -32,6 +34,7 @@ export function WaitingRoom() {
   const handoffActive = useRef(false);
   const retryVisibleTimer = useRef<number | null>(null);
   const { recordFailure, resetFailures, showTakingLonger } = usePaperRetryTracker();
+  const proctoring = useProctoring({ enabled: true, inProgress: false, mediaTracks: [] });
 
   const refresh = useCallback(async () => {
     try {
@@ -160,6 +163,7 @@ export function WaitingRoom() {
       {paperLoad === "transient" ? <div className="mt-5"><Notice warning>Loading your exam…{showTakingLonger || unexpectedPhase ? <span className="mt-2 block">{PAPER_RETRY_NOTICE}</span> : null}</Notice>{showPaperRetry ? <Button className="mt-3" variant="secondary" onClick={() => { handoffActive.current = false; setPaperLoad("idle"); }}>Retry</Button> : null}</div> : null}
       <p className="sr-only" aria-live="polite">{announcement}</p>
       {state.phase === "waiting" ? <p className="mt-8 text-muted">Stay on this page.</p> : null}
+      <FullscreenOverlay active={proctoring.fullscreenLost} />
     </CandidateFrame>
   );
 }

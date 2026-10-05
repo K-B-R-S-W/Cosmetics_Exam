@@ -393,6 +393,8 @@ From top to bottom:
 
 ### 7.6 Violation timeline (3C.1, 3C.4, 3B.7)
 
+Phase 3 provides the reusable `ViolationTimeline`, `CandidateBadge`, `ThresholdControl`, and `useViolationRealtime` building blocks with unit tests. They remain unmounted until the Phase 4 live grid supplies the selected attempt, media tiles, and event-loading route; Phase 3 does not add a second temporary admin screen.
+
 A Data table (2A 4.13) inside the panel (and reused on the review screen, §9.2). Newest first. A summary line sits above it: **4 counted · 9 logged · 5 snapshots.** A checkbox **Hide events that didn't count** (off by default; uncounted rows are muted with the reason in words).
 
 Columns: **Time** (`9:30:12 am`), **Event**, **Length**, **Counted**, **Snapshot**, **Action**.
