@@ -73,30 +73,58 @@ describe("runSchedulerTick", () => {
     expect(JSON.stringify((rpcClient.rpc as ReturnType<typeof vi.fn>).mock.calls)).not.toContain("answer");
   });
 
-  it("retries an unready scheduled exam every tick and logs only its id and missing categories", async () => {
-    const scans = source({ listScheduledExams: vi.fn().mockResolvedValue([{ id: "exam-unready" }]) });
+  it("deduplicates unready logs, reports changes and reminders, then logs the start once", async () => {
+    let currentTime = new Date("2030-01-01T00:00:00.000Z");
+    let missing = ["questions", "candidates"];
+    let startResult = "not_ready";
+    let scheduled = [{ id: "exam-unready" }];
+    const scans = source({ listScheduledExams: vi.fn(async () => scheduled) });
     const rpcClient = client(() => ({
-      out_result: "not_ready",
-      out_status: "scheduled",
-      out_started_at: null,
-      out_ends_at: null,
-      out_missing: ["questions", "candidates"],
+      out_result: startResult,
+      out_status: startResult === "started" ? "live" : "scheduled",
+      out_started_at: startResult === "started" ? currentTime.toISOString() : null,
+      out_ends_at: startResult === "started" ? "2030-01-01T01:00:00.000Z" : null,
+      out_missing: missing,
     }));
     const logs = memoryLogger();
+    const clock = () => currentTime;
 
-    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now });
-    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now });
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+    currentTime = new Date(currentTime.getTime() + 10_000);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
 
-    expect(rpcClient.rpc).toHaveBeenCalledTimes(2);
+    missing = ["questions"];
+    currentTime = new Date(currentTime.getTime() + 10_000);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+
+    currentTime = new Date(currentTime.getTime() + 299_999);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+    currentTime = new Date(currentTime.getTime() + 1);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+
+    startResult = "started";
+    currentTime = new Date(currentTime.getTime() + 10_000);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+    scheduled = [];
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+
+    expect(rpcClient.rpc).toHaveBeenCalledTimes(6);
     expect(logs.error).toEqual([
       {
         event: "exam_start_not_ready",
-        context: { exam_id: "exam-unready", missing: ["questions", "candidates"] },
+        context: { exam_id: "exam-unready", missing: ["candidates", "questions"] },
       },
       {
         event: "exam_start_not_ready",
-        context: { exam_id: "exam-unready", missing: ["questions", "candidates"] },
+        context: { exam_id: "exam-unready", missing: ["questions"] },
       },
+      {
+        event: "exam_start_not_ready",
+        context: { exam_id: "exam-unready", missing: ["questions"] },
+      },
+    ]);
+    expect(logs.info).toEqual([
+      { event: "exam_started", context: { exam_id: "exam-unready", result: "started" } },
     ]);
   });
 
@@ -135,6 +163,94 @@ describe("runSchedulerTick", () => {
     });
     expect(logs.info[0]?.context).toMatchObject({ attempt_id: "good", reason: "auto" });
     expect(JSON.stringify(logs)).not.toContain("do not log this");
+  });
+
+  it("deduplicates RPC failures, reports code changes and reminders, then logs one recovery", async () => {
+    let currentTime = new Date("2030-01-01T00:00:00.000Z");
+    let code = "57014";
+    let recovered = false;
+    const scans = source({
+      listDueAttempts: vi.fn().mockResolvedValue([
+        { id: "attempt-retry", exam_id: "exam-1", status: "in_progress", extra_minutes: 0 },
+      ]),
+    });
+    const rpcClient: LifecycleRpcClient = {
+      rpc: vi.fn(async () => recovered
+        ? { data: [{ out_result: "already_submitted", out_reason: "manual" }], error: null }
+        : { data: null, error: { code, message: "never log this database text" } }),
+    };
+    const logs = memoryLogger();
+    const clock = () => currentTime;
+
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+    currentTime = new Date(currentTime.getTime() + 10_000);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+
+    code = "40001";
+    currentTime = new Date(currentTime.getTime() + 10_000);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+    currentTime = new Date(currentTime.getTime() + 300_000);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+
+    recovered = true;
+    currentTime = new Date(currentTime.getTime() + 10_000);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+
+    expect(logs.error.map((entry) => entry.context.error_code)).toEqual(["57014", "40001", "40001"]);
+    expect(logs.info).toEqual([
+      {
+        event: "attempt_submit_recovered",
+        context: { exam_id: "exam-1", attempt_id: "attempt-retry" },
+      },
+    ]);
+    expect(JSON.stringify(logs)).not.toContain("never log this database text");
+  });
+
+  it("suppresses and recovers start, submit and lifecycle failure conditions independently", async () => {
+    let failing = true;
+    const scans = source({
+      listScheduledExams: vi.fn().mockResolvedValue([{ id: "exam-start" }]),
+      listDueAttempts: vi.fn().mockResolvedValue([
+        { id: "attempt-fail", exam_id: "exam-attempt", status: "acknowledged", extra_minutes: 0 },
+      ]),
+      listLifecycleExams: vi.fn().mockResolvedValue([{ id: "exam-lifecycle" }]),
+    });
+    const rpcClient = client((name) => {
+      if (name === "start_exam") {
+        return failing
+          ? { out_result: "not_found", out_missing: [] }
+          : { out_result: "started", out_missing: [] };
+      }
+      if (name === "submit_due_attempt") {
+        return failing
+          ? { out_result: "not_found", out_reason: null }
+          : { out_result: "already_submitted", out_reason: "manual" };
+      }
+      return failing
+        ? { out_result: "pending_attempts", out_finalized_attempts: 0 }
+        : { out_result: "not_closed", out_finalized_attempts: 0 };
+    });
+    const logs = memoryLogger();
+
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now });
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now });
+
+    expect(logs.error.map((entry) => entry.event)).toEqual([
+      "exam_start_failed",
+      "attempt_submit_failed",
+      "exam_lifecycle_failed",
+    ]);
+
+    failing = false;
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now });
+
+    expect(logs.info.map((entry) => entry.event)).toEqual([
+      "exam_start_recovered",
+      "exam_started",
+      "attempt_submit_recovered",
+      "exam_lifecycle_recovered",
+    ]);
   });
 
   it("emits no routine log for an idle tick or idempotent no-change outcomes", async () => {
@@ -200,23 +316,58 @@ describe("runSchedulerTick", () => {
     expect(logs.error).toEqual([]);
   });
 
-  it("isolates scan failures so the remaining scans still run", async () => {
+  it("deduplicates scan failures, reports code changes and reminders, then logs one recovery", async () => {
+    let currentTime = new Date("2030-01-01T00:00:00.000Z");
+    let scanError: SchedulerSourceError | null = new SchedulerSourceError("scheduled_scan", "PGRST000");
     const scans = source({
-      listScheduledExams: vi.fn().mockRejectedValue(new SchedulerSourceError("scheduled_scan", "PGRST000")),
+      listScheduledExams: vi.fn(async () => {
+        if (scanError) throw scanError;
+        return [];
+      }),
       listDueAttempts: vi.fn().mockResolvedValue([
         { id: "attempt-1", exam_id: "exam-1", status: "not_started", extra_minutes: 0 },
       ]),
     });
-    const rpcClient = client(() => ({ out_result: "submitted", out_reason: "auto" }));
+    const rpcClient = client(() => ({ out_result: "already_submitted", out_reason: "auto" }));
     const logs = memoryLogger();
+    const clock = () => currentTime;
 
-    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now });
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+    currentTime = new Date(currentTime.getTime() + 10_000);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
 
-    expect(rpcClient.rpc).toHaveBeenCalledWith("submit_due_attempt", { p_attempt_id: "attempt-1" });
-    expect(logs.error[0]).toEqual({
-      event: "scheduler_scan_failed",
-      context: { result: "scheduled", error_code: "PGRST000" },
-    });
+    scanError = new SchedulerSourceError("scheduled_scan", "08006");
+    currentTime = new Date(currentTime.getTime() + 10_000);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+
+    currentTime = new Date(currentTime.getTime() + 299_999);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+    currentTime = new Date(currentTime.getTime() + 1);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+
+    scanError = null;
+    currentTime = new Date(currentTime.getTime() + 10_000);
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+    await runSchedulerTick({ source: scans, rpcClient, logger: logs.logger, now: clock });
+
+    expect(rpcClient.rpc).toHaveBeenCalledTimes(7);
+    expect(logs.error).toEqual([
+      {
+        event: "scheduler_scan_failed",
+        context: { result: "scheduled", error_code: "PGRST000" },
+      },
+      {
+        event: "scheduler_scan_failed",
+        context: { result: "scheduled", error_code: "08006" },
+      },
+      {
+        event: "scheduler_scan_failed",
+        context: { result: "scheduled", error_code: "08006" },
+      },
+    ]);
+    expect(logs.info).toEqual([
+      { event: "scheduler_scan_recovered", context: { result: "scheduled" } },
+    ]);
   });
 
   it("never writes the service-role key or database error text to log output", async () => {
