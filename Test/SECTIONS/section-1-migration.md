@@ -10,6 +10,7 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 - `004_exam_paper_and_unassign.sql` — run fourth. It assigns every composed question to every paper, removes the superseded `questions_per_paper` column, and adds atomic candidate unassignment.
 - `005_question_rpcs.sql` — run fifth. It adds atomic, status-locked question save/delete/reorder and answer-key save functions.
 - `006_exam_scheduler.sql` — run sixth. It adds the shared start, due-submission and finalization RPCs and aligns candidate writes on the exam-row-then-attempt-row lock order.
+- `007_proctoring.sql` — run seventh. It adds atomic candidate-event and heartbeat RPCs, bounded disconnect passes, snapshot-failure repair, login-event and dismiss/restore RPCs, and the low-churn violation indexes. It deliberately does not index `attempts.last_seen_at`.
 - `001_smoke_test.sql` — run last in the SQL editor; it rolls itself back and reports the observed `generate_paper()` time for 100 questions.
 
 > **Development verification status (4 October 2026):** `001_initial.sql` through `005_question_rpcs.sql` and the full revised `001_smoke_test.sql` (including block 14) ran without errors on PostgreSQL 16.2. The smoke test passed. Earlier development-project checks also reported zero tables without RLS, `/api/health` returned HTTP 200, and a manually created `super_admin` Auth user was linked to its `admin_profiles` row.
@@ -22,6 +23,8 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 > The `save_question` lock was separately verified with a two-session test: concurrent creates received positions 0 and 1 after changing its lock to `FOR NO KEY UPDATE`; Start waited while a save held the exam-row lock; and a save begun after Start returned `exam_locked`. This concurrency property cannot be asserted deterministically by the single-session transactional smoke test.
 >
 > **Migration 006 verification (5 October 2026):** migration 006 applied cleanly to the Supabase development project. The revised smoke test, including block 15, returned **SMOKE TEST PASSED** and measured `generate_paper` with 100 questions at **4.87 ms**. A separate privileges check confirmed `start_exam`, `submit_due_attempt`, and `finalize_exam_if_closed` are executable by `service_role` only; both `anon` and `authenticated` reported false.
+>
+> **Migration 007 status (5 October 2026):** written and awaiting review and execution. Its block 16 smoke assertions have not yet been run. The `FOR UPDATE SKIP LOCKED` behaviour in the two disconnect passes cannot be proved by the single-session smoke transaction and requires the documented two-session rehearsal.
 
 ---
 
@@ -34,11 +37,12 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 5. SQL editor → paste `004_exam_paper_and_unassign.sql` → **Run**.
 6. SQL editor → paste `005_question_rpcs.sql` → **Run**.
 7. SQL editor → paste `006_exam_scheduler.sql` → **Run**.
-8. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect the final result **SMOKE TEST PASSED** with the measured `generate_paper_100_question_ms` value.
-9. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
+8. SQL editor → paste `007_proctoring.sql` → **Run**.
+9. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect the final result **SMOKE TEST PASSED** with the measured `generate_paper_100_question_ms` value.
+10. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
    `insert into public.admin_profiles (id, name, role) values ('<auth user uuid>', 'Name', 'super_admin');`
    Use `'admin'` for ordinary admins.
-10. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` are in `supabase_realtime`.
+11. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` are in `supabase_realtime`.
 
 If an already-created database still has the old exam default, run this only after the implementation migration step becomes due:
 
@@ -61,6 +65,7 @@ Fresh databases created by the current `001_initial.sql` already use `10` and do
 | Attempts | Assignment creates the candidate attempt automatically; unassignment removes it only while `not_started` |
 | Exam papers | Every candidate receives every composed question. `shuffle` controls question order and MCQ option order only; reconnects retain the saved order |
 | Engine rules | `generate_paper`, `unassign_exam_candidates`, `save_answer`, `advance_position`, `submit_attempt`, `start_exam`, `submit_due_attempt`, and `finalize_exam_if_closed` enforce paper, assignment, revision, deadline, navigation, submit and lifecycle behavior atomically with the database clock |
+| Proctoring rules | Candidate events, heartbeat/reconnect, disconnect passes, late-focus reversal, login events and dismiss/restore use service-role-only RPCs. Passes lock at most 500 attempts per call in UUID order with `FOR UPDATE SKIP LOCKED`; overflow is retried on the next worker tick |
 | Views | `current_scores`, `attempt_progress`, and `attempt_deadlines` are `security_invoker` views |
 | Realtime | `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` |
 | Storage | Private `snapshots` and `question-images` buckets; candidates receive question images only through an authorized API route |
@@ -71,7 +76,7 @@ Fresh databases created by the current `001_initial.sql` already use `10` and do
 
 Every new database function must explicitly set its own safe `search_path`; do not rely on the caller's or database's default path.
 
-Lifecycle and candidate-write transactions take locks in this order: the exam row first, then attempt rows ordered by UUID. Migration 006 updates `generate_paper`, `save_answer`, and `advance_position` to that order. `unassign_exam_candidates` already locks the exam before ordered attempts. The question RPCs lock the exam (and then question-owned rows) but never an attempt. `submit_attempt` may lock one attempt but never later requests an exam lock. Therefore the reviewed scheduler, answer, paper, unassign and question paths contain no exam/attempt lock cycle and cannot deadlock one another through those locks. New functions that need both kinds of row must preserve the same order.
+Lifecycle and candidate-write transactions take locks in this order: the exam row first, then attempt rows ordered by UUID. Migration 006 updates `generate_paper`, `save_answer`, and `advance_position` to that order. `unassign_exam_candidates` already locks the exam before ordered attempts. The question RPCs lock the exam (and then question-owned rows) but never an attempt. Migration 007's event and heartbeat RPCs lock the session, then the exam, then the attempt; no path holding an attempt later requests a session or exam lock. Its worker passes need no exam row and lock attempt rows in UUID order with `FOR UPDATE SKIP LOCKED`, with the status/staleness predicate in that same locking query. `submit_attempt` may lock one attempt but never later requests an exam lock. Therefore the reviewed scheduler, answer, paper, unassign, question and proctoring paths contain no exam/attempt lock cycle. New functions that need both kinds of row must preserve the same order.
 
 The Security Advisor warnings for `is_admin()` and `is_super_admin()` are accepted for the current design. Their `EXECUTE` grant to `authenticated` is intentional because RLS policies invoke them as the caller, and revoking it breaks authenticated Realtime reads. Moving these two helpers into a private schema is a possible later hardening cleanup, not a Phase 1 blocker.
 
@@ -87,6 +92,7 @@ The Security Advisor warnings for `is_admin()` and `is_super_admin()` are accept
 | 1D.2–1D.3 | Run `004_exam_paper_and_unassign.sql`; every paper contains all composed questions and mixed unassignment is atomic |
 | 1E.6–1E.7 | Run `005_question_rpcs.sql`; question save/delete/reorder and answer-key save are atomic and lock the exam row |
 | 2F.5 | Run `006_exam_scheduler.sql`; scheduled start, due submission and finalization use database-clock RPCs, and ordinary exams remain visibly `ended` for one worker tick before finalization |
+| 3B.1–3B.7 | Run `007_proctoring.sql`; event, heartbeat, disconnect, snapshot-failure, login-event and dismiss/restore mutations are atomic and callable only by `service_role` |
 | 1A.2 | Run the checked-in smoke test after all migrations and require `SMOKE TEST PASSED` |
 | 1A.3 | Verify RLS plus the explicit `anon`, `authenticated`, and `service_role` ACL assertions in the smoke test |
 | 1A.4 | Verify the six Realtime publication tables listed above |

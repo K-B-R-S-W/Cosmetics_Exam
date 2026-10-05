@@ -1,5 +1,5 @@
 -- =====================================================================
--- 001_smoke_test.sql  —  run AFTER migrations 001, 002, 003, 004, 005 and 006 in the Supabase SQL editor.
+-- 001_smoke_test.sql  —  run AFTER migrations 001 through 007 in the Supabase SQL editor.
 -- Everything runs inside a transaction that is ROLLED BACK, so no data is left behind.
 -- Success = the final result-grid row says "SMOKE TEST PASSED". Any failure raises an error naming the check.
 -- =====================================================================
@@ -998,6 +998,243 @@ begin
     from public.finalize_exam_if_closed(v_force_exam);
   assert v_result = 'finalized' and v_status = 'finalized' and v_finalized = 1,
     '15h: a force-ended exam may finalize once collection is closed';
+end $$;
+
+-- 16. Proctoring RPCs added by 007_proctoring.sql.
+-- FOR UPDATE SKIP LOCKED concurrency needs the documented two-session
+-- rehearsal; one SQL-editor transaction cannot prove that behaviour.
+do $$
+declare
+  v_exam uuid := gen_random_uuid();
+  v_candidate uuid := gen_random_uuid();
+  v_attempt uuid;
+  v_session uuid := gen_random_uuid();
+  v_event uuid := gen_random_uuid();
+  v_disconnect uuid;
+  v_result text;
+  v_counts boolean;
+  v_snapshot text;
+  v_state jsonb;
+  v_before int;
+  i int;
+  f text;
+  service_functions constant text[] := array[
+    'public.record_candidate_event(uuid,uuid,text,text[],integer,integer,jsonb,boolean)',
+    'public.mark_violation_snapshot_failed(uuid)',
+    'public.candidate_heartbeat(uuid)',
+    'public.record_login_violation(uuid,text,jsonb)',
+    'public.record_disconnects()',
+    'public.resolve_disconnects()',
+    'public.reverse_disconnects_for_incident(uuid)',
+    'public.reverse_recent_disconnects()',
+    'public.dismiss_violation_event(uuid,uuid,boolean,text)'
+  ];
+begin
+  foreach f in array service_functions loop
+    assert not has_function_privilege('anon', f, 'EXECUTE'),
+      '16a: anon function access leaked on ' || f;
+    assert not has_function_privilege('authenticated', f, 'EXECUTE'),
+      '16a: authenticated function access leaked on ' || f;
+    assert has_function_privilege('service_role', f, 'EXECUTE'),
+      '16a: service_role lacks function access on ' || f;
+  end loop;
+
+  assert not exists (
+    select 1 from pg_indexes
+     where schemaname = 'public'
+       and indexname = 'idx_attempts_in_progress_last_seen'
+  ), '16b: the high-churn attempts.last_seen_at index must not exist';
+  assert (
+    select count(*) = 3 from pg_indexes
+     where schemaname = 'public'
+       and indexname = any(array[
+         'idx_violation_disconnect_timeline',
+         'idx_violation_unresolved_disconnects',
+         'idx_violation_recent_attention'
+       ])
+  ), '16b: all three low-churn proctoring indexes must exist';
+
+  insert into public.candidates (id, mer_code, full_name, nic_hash)
+  values (v_candidate, 'TEST-PROCTOR-007', 'Synthetic Proctor Candidate', 'synthetic-hash');
+  insert into public.exams (id, title, duration_min, status, started_at, ends_at)
+  values (
+    v_exam, 'Proctoring smoke', 30, 'live',
+    now() - interval '10 minutes', now() + interval '20 minutes'
+  );
+  insert into public.exam_candidates (exam_id, candidate_id)
+  values (v_exam, v_candidate);
+  select id into v_attempt from public.attempts
+   where exam_id = v_exam and candidate_id = v_candidate;
+  insert into public.sessions (id, candidate_id, attempt_id)
+  values (v_session, v_candidate, v_attempt);
+
+  select out_result into v_result from public.record_candidate_event(
+    v_session, v_event, 'TAB_HIDDEN', array[]::text[], 0, 1500, null, false
+  );
+  assert v_result = 'ignored', '16c: not-started attempts must ignore incidents';
+
+  update public.attempts
+     set status = 'acknowledged', acknowledged_at = now(), last_seen_at = now()
+   where id = v_attempt;
+  v_event := gen_random_uuid();
+  select out_result, out_counts into v_result, v_counts
+    from public.record_candidate_event(
+      v_session, v_event, 'TAB_HIDDEN', array['FOCUS_LOST'], 0, 1500, null, false
+    );
+  assert v_result = 'inserted' and not v_counts,
+    '16d: waiting-room incidents must not count';
+  v_before := (select violation_count from public.attempts where id = v_attempt);
+  v_event := public.record_login_violation(
+    v_attempt, 'MULTI_LOGIN', jsonb_build_object('source', 'login')
+  );
+  assert v_event is not null
+     and (select not counts from public.violation_events where id = v_event)
+     and (select violation_count from public.attempts where id = v_attempt) = v_before,
+    '16d: waiting-room multi-login must be logged without counting';
+
+  update public.attempts
+     set status = 'in_progress', joined_at = now() - interval '5 minutes',
+         last_seen_at = now()
+   where id = v_attempt;
+  v_event := gen_random_uuid();
+  select out_result, out_counts, out_snapshot_path
+    into v_result, v_counts, v_snapshot
+    from public.record_candidate_event(
+      v_session, v_event, 'FULLSCREEN_EXIT', array['FOCUS_LOST'], 500, 2500,
+      jsonb_build_object('source', 'browser'), true
+    );
+  assert v_result = 'inserted' and v_counts and v_snapshot is not null,
+    '16e: an in-exam incident must count and reserve a snapshot path';
+  assert v_snapshot = format('snapshots/%s/%s/%s.jpg', v_exam, v_attempt, v_event),
+    '16e: snapshot path must use server-owned ids';
+  v_before := (select violation_count from public.attempts where id = v_attempt);
+  select out_result into v_result from public.record_candidate_event(
+    v_session, v_event, 'FULLSCREEN_EXIT', array['FOCUS_LOST'], 500, 2500,
+    jsonb_build_object('source', 'browser'), true
+  );
+  assert v_result = 'duplicate'
+     and (select violation_count from public.attempts where id = v_attempt) = v_before,
+    '16f: retrying an event id must not double-count';
+
+  assert public.mark_violation_snapshot_failed(v_event),
+    '16g: snapshot failure marker must find the event';
+  assert (select snapshot_path is null and meta->>'snapshot_error' = 'true'
+            from public.violation_events where id = v_event),
+    '16g: failed snapshot must clear its path and retain the event';
+
+  v_event := gen_random_uuid();
+  select out_result, out_counts, out_snapshot_path into v_result, v_counts, v_snapshot
+    from public.record_candidate_event(
+      v_session, v_event, 'CAMERA_LOST', array[]::text[], 0, 6000,
+      jsonb_build_object('source', 'livekit'), true
+    );
+  assert v_result = 'inserted' and not v_counts and v_snapshot is null,
+    '16h: LiveKit-only media loss must not count or reserve a snapshot';
+  v_event := gen_random_uuid();
+  select out_result, out_counts into v_result, v_counts
+    from public.record_candidate_event(
+      v_session, v_event, 'MIC_LOST', array[]::text[], 0, 6000, null, false
+    );
+  assert v_result = 'inserted' and not v_counts,
+    '16h: media loss without a track source must not count';
+
+  update public.attempts set last_seen_at = now() - interval '45 seconds'
+   where id = v_attempt;
+  perform public.record_disconnects();
+  assert (select count(*) = 1 from public.violation_events
+           where attempt_id = v_attempt and type = 'DISCONNECTED'),
+    '16i: Pass 1 must insert one disconnect after 30 seconds';
+  perform public.record_disconnects();
+  assert (select count(*) = 1 from public.violation_events
+           where attempt_id = v_attempt and type = 'DISCONNECTED'),
+    '16i: Pass 1 must not duplicate an open disconnect';
+  select id into v_disconnect from public.violation_events
+   where attempt_id = v_attempt and type = 'DISCONNECTED'
+   order by occurred_at desc, id desc limit 1;
+
+  select out_result, out_state into v_result, v_state
+    from public.candidate_heartbeat(v_session);
+  assert v_result = 'ok' and v_state->>'phase' = 'live',
+    '16j: heartbeat must return the candidate state body';
+  assert (select meta->>'count_reason' from public.violation_events where id = v_disconnect) = 'short_gap',
+    '16j: heartbeat must close a short disconnect without counting it';
+
+  update public.violation_events
+     set occurred_at = now() - interval '10 minutes', duration_ms = 1000
+   where attempt_id = v_attempt
+     and type in ('TAB_HIDDEN', 'FOCUS_LOST', 'FULLSCREEN_EXIT', 'VIEWPORT_CHANGED');
+  update public.attempts set last_seen_at = now() - interval '3 minutes'
+   where id = v_attempt;
+  perform public.record_disconnects();
+  select id into v_disconnect from public.violation_events
+   where attempt_id = v_attempt and type = 'DISCONNECTED'
+   order by occurred_at desc, id desc limit 1;
+  assert (select meta->>'count_reason' is null from public.violation_events where id = v_disconnect),
+    '16k: Pass 1 must open a later disconnect after reconnect';
+  perform public.resolve_disconnects();
+  assert (select counts and meta->>'count_reason' = 'long_gap'
+            from public.violation_events where id = v_disconnect),
+    '16k: Pass 2 must count a clean long gap';
+
+  v_event := gen_random_uuid();
+  select out_result into v_result from public.record_candidate_event(
+    v_session, v_event, 'FOCUS_LOST', array[]::text[], 120000, 10000, null, false
+  );
+  assert v_result = 'inserted'
+     and (select not counts and meta->>'count_reason' = 'reversed_by_focus'
+            from public.violation_events where id = v_disconnect),
+    '16l: a late overlapping focus incident must reverse the disconnect count';
+
+  for i in 1..60 loop
+    insert into public.violation_events (
+      attempt_id, type, counts, occurred_at, snapshot_path
+    ) values (
+      v_attempt, 'COPY', false, now() - interval '2 minutes',
+      format('snapshots/%s/%s/reserved-%s.jpg', v_exam, v_attempt, i)
+    );
+  end loop;
+  v_event := gen_random_uuid();
+  select out_result, out_snapshot_path into v_result, v_snapshot
+    from public.record_candidate_event(
+      v_session, v_event, 'MULTI_SCREEN', array[]::text[], 0, null, null, true
+    );
+  assert v_result = 'inserted' and v_snapshot is null
+     and (select meta->>'snapshot_skipped' from public.violation_events where id = v_event) = 'limit',
+    '16m: the 61st snapshot request must keep the event but skip the image';
+
+  for i in 1..30 loop
+    insert into public.violation_events (attempt_id, type, counts)
+    values (v_attempt, 'COPY', false);
+  end loop;
+  v_event := gen_random_uuid();
+  select out_result into v_result from public.record_candidate_event(
+    v_session, v_event, 'COPY', array[]::text[], 0, null, null, false
+  );
+  assert v_result = 'rate_limited',
+    '16n: the 31st client event inside 60 seconds must be rate limited';
+
+  v_before := (select violation_count from public.attempts where id = v_attempt);
+  assert public.record_login_violation(
+           v_attempt, 'MULTI_LOGIN', jsonb_build_object('source', 'login')
+         ) is not null
+     and (select violation_count from public.attempts where id = v_attempt) = v_before + 1,
+    '16o: a second login must create one counted MULTI_LOGIN event';
+
+  select out_result into v_result from public.dismiss_violation_event(
+    v_event, gen_random_uuid(), true, 'Synthetic review'
+  );
+  assert v_result = 'forbidden',
+    '16p: dismiss RPC must reject an id without an admin profile';
+
+  update public.attempts
+     set status = 'submitted', submit_reason = 'manual', submitted_at = now()
+   where id = v_attempt;
+  v_event := gen_random_uuid();
+  select out_result into v_result from public.record_candidate_event(
+    v_session, v_event, 'RELOAD', array[]::text[], 0, null, null, false
+  );
+  assert v_result = 'ignored',
+    '16q: submitted attempts must ignore late client incidents';
 end $$;
 
 select

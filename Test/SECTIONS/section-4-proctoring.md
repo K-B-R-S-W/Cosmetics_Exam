@@ -1,6 +1,6 @@
 # Section 4 - Proctoring Spec
 
-> Status: written by reading `implementation-plan.md` (rounds 1-18), `section-3-api-contracts.md`, `001_initial.sql` and `001_smoke_test.sql`. **Nothing here was run.** The SQL in Appendix A is proposed code and has never been executed. Anything marked *(test)* depends on browser behaviour that must be confirmed in the rehearsal (Phase 8).
+> Status: reconciled for Phase 3. The canonical database changes are in `supabase/migrations/007_proctoring.sql`, which is awaiting review and execution. Anything marked *(test)* depends on browser behaviour that must be confirmed in the rehearsal (Phase 8). Appendix A is retained only as superseded design history and must not be run.
 
 ---
 
@@ -12,7 +12,7 @@
 | 2 | **Default flag threshold = 10** (raised from 5 so a reload, which logs two counted events, does not flag a candidate on its own), and admins can set any whole number from 1 to 100 per exam, including while the exam is live. | You, this chat |
 | 3 | Snapshot retention is 14 days. Waiting-room incidents do not count. | Earlier rounds (already in the plan) |
 
-**Defaults I chose that you did not decide.** Each is one line in `lib/proctoring-rules.ts`, so changing it later is cheap. Please confirm or change them:
+**Approved defaults.** Each client-side value lives in `lib/proctoring-rules.ts`, so rehearsal tuning remains localized:
 
 | Choice | Default | Why |
 |---|---|---|
@@ -53,7 +53,7 @@ Event types are exactly those in `001_initial.sql` (the `violation_events.type` 
 | `MIC_LOST` | Same as `CAMERA_LOST` for the microphone | client | Same | Same | No |
 | `DISCONNECTED` | No heartbeat for 30 s | worker (`resolve_disconnects`) | Worker decides (3B.6, section 5) | `null` (the gap is on `RECONNECTED`) | No |
 | `RECONNECTED` | First heartbeat after a gap over 30 s | heartbeat route | No | the gap length | No |
-| `MULTI_LOGIN` | A second login revoked a live session | login route | Yes | `null` | No |
+| `MULTI_LOGIN` | A second login revoked a live session | login route | Yes only while the attempt is `in_progress`; waiting-room login events do not count | `null` | No |
 | `COPY` / `PASTE` / `CONTEXT_MENU` | Handlers (action blocked) | client | No | `null` | No |
 | `RELOAD` | Exam page load that is a reload or back/forward, or any load when this tab already has the exam-page marker | client | Yes | `null` | No |
 
@@ -103,7 +103,7 @@ Android notification shade, Samsung edge panel, Google Assistant and Circle to S
 
 1. **Client-generated id.** Every incident gets a `crypto.randomUUID()` when it opens. This id is sent as `id` and becomes the event's primary key (section 3.6).
 2. **Queue.** Closed incidents go into an in-memory queue, mirrored to `sessionStorage` so a reload does not lose it. Maximum 50 entries; the oldest are dropped first.
-3. **Retry.** On a network error or `5xx`, retry with backoff (2 s, 5 s, 10 s, then every 30 s). A `429` waits for `retry_after_s`. A `400` or `403` drops the entry (it will never succeed).
+3. **Retry.** On a network error, `5xx`, or `429`, retry with backoff (2 s, 5 s, 10 s, then every 30 s; honor a longer `retry_after_s`). A `400`, `401`, or `403` drops the entry because the unchanged request cannot succeed.
 4. **`occurred_ago_ms`** is calculated at the moment of each send attempt, so a retried incident keeps the right start time.
 5. **Submit.** Before calling the submit route, the page closes any open incident and awaits its send for at most 2 s. After submit, the events route answers `200 { "ignored": true }`, so a late send does no harm.
 6. **Page closing.** On `pagehide`, any open incident is sent with `navigator.sendBeacon` (same origin, JSON blob, best-known duration). A beacon cannot be retried, and the id makes a later duplicate harmless. *(test: Android Chrome tab close and lock screen)*
@@ -181,7 +181,7 @@ Known limits:
 - If an admin dismisses the tab-switch incident as a false positive, the matching disconnect stays uncounted. It is still one absence.
 - An incident that **starts after the candidate returned** never reverses an earlier disconnect. The reversal checks the gap end, using the next `RECONNECTED` row. If the heartbeat's `RECONNECTED` has not been written yet when an incident arrives (a window of at most one heartbeat), the gap is treated as still open.
 
-The SQL for both parts is in Appendix A.
+The canonical SQL for both parts is in migration 007.
 
 **Reversal safety:** if the events route inserts an attention incident but the `reverse_disconnects_for_incident` call fails, the double count stays. The route retries once (the function is idempotent). As a second safety net, the worker's Pass 2 also calls `reverse_disconnects_for_incident` for any attention incidents inserted in the last 5 minutes. Running it again is harmless.
 
@@ -244,7 +244,7 @@ Body: `{ "dismissed": true | false, "note": "..." }`. `note` is required, 1 to 3
 
 **Null meta guard:** the dismiss route must use `coalesce(meta, '{}'::jsonb)` before merging the `dismissed` object. Client events often have `meta = null`, and in Postgres `jsonb_set(null, ...)` returns `null`, so the dismiss note would be silently lost. The same applies to the heartbeat's `short_gap` write.
 
-This route is a proposed addition. If you do not want it, drop it and the 8.5x tests that mention it. Nothing else depends on it.
+Migration 007 provides the atomic dismiss/restore RPC; the route remains required Phase 3 scope.
 
 ---
 
@@ -316,7 +316,7 @@ Client values live in `lib/proctoring-config.ts`. Counting rules live in `lib/pr
 
 ### 10.3 SQL (`001_initial.sql`, `001_smoke_test.sql`)
 
-See Appendix A.
+Use `supabase/migrations/007_proctoring.sql`; do not copy SQL from this prose section.
 
 ---
 
@@ -341,7 +341,9 @@ See Appendix A.
 
 ---
 
-## Appendix A - Proposed SQL (not run)
+## Appendix A - Superseded design notes (do not run)
+
+The executable source of truth is `supabase/migrations/007_proctoring.sql`. The snippets below predate its bounded ordered locks, atomic event/heartbeat RPCs, grants and final index decisions; they are retained only to explain the earlier overlap-rule reconciliation.
 
 ### A.1 Replace `resolve_disconnects()` (overlap test changed)
 

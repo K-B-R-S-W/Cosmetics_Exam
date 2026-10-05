@@ -81,6 +81,7 @@ The admin layout's authorization check runs only on full loads; client-side navi
 
 ### 1.4 Limits and platform
 - Body limits: 64 KB by default. `POST /api/answers` and `POST /api/exam/next` are 96 KB so a 20,000-character UTF-8 Sinhala answer is governed by Zod rather than a smaller byte cap. `POST /api/exam/submit` is 16 MiB for up to 200 such pending answers. `POST /api/events` 200 KB. Question routes 200 KB. Candidate import 500 KB. `POST /api/admin/question-images` accepts one multipart upload whose decoded file is at most **4 MiB**; reject it before buffering when `Content-Length` exceeds about 4 MiB plus 64 KiB multipart overhead. The processed file remains at most 4 MiB.
+- Write bodies use strict schemas and reject unknown keys. Client and server write-contract changes must be deployed together, and deployment during an active exam is prohibited.
 - `export const maxDuration = 30` on the import, grade, force-end and snapshot-purge routes *(verify the Hobby limit)*.
 - Rate limits: login (1.5) and events (30 per minute per attempt). Nothing else needs one at 23 candidates.
 - Client IP for `login_attempts` and `sessions`: first value of `x-forwarded-for`.
@@ -110,8 +111,8 @@ New or changed files compared with the plan are marked **NEW**.
 | 9 | `POST /api/answers` | candidate | 2E.4 | `rpc save_answer` |
 | 10 | `POST /api/exam/next` | candidate | 2F.6 | `rpc advance_position` |
 | 11 | `POST /api/exam/submit` | candidate | 2F.1 | `rpc save_answer`, `rpc submit_attempt` |
-| 12 | `POST /api/heartbeat` | candidate | 3B.4 | `attempts` update |
-| 13 | `POST /api/events` | candidate | 3B.1, 3B.3 | `violation_events` insert, Storage upload |
+| 12 | `POST /api/heartbeat` | candidate | 3B.4 | `rpc candidate_heartbeat` |
+| 13 | `POST /api/events` | candidate | 3B.1, 3B.3 | `rpc record_candidate_event`, Storage upload |
 | 14 | `POST /api/livekit/token` | candidate or admin | 4A.3 | LiveKit SDK |
 | 15 | `GET, POST /api/admin/candidates` | admin | 1C.5 | tables |
 | 16 | `PATCH, DELETE /api/admin/candidates/[id]` **NEW** | admin | 1C.5 | tables |
@@ -138,11 +139,17 @@ New or changed files compared with the plan are marked **NEW**.
 | 37 | `POST /api/admin/results/[attempt]/override` | admin | 6D.5 | `question_scores` insert |
 | 38 | `POST /api/admin/results/[attempt]/regrade` **NEW path (6D.6)** | admin | 6D.6 | tables |
 | 39 | `GET /api/admin/results/export` | admin | 7.4 | tables |
-| 40 | `PATCH /api/admin/events/[id]` **NEW (3B.7)** | admin | 3B.7 | `violation_events` update |
+| 40 | `PATCH /api/admin/events/[id]` **NEW (3B.7)** | admin | 3B.7 | `rpc dismiss_violation_event` |
 | 41 | `POST /api/admin/exams/[id]/regrade-question` **NEW (6D.8)** | admin | 6D.8 | `grading_runs`, `grading_jobs` insert |
 | 42 | `GET /api/question-images/[questionId]` **NEW** | candidate | 1E.2 | private Storage download |
 | 43 | `POST, DELETE /api/admin/question-images` **NEW** | admin | 1E.2 | private Storage upload/delete |
 | 44 | `POST /api/exam/announcements/[id]/claim` **NEW** | candidate | 5A.5 | `rpc claim_broadcast` |
+
+### 2.1 Phase 3 write profiles
+
+- `POST /api/events`: (1) candidate-session authorization query; (2) one `record_candidate_event` RPC. A reserved JPEG then causes one private Storage upload, not another table call. Only a failed upload adds one `mark_violation_snapshot_failed` RPC. The event insert and `bump_violation_count` trigger update are inside call 2.
+- `POST /api/heartbeat`: (1) candidate-session authorization query; (2) one `candidate_heartbeat` RPC. The RPC contains the attempt update and, only after a qualifying gap, the `RECONNECTED` insert plus guarded `short_gap` update. It replaces the Phase 2 state request rather than adding traffic.
+- `PATCH /api/admin/events/[id]`: the cached admin check pays at most one Auth `getUser` request plus one `admin_profiles` query per request; after validation there is one `dismiss_violation_event` RPC. The event update, count-trigger attempt update and `admin_actions` insert are one database transaction.
 
 Candidate page flow and which routes each page uses:
 
@@ -417,9 +424,10 @@ Client rule: when submitting manually, wait for the autosave queue to drain firs
 
 ### 3.12 `POST /api/heartbeat` — candidate
 Request body: `{}` (empty is fine). Sent every 10 s from the waiting room and the exam page.
-- `update attempts set last_seen_at = now() where id = X and status in ('acknowledged','in_progress')`.
-- If the previous `last_seen_at` was more than 30 s ago and the attempt is `in_progress`: insert `RECONNECTED` (`counts = false`, `duration_ms` = the gap). This pairs with the worker's `DISCONNECTED` (section 7). Also run: `UPDATE violation_events SET meta = jsonb_set(meta, '{count_reason}', '"short_gap"') WHERE attempt_id = X AND type = 'DISCONNECTED' AND counts = false AND meta->>'count_reason' IS NULL AND id = (most recent DISCONNECTED for this attempt)`. The `IS NULL` guard prevents overwriting a `long_gap` that the worker's Pass 2 set in the same instant.
+- After `requireCandidate()`, call `candidate_heartbeat(session_id)`. The RPC locks the session, exam and attempt in that order, updates `attempts.last_seen_at` from the database clock only while the attempt is `acknowledged` or `in_progress`, and returns the full state body.
+- If the previous `last_seen_at` was more than 30 s ago and the attempt is `in_progress`, the same transaction inserts `RECONNECTED` (`counts = false`, `duration_ms` = the gap). It also marks the most recent still-unresolved `DISCONNECTED` as `count_reason = 'short_gap'`. The `count_reason IS NULL` guard prevents overwriting a `long_gap` that the worker's Pass 2 set in the same instant.
 - Response: the same `StateBody` as `GET /api/exam/state`. So the heartbeat is also the 5 to 10 s state poll that the waiting room needs as a backup for a missed Broadcast (2B.3), and the way a kicked client finds out (`401 session_revoked`, within 10 s).
+- The heartbeat replaces the temporary 10-second state poll; it is never run beside it. At 23 candidates, six heartbeats per minute, and two Data API calls each (candidate auth plus one RPC), the steady cost is about **138 calls per minute**, the same as the poll it replaces. It stops on Done. A `401 unauthenticated` or `session_revoked` must settle the provider's loading state and render the existing signed-out screen, including under React Strict Mode.
 
 Until heartbeat task 3B.4 is built, `/exam` uses a single replaceable 10-second `GET /api/exam/state` hook with quiet offline backoff. It continues while deadline-locked, stops when `/done` unmounts the exam screen, handles session errors through the existing provider path, and refreshes immediately after successful sequential Next. Autosave does not add state reads.
 
@@ -442,10 +450,12 @@ One call per incident (Section 4 §3). This route also carries the snapshot.
 - `meta`: JSON object, at most 2 KB.
 - **Counting order (Section 4 §4.1)**: `counts = true` only if ALL of: (1) type is in `COUNTING_TYPES` (TAB_HIDDEN, FOCUS_LOST, FULLSCREEN_EXIT, VIEWPORT_CHANGED, MULTI_SCREEN, CAMERA_LOST, MIC_LOST, RELOAD), (2) for CAMERA_LOST/MIC_LOST `meta.source` must be `'track'`, (3) attempt is `in_progress`, (4) incident start (`now() - occurred_ago_ms`) is not before `attempts.joined_at`. Everything else is `false`.
 - **Status guard**: allowed only for `acknowledged` and `in_progress` attempts. After submission return `200 { "ignored": true }` rather than an error, so late events from a closing page cause no noise.
-- Rate limit: 30 per 60s per attempt → `429 rate_limited`.
+- Rate limit: 30 client-sendable events per 60s per attempt → `429 rate_limited`; worker/login events do not consume this client quota.
 - **Snapshot** (optional): decoded ≤ 100 KB, JPEG signature required. Path: `snapshots/{exam_id}/{attempt_id}/{event_id}.jpg`. A Storage "already exists" error on retry counts as success. Failed upload → `meta.snapshot_error = true`.
 
 Response: `200 { "id": "<event id>", "snapshot_saved": true }`. The `bump_violation_count` trigger updates `attempts.violation_count`.
+
+After candidate authorization and strict body validation, the route calls `record_candidate_event(...)`. That RPC performs idempotency, status, rate, counting and snapshot-cap decisions atomically while locking session → exam → attempt. The route uploads only the reserved snapshot path. If upload fails it calls `mark_violation_snapshot_failed(event_id)` once to clear the reservation and retain `meta.snapshot_error = true`. Unexpected database messages are never returned to the client.
 
 **Disconnect reversal (Section 4 §5):** after inserting an attention incident (TAB_HIDDEN, FOCUS_LOST, FULLSCREEN_EXIT, VIEWPORT_CHANGED), the route calls `reverse_disconnects_for_incident(event_id)`. This RPC reverses any `DISCONNECTED` rows with `count_reason = 'long_gap'` whose gap overlaps the incident's interval. It only touches `long_gap` rows — admin-dismissed rows are never changed by the system.
 
@@ -770,6 +780,7 @@ Dismiss or restore a wrongly counted incident.
 - `404 not_found`, `409 not_dismissable` (already not counted and not dismissed), `409 not_restorable` (no `meta.dismissed`).
 - Writes an `admin_actions` row (`event_dismiss` or `event_restore`) with the event id and the note.
 - Realtime: the badge updates because the trigger changes `attempts.violation_count`.
+- The handler calls `dismiss_violation_event(event_id, admin_id, dismissed, note)` so the event change, trigger-maintained attempt count and audit row commit together.
 
 `200 { "id", "counts", "violation_count" }`.
 
@@ -781,7 +792,7 @@ Initial page loads, joins, view polling, review data, health data and broadcast 
 
 | Data | Source | Live updates |
 |---|---|---|
-| Grid rows: status, `last_seen_at`, violation count, `current_position` | Server route reads `attempts` joined with `candidates (mer_code, full_name, outlet)` | Browser Realtime on `attempts`, filtered by `exam_id` |
+| Grid rows: status, `last_seen_at`, violation count, `current_position` | Server route reads `attempts` joined with `candidates (mer_code, full_name, outlet)` | Browser Realtime on `attempts`, filtered by `exam_id`; `useViolationRealtime` ignores updates where only `last_seen_at` changed |
 | Progress label ("Q 7/20", "14 answered") | Server route reads `attempt_progress` | Server poll every 10 s; views are not in the Realtime publication |
 | Violation timeline | Server route reads `violation_events` by `attempt_id` | Browser Realtime on `violation_events` (the table has no `exam_id`, so filter in the page) |
 | Snapshot images | Server route creates a five-minute signed URL after authorization | none |
@@ -821,7 +832,7 @@ These are worker-side behaviours the contracts above depend on. The proctoring s
 |---|---|
 | Scheduled start | Every 10 s: conservatively select scheduled exams whose start is within the next 60 seconds, then call `start_exam(id, true)`. The RPC's database clock alone decides whether the exam is due. It leaves an unready exam scheduled and returns only the missing `questions`/`candidates` categories. No worker Broadcast is sent; the existing state poll discovers the transition |
 | Exam end and finalize | Conservatively select open attempts whose possible deadline is within the next 60 seconds, then call `submit_due_attempt(id)`. The RPC's database clock is authoritative. Ordinary deadlines submit every remaining attempt state after its own `grace_deadline` with **`auto`**; force-end waits through `force_ended_at + 15 seconds` and uses **`forced`**. It never creates answer rows. Then call `finalize_exam_if_closed(exam_id)`: a live ordinary exam becomes `ended` only after every collection window is closed and no open attempt remains; a later tick changes submitted attempts and the exam to `finalized`. A force-ended exam is already `ended` and may finalize after its collection window closes. Partial non-blank written answers always receive Gemini grading |
-| `DISCONNECTED` events | **Two-pass rule (send-on-end model).** **Pass 1 (30s):** every 30 s, for `in_progress` attempts with `last_seen_at` older than 30 s, insert `DISCONNECTED` with `counts = false`, `meta.last_seen_at` = the attempt's current `last_seen_at` (exact timestamptz string from the DB), and no `meta.count_reason`. Skip if the attempt's most recent `DISCONNECTED`/`RECONNECTED` is already a `DISCONNECTED`. **Pass 2:** every 30 s, call `resolve_disconnects()` (RPC, `revoke execute from public, anon, authenticated; grant to service_role`). This function runs two guarded statements: **(1) Mark overlaps** — rows where a focus-type event's interval (using `coalesce(f.duration_ms, 0)`) starts inside the gap get `count_reason = 'overlap'`. The interval rule (Section 4 §5): only the lower bound matters (`incident_end >= gap_start - 10s`); the old upper-bound check on `f.occurred_at` is removed, so an incident starting anywhere inside the gap counts as overlap. **(2) Flip remaining** — unmatched rows get `counts = true, count_reason = 'long_gap'`. Both include `a.status = 'in_progress'`, `coalesce(f.duration_ms, 0)`, `count_reason IS NULL` guard, and `timestamptz` casts. The trigger handles +1/-1. If a late focus event arrives after a flip, the events route calls `reverse_disconnects_for_incident(event_id)` — only touches `long_gap` rows. The heartbeat route sets `count_reason = 'short_gap'` (uses `coalesce(meta, '{}'::jsonb)` and `IS NULL` guard). **Worker reversal safety net:** after Pass 2, call `reverse_disconnects_for_incident()` for any attention incidents inserted in the last 5 minutes (idempotent) |
+| `DISCONNECTED` events | **Two-pass rule (send-on-end model).** Every 30 s the worker calls three service-role-only migration-007 RPCs independently, so one failure cannot delay lifecycle submission/finalization or the other proctoring calls. **Pass 1:** `record_disconnects()` locks at most 500 `in_progress` attempts in UUID order with `FOR UPDATE SKIP LOCKED`; the `last_seen_at < database clock - 30s` predicate is inside that same locking `SELECT`, so it is rechecked when a row can be acquired. It inserts one `DISCONNECTED` with `counts = false`, exact `meta.last_seen_at`, and no reason, unless the latest disconnect/reconnect row is already `DISCONNECTED`. **Pass 2:** `resolve_disconnects()` uses the same ordered, bounded locking pattern and status guard. It first marks incident overlaps, then flips remaining gaps older than two minutes to `counts = true, count_reason = 'long_gap'`. **Safety net:** `reverse_recent_disconnects()` rechecks at most 500 recent attention incidents that still have a potentially reversible `long_gap`. A late route event also reverses immediately. The heartbeat owns `short_gap`. The trigger handles +1/-1. A full 500-row batch leaves overflow eligible for the next 30-second tick rather than silently dropping it. |
 | Key check | Every 5 minutes, per key: call the model-listing endpoint, then write `api_key_state` (`active`, or `disabled` with `last_error` on 400/403). This is the only place Gemini keys are used outside grading |
 | Grading jobs | See Section 5 §7. When the last job of an attempt finishes, call `recomputeResults(attemptId)`. The worker auto-resumes pauses it caused itself (`keys_exhausted`) |
 | Snapshot purge | Once a day, the same shared function as `POST /api/admin/snapshots/purge` with the default retention |
@@ -838,6 +849,8 @@ Migration 006 is the database authority for the lifecycle transitions:
 - `finalize_exam_if_closed(uuid)` returns `ended`, `finalized`, `already_finalized`, `not_closed`, `pending_attempts`, or `not_found`. “Collection closed” means the database clock is strictly later than every ordinary attempt's `ends_at + extra_minutes + 15 seconds`, or strictly later than `force_ended_at + 15 seconds` for a force-end, and no attempt remains open. An ordinary exam is intentionally observable as `ended` for one 10-second scheduler tick before it is finalized.
 
 Every function that needs both levels locks the exam row first, then attempt rows in UUID order. The migration aligns `generate_paper`, `save_answer`, and `advance_position`; `unassign_exam_candidates` already follows that order; question RPCs lock only the exam before question-owned rows. `submit_attempt` locks one attempt and never later locks its exam. There is therefore no exam/attempt lock cycle among these paths. Besides preventing deadlocks, the shared exam lock prevents a final answer save from committing after finalization.
+
+Migration 007 preserves that order. Candidate event and heartbeat writes lock session → exam → attempt, then event rows; nothing holding an attempt lock later asks for a session or exam lock. `record_disconnects()` and `resolve_disconnects()` need no exam lock and lock attempts in UUID order with `FOR UPDATE SKIP LOCKED`. The count trigger updates the same attempt already held by those RPCs. Dismiss/restore and reversal lock one attempt before their event updates. These paths therefore introduce no lock-order cycle with `save_answer`, `advance_position`, `generate_paper`, `submit_due_attempt`, `finalize_exam_if_closed` or unassignment.
 
 The worker isolates each RPC call: one failed start, submit, or finalize does not abort the remaining work in the tick. Logging is condition-based rather than tick-based. An unready scheduled exam logs `exam_start_not_ready` on first occurrence and whenever its missing-category set changes, then at most one reminder every five minutes while the condition remains. It still retries every tick and logs `exam_started` when it starts. Scan, start, submit and lifecycle failures log on first occurrence and whenever their safe error code changes, then at most once every five minutes; each logs one recovery event when a successful result clears the condition. Idle ticks and suppressed repeats produce no line. Suppression state is process-local and contains only condition keys made from operation/exam/attempt IDs, missing category names, safe error codes and last-log timestamps—never database messages, answer data or secrets. A worker restart intentionally resets this state and may emit a new first-occurrence line.
 
