@@ -13,6 +13,7 @@ const CONTRACT_QUESTION_TWO = "00000000-0000-4000-8000-000000000012";
 const CONTRACT_OPTION_ONE = "00000000-0000-4000-8000-000000000021";
 const CONTRACT_OPTION_TWO = "00000000-0000-4000-8000-000000000022";
 vi.mock("next/navigation", () => ({ useRouter: () => mocks }));
+vi.mock("@/hooks/useProctoring", () => ({ useProctoring: () => ({ fullscreenLost: false, flush: vi.fn().mockResolvedValue(undefined), sendInstant: vi.fn(), pendingCount: () => 0 }) }));
 vi.mock("@/lib/time", () => ({ refineServerClock: vi.fn(), useServerClock: () => () => Date.parse("2026-10-04T10:00:00.000Z") }));
 vi.mock("@/components/candidate/CandidateContext", () => {
   class CandidatePaperError extends Error {
@@ -48,7 +49,7 @@ function json(body: unknown, status = 200) {
 beforeEach(() => {
   mocks.push.mockReset();
   const value = paper();
-  mocks.context = { state: state(), me: { candidate: { full_name: "Candidate", mer_code: "TEST" } }, paper: value, loadMe: vi.fn(), loadPaper: vi.fn().mockResolvedValue(value), refreshState: vi.fn().mockResolvedValue(state()) };
+  mocks.context = { state: state(), me: { candidate: { full_name: "Candidate", mer_code: "TEST" } }, paper: value, loadMe: vi.fn(), loadPaper: vi.fn().mockResolvedValue(value), refreshState: vi.fn().mockResolvedValue(state()), heartbeatNow: vi.fn().mockResolvedValue(state()) };
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/api/answers") return json({ result: "saved", server_time: "2026-10-04T10:00:00.000Z" });
@@ -133,7 +134,8 @@ describe("ExamScreen", () => {
     expect(nextInputSchema.parse(nextBody)).toEqual(nextBody);
     expect(Object.keys(nextBody).sort()).toEqual(["answer_text", "expected_position", "question_id", "revision", "selected_option_id"]);
     expect(nextBody).toMatchObject({ question_id: CONTRACT_QUESTION_ONE, answer_text: "", expected_position: 0 });
-    expect(mocks.context.refreshState).toHaveBeenCalled();
+    expect(mocks.context.heartbeatNow).toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Question 2" })).toBeTruthy();
   });
 
   it.each(["advanced", "already_advanced", "invalid_state"] as const)("sends a strict-schema Next body and handles %s", async (result) => {

@@ -105,6 +105,11 @@ function PaperProbe() {
   return <><button onClick={() => void loadPaper()}>Load paper one</button><button onClick={() => void loadPaper()}>Load paper two</button></>;
 }
 
+function HeartbeatProbe() {
+  const { heartbeatNow } = useCandidate();
+  return <button onClick={() => void heartbeatNow().catch(() => null)}>Heartbeat now</button>;
+}
+
 function enterLogin(key: CandidateKey) {
   fireEvent.change(screen.getByLabelText("MER code"), {
     target: { value: people[key].mer },
@@ -270,5 +275,26 @@ describe("CandidateProvider flow state", () => {
     render(<CandidateProvider><h1>Provider must ignore this heading</h1></CandidateProvider>);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/exam/state", { cache: "no-store" }));
     expect(document.title).toBe("Question 7 · Exam A");
+  });
+
+  it.each([
+    ["unauthenticated", "Please sign in again"],
+    ["session_revoked", "You were signed out"],
+  ])("renders the %s screen after a heartbeat 401 in Strict Mode", async (code, heading) => {
+    activeCandidate = "A";
+    navigation.path = "/exam";
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/exam/state") {
+        const base = stateBody("A");
+        return json({ ...base, phase: "live", exam: { ...base.exam, status: "live", ends_at: "2026-10-05T12:00:00.000Z" }, attempt: { ...base.attempt, status: "in_progress", deadline: "2026-10-05T12:00:00.000Z" } });
+      }
+      if (url === "/api/heartbeat") return json({ error: { code, message: "Synthetic auth failure" } }, 401);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<StrictMode><CandidateProvider><HeartbeatProbe /></CandidateProvider></StrictMode>);
+    fireEvent.click(await screen.findByRole("button", { name: "Heartbeat now" }));
+    expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
+    expect(screen.queryByText("Loadingâ€¦")).toBeNull();
   });
 });

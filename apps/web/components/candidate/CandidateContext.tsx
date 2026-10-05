@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/Button";
 import { routeFor } from "@/lib/candidate-routing";
 import type { ApiErrorPayload, CandidateMe, PaperBody, StateBody } from "@/lib/candidate-types";
 import { getAnswerDraftStore } from "@/lib/indexeddb";
+import { useHeartbeat } from "@/hooks/useHeartbeat";
 
 export class CandidatePaperError extends Error {
   constructor(readonly code: string, readonly status: number) {
@@ -32,6 +33,7 @@ interface CandidateContextValue {
   checkPassed: boolean;
   setCheckPassed(value: boolean): void;
   refreshState(): Promise<StateBody | null>;
+  heartbeatNow(): Promise<StateBody | null>;
   loadMe(): Promise<CandidateMe>;
   loadPaper(force?: boolean): Promise<PaperBody>;
   resetCandidateSession(): void;
@@ -58,6 +60,22 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   const stateLoaded = useRef(false);
   const sessionGeneration = useRef(0);
   const activeAttemptId = state?.attempt.id;
+  const applyHeartbeatState = useCallback((next: StateBody) => {
+    setError(null);
+    setState(next);
+    stateLoaded.current = true;
+    setLoaded(true);
+  }, []);
+  const applyHeartbeatAuthError = useCallback((code: "unauthenticated" | "session_revoked") => {
+    setError(code);
+    stateLoaded.current = true;
+    setLoaded(true);
+  }, []);
+  const heartbeatNow = useHeartbeat(
+    applyHeartbeatState,
+    applyHeartbeatAuthError,
+    pathname === "/waiting" || pathname === "/exam",
+  );
 
   const resetCandidateSession = useCallback(() => {
     if (activeAttemptId) void getAnswerDraftStore().clearAttempt(activeAttemptId);
@@ -200,6 +218,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
       checkPassed,
       setCheckPassed,
       refreshState,
+      heartbeatNow,
       loadMe,
       loadPaper,
       resetCandidateSession,
@@ -210,6 +229,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
       visiblePaper,
       checkPassed,
       refreshState,
+      heartbeatNow,
       loadMe,
       loadPaper,
       resetCandidateSession,

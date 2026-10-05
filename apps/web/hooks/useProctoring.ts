@@ -28,8 +28,10 @@ type Options = {
 };
 
 const storageKey = "proctoringEventQueue";
+const systemNow = () => Date.now();
+const noMediaTracks: NonNullable<Options["mediaTracks"]> = [];
 
-export function useProctoring({ enabled, inProgress, video = null, mediaTracks = [], now = () => Date.now() }: Options) {
+export function useProctoring({ enabled, inProgress, video = null, mediaTracks = noMediaTracks, now = systemNow }: Options) {
   const [fullscreenLost, setFullscreenLost] = useState(false);
   const queue = useRef<QueuedEvent[]>([]);
   const active = useRef<QueuedEvent | null>(null);

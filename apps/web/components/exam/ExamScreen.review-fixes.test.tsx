@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
-vi.mock("@/hooks/useExamStatePoll", () => ({ useExamStatePoll: vi.fn() }));
+vi.mock("@/hooks/useProctoring", () => ({ useProctoring: () => ({ fullscreenLost: false, flush: vi.fn().mockResolvedValue(undefined), sendInstant: vi.fn(), pendingCount: () => 0 }) }));
 vi.mock("@/hooks/useAutosave", () => ({ useAutosave: () => mocks.autosave }));
 vi.mock("@/lib/time", () => ({ refineServerClock: vi.fn(), useServerClock: () => () => Date.parse("2026-10-04T10:00:00.000Z") }));
 vi.mock("@/components/candidate/CandidateContext", () => ({
@@ -77,6 +77,7 @@ beforeEach(() => {
     loadMe: vi.fn(),
     loadPaper: vi.fn().mockResolvedValue(value),
     refreshState: vi.fn().mockResolvedValue(state()),
+    heartbeatNow: vi.fn().mockResolvedValue(state()),
   };
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
 });

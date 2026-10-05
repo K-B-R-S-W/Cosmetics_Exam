@@ -15,7 +15,7 @@ const ANNOUNCE_AT_SECONDS = [600, 300, 120, 60];
 
 export function WaitingRoom() {
   const router = useRouter();
-  const { state, refreshState, loadPaper } = useCandidate();
+  const { state, refreshState, heartbeatNow, loadPaper } = useCandidate();
   const now = useServerClock();
   const [connectionLost, setConnectionLost] = useState(false);
   const [changedTime, setChangedTime] = useState<string | null>(null);
@@ -35,13 +35,13 @@ export function WaitingRoom() {
 
   const refresh = useCallback(async () => {
     try {
-      const next = await refreshState();
+      const next = await heartbeatNow();
       if (next) refineServerClock(next.server_time);
       setConnectionLost(false);
     } catch {
       setConnectionLost(true);
     }
-  }, [refreshState]);
+  }, [heartbeatNow]);
 
   useExamBroadcast(state?.exam.id ?? null, refresh);
 
@@ -59,13 +59,6 @@ export function WaitingRoom() {
       setChangedTime(current ? `The start time changed to ${formatColombo(current)}.` : "The exam team will start the exam. Stay on this page.");
     }
   }, [state]);
-
-  useEffect(() => {
-    if (!state) return;
-    const delay = state.phase === "waiting" && atZero ? 3000 : 10_000;
-    const timer = window.setInterval(() => void refresh(), delay);
-    return () => window.clearInterval(timer);
-  }, [atZero, refresh, state]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDelayed(atZero), atZero ? 60_000 : 0);

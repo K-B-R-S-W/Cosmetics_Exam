@@ -8,9 +8,10 @@ import { QuestionCard, type DraftAnswer } from "@/components/exam/QuestionCard";
 import { QuestionList, answerStatus } from "@/components/exam/QuestionList";
 import { SaveIndicator } from "@/components/exam/SaveIndicator";
 import { Timer } from "@/components/exam/Timer";
+import { FullscreenOverlay } from "@/components/exam/FullscreenOverlay";
 import { Button } from "@/components/ui/Button";
 import { useAutosave } from "@/hooks/useAutosave";
-import { useExamStatePoll } from "@/hooks/useExamStatePoll";
+import { useProctoring } from "@/hooks/useProctoring";
 import type { ApiErrorPayload, NextQuestionBody, PaperBody } from "@/lib/candidate-types";
 import { langFor } from "@/lib/lang";
 import { PAPER_RETRY_DELAY_MS, PAPER_RETRY_NOTICE, usePaperRetryTracker } from "@/lib/paper-retry";
@@ -82,7 +83,7 @@ export function isTransientPaperFailure(error: unknown): boolean {
 
 export function ExamScreen() {
   const router = useRouter();
-  const { state, me, paper, loadMe, loadPaper, refreshState } = useCandidate();
+  const { state, me, paper, loadMe, loadPaper, refreshState, heartbeatNow } = useCandidate();
   const [loadedPaper, setLoadedPaper] = useState<PaperBody | null>(paper);
   const [activeIndex, setActiveIndex] = useState(0);
   const [summary, setSummary] = useState(false);
@@ -137,7 +138,11 @@ export function ExamScreen() {
     onSessionRevoked: () => void refreshState().catch(() => null),
     onWrongPosition: () => void resyncSequential(),
   });
-  useExamStatePoll(refreshState, true);
+  const proctoring = useProctoring({
+    enabled: Boolean(loadedPaper) && !locked,
+    inProgress: state?.attempt.status === "in_progress",
+    mediaTracks: [],
+  });
 
   const load = useCallback(async (force = false) => {
     setLoading(true);
@@ -225,6 +230,7 @@ export function ExamScreen() {
     setActionBusy(true);
     setActionError(null);
     try {
+      await proctoring.flush(2_000);
       const pending = await autosave.flushAll(3_000);
       const response = await fetch("/api/exam/submit", {
         method: "POST",
@@ -267,7 +273,7 @@ export function ExamScreen() {
       actionLock.current = false;
       setActionBusy(false);
     }
-  }, [autosave, refreshState, router, state]);
+  }, [autosave, proctoring, refreshState, router, state]);
   useEffect(() => { submitAttemptRef.current = submitAttempt; }, [submitAttempt]);
 
   useEffect(() => {
@@ -341,7 +347,7 @@ export function ExamScreen() {
         });
         if (next.result === "out_of_sync") setMoveNotice(`We moved you to question ${next.position + 1}.`);
         setNextRetrying(false);
-        await refreshState().catch(() => null);
+        queueMicrotask(() => void heartbeatNow().catch(() => null));
       }
     } catch {
       setActionError("Reconnecting…");
@@ -358,7 +364,7 @@ export function ExamScreen() {
       actionLock.current = false;
       setActionBusy(false);
     }
-  }, [autosave, loadedPaper, refreshState, resyncSequential, state, visibleQuestion]);
+  }, [autosave, heartbeatNow, loadedPaper, refreshState, resyncSequential, state, visibleQuestion]);
   useEffect(() => { advanceRef.current = advance; }, [advance]);
 
   const answeredCount = useMemo(() => questions.filter((question) => answerStatus(question, autosave.answers[question.id]).startsWith("Answered")).length, [autosave.answers, questions]);
@@ -395,6 +401,7 @@ export function ExamScreen() {
         </div>
       )}
       {!locked && loadedPaper && visibleQuestion && !summary ? <footer className="exam-bottom-bar flex min-h-16 items-center justify-end gap-3 border-t border-hairline bg-surface px-5 py-2">{loadedPaper.navigation_mode === "free" ? <><Button variant="secondary" disabled={!autosave.ready || actionBusy || activeIndex === 0} onClick={() => void moveFree(Math.max(0, activeIndex - 1))}>Previous</Button>{activeIndex === questions.length - 1 ? <Button disabled={!autosave.ready || actionBusy} onClick={() => setSummary(true)}>Review and submit</Button> : <Button disabled={!autosave.ready || actionBusy} onClick={() => void moveFree(Math.min(questions.length - 1, activeIndex + 1))}>Next</Button>}</> : <Button loading={actionBusy} disabled={!autosave.ready || nextRetrying} onClick={() => visibleQuestion.position === loadedPaper.total_questions - 1 ? setDialog("submit") : void advance()}>{nextRetrying ? "Reconnecting…" : visibleQuestion.position === loadedPaper.total_questions - 1 ? "Submit exam" : "Next question"}</Button>}</footer> : null}
+      <FullscreenOverlay active={proctoring.fullscreenLost && !locked} />
       {dialog === "blank" ? <ExamDialog title="Move on without an answer?" body="You can't come back to this question." confirm="Continue without an answer" busy={actionBusy} error={actionError} onClose={() => { setDialog(null); setActionError(null); }} onConfirm={() => { setDialog(null); void advance(true); }} /> : null}
       {dialog === "submit" ? <ExamDialog title="Submit your exam?" body={`You can't change your answers after you submit.${unansweredCount > 0 && loadedPaper?.navigation_mode === "free" ? ` ${unansweredCount} ${unansweredCount === 1 ? "question is" : "questions are"} not answered.` : ""}`} confirm="Submit exam" busy={actionBusy} error={actionError} onClose={() => { setDialog(null); setActionError(null); }} onConfirm={() => void submitAttempt("manual")} /> : null}
     </main>

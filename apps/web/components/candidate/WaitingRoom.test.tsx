@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StateBody } from "@/lib/candidate-types";
 
-const mocks = vi.hoisted(() => ({ push: vi.fn(), refreshState: vi.fn(), loadPaper: vi.fn(), now: 0 }));
+const mocks = vi.hoisted(() => ({ push: vi.fn(), refreshState: vi.fn(), heartbeatNow: vi.fn(), loadPaper: vi.fn(), now: 0 }));
 let currentState: StateBody;
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("@/lib/broadcast", () => ({ useExamBroadcast: vi.fn() }));
@@ -18,7 +18,7 @@ vi.mock("@/components/candidate/CandidateContext", () => {
   }
   return {
     CandidatePaperError,
-    useCandidate: () => ({ state: currentState, refreshState: mocks.refreshState, loadPaper: mocks.loadPaper }),
+    useCandidate: () => ({ state: currentState, refreshState: mocks.refreshState, heartbeatNow: mocks.heartbeatNow, loadPaper: mocks.loadPaper }),
     CandidateFrame: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
     CandidateErrorScreen: ({ title }: { title: string }) => <main><h1>{title}</h1><button>Sign out</button></main>,
     Notice: ({ children }: { children: React.ReactNode }) => <div role="status">{children}</div>,
@@ -36,6 +36,7 @@ beforeEach(() => {
   mocks.now = Date.parse("2026-10-04T10:00:00.000Z");
   mocks.push.mockReset();
   mocks.refreshState.mockReset().mockImplementation(async () => currentState);
+  mocks.heartbeatNow.mockReset().mockImplementation(async () => currentState);
   mocks.loadPaper.mockReset().mockResolvedValue({});
   vi.useFakeTimers();
 });
@@ -46,13 +47,14 @@ async function flush() {
 }
 
 describe("WaitingRoom", () => {
-  it("never shows a negative countdown at 0:00 and polls every three seconds", async () => {
+  it("never shows a negative countdown at 0:00 and leaves polling to the provider heartbeat", async () => {
     currentState = state("waiting", "2026-10-04T10:00:00.000Z");
     render(<WaitingRoom />);
     expect(screen.getByText("The exam is starting…")).toBeTruthy();
     expect(screen.queryByText(/-\d/)).toBeNull();
     await act(() => vi.advanceTimersByTimeAsync(3000));
-    expect(mocks.refreshState).toHaveBeenCalled();
+    expect(mocks.refreshState).not.toHaveBeenCalled();
+    expect(mocks.heartbeatNow).not.toHaveBeenCalled();
   });
 
   it("loads one paper, refreshes status, then navigates client-side", async () => {
