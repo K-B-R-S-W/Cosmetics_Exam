@@ -35,6 +35,10 @@ The worker has two independent non-overlapping lanes:
 - Lifecycle lane every 10 seconds: unchanged from Phase 2. Idle profile is its three bounded lifecycle reads/RPC stages; due-attempt work remains database-clock authoritative and isolated per item.
 - Proctoring lane every 30 seconds: exactly 3 RPC calls (`record_disconnects`, `resolve_disconnects`, `reverse_recent_disconnects`) whether idle or with 23 in-progress attempts. Each failure is isolated. Its separate timer and guard mean a hanging proctoring pass does not skip a lifecycle tick.
 
+The worker now also has an independent 30-second health lane. Tasks 6A.1 (single-instance guard) and 6A.6 (health heartbeat) are **locally implemented, NOT live-verified**. Startup ownership uses a compare-and-set write against the exact `status` and `detail` text read from `system_health('worker')`; an update must return a row to win, and a missing-row insert treats PostgreSQL `23505` as a lost race. Heartbeats use the same conditional-write rule and a monotonically increasing `beat` in `detail`. The 65-second heartbeat-advancement observation is authoritative for takeover; the worker-clock age is only an initial stale-row hint, with negative skew over five seconds logged without row contents. Graceful shutdown stops timers, waits briefly for an in-flight heartbeat, conditionally marks only its own row `down`, and exits zero. Guard exits use code 3 and never write `down`.
+
+At idle, the health lane adds one `system_health` read and one conditional update every 30 seconds: **2 calls / 30 s = 4 calls/minute**. The existing lifecycle lane is **12 calls / 30 s = 24 calls/minute**, and proctoring is **3 RPCs / 30 s = 6 calls/minute**. Total idle worker traffic is therefore **17 calls / 30 s = 34 calls/minute**. Startup guard polling and graceful-shutdown writes are one-time operational calls, not steady idle traffic. No grading queue or slot queries are included yet.
+
 ## Client rules implemented
 
 - Event requests use strict schemas and client-generated UUIDs. Unknown keys fail, so client/server write-contract changes must deploy together and never during an active exam.
@@ -66,5 +70,14 @@ Every Section 4 section 8.1 event type must appear in the admin log. A snapshot 
 - Two-session Pass 1/Pass 2 lock races, `SKIP LOCKED`, and interaction with heartbeat/save/advance.
 - Real Chrome tablet/laptop behaviour for focus, notification shade, side panel, split view, fullscreen, orientation, `screen.isExtended`, black-frame capture, pagehide beacon, and throttled timers.
 - Phase 4 LiveKit camera/mic tracks and the mounted admin live grid. Phase 3 uses injected media interfaces only.
-- Worker single-instance guard 6A.1 and health heartbeat 6A.6 still block production deployment. The worker must be deployed before a real exam only after those are complete.
+- Worker single-instance guard 6A.1 and health heartbeat 6A.6 are locally implemented but not live-verified. Before any real exam, run runbook Part A against the development project and EC2 worker:
+  1. Start the service worker and confirm its `system_health('worker')` row becomes `ok` with the expected instance.
+  2. Leave it idle for two minutes and confirm the heartbeat advances every 30 seconds without repeated success logs.
+  3. Start a second worker against the same project while the first remains alive.
+  4. Confirm the second worker observes advancing heartbeats, logs `guard_exit`, and exits with code 3.
+  5. Confirm systemd does not restart the code-3 process and the first worker continues all three lanes.
+  6. Stop the owning worker with Ctrl+C/SIGINT and confirm the row becomes `down` before exit 0.
+  7. Restart after the graceful stop and confirm ownership is immediate rather than waiting 65 seconds.
+  8. Kill the owner without a signal, restart it, and confirm the new process waits for the stalled-heartbeat window then takes over.
+  9. Leave the recovered worker idle for two more minutes and confirm lifecycle, proctoring and health continue with no duplicate owner.
 - Plan row 6A.7 remains stale because Discord/Telegram alerts are a locked-out feature; it is not Phase 3 scope.

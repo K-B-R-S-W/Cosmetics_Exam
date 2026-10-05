@@ -20,7 +20,13 @@ try {
     },
   });
 
-  if (result.error || result.status !== 0 || result.signal || !result.stdout.includes("WORKER DIST SELF-TEST PASSED")) {
+  if (
+    result.error
+    || result.status !== 0
+    || result.signal
+    || !result.stdout.includes("WORKER DIST THREE-LANE SELF-TEST PASSED")
+    || !result.stdout.includes("WORKER DIST SELF-TEST PASSED")
+  ) {
     throw new Error([
       "Worker dist self-test failed.",
       `status=${String(result.status)}`,

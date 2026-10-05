@@ -1,6 +1,10 @@
 export const SCHEDULER_INTERVAL_MS = 10_000;
 export const PROCTORING_INTERVAL_MS = 30_000;
 export const SCHEDULER_EARLY_WINDOW_MS = 60_000;
+export const HEALTH_HEARTBEAT_INTERVAL_MS = 30_000;
+export const HEALTH_STALE_AFTER_MS = 60_000;
+export const HEALTH_GUARD_POLL_INTERVAL_MS = 5_000;
+export const HEALTH_GUARD_TAKEOVER_AFTER_MS = 65_000;
 
 export type WorkerConfig = {
   supabaseUrl: string;
