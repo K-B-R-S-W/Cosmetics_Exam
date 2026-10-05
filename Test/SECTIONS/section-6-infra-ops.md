@@ -124,6 +124,10 @@ On EC2 the instance only sees its private address. `use_external_ip: true` makes
 
 ## 5. The worker service
 
+Task 2F.5 implements only the restart-safe 30-second exam lifecycle scheduler. The single-instance guard (6A.1) and database heartbeat (6A.6) remain separate deployment work. **Do not deploy or run the scheduler against production until both are implemented and the guard/crash tests in §13 pass.** Scheduler start handoff is polling-only; it does not send a Realtime Broadcast.
+
+The scheduler logs only state changes and errors, never one routine line per 30-second tick. An unready scheduled exam stays scheduled; its error log contains only the exam ID and missing category names. One failed lifecycle RPC is isolated and does not prevent the other exams or attempts in that tick from being processed.
+
 ### 5.1 Environment file
 
 `sudo nano /etc/exam-worker.env`, paste `worker.env.example`, fill in the values, then `sudo chmod 600 /etc/exam-worker.env`. Keep `GEMINI_MODEL=gemini-3.7-flash` and set each key's current free-tier limit in `GEMINI_DAILY_LIMITS`; no quota is hardcoded and no fallback model is configured.
@@ -198,7 +202,7 @@ During setup, insert a harmless test alert and confirm it appears and resolves i
 ## 7. Supabase and Vercel settings
 
 **Supabase**
-- The latest schema delta has **not** been run on Supabase. After implementation and local verification, apply the reviewed migration path (fresh project: `001_initial.sql` then `002_grading.sql`; existing project: the new delta migration), then run `001_smoke_test.sql`.
+- Migrations 001 through 005 are applied to the development project. Migration 006 is pending review and manual execution. For a fresh project, run `001_initial.sql` through `006_exam_scheduler.sql` in order, then run `001_smoke_test.sql`; for an existing project, apply only the reviewed unapplied deltas in order. Never let the application or worker apply them automatically.
 - Confirm both private buckets exist: `snapshots` and `question-images`. Verify the **4 MiB**/MIME restrictions and candidate image authorization path. The lower cap leaves multipart overhead below Vercel Functions' 4.5 MB payload ceiling.
 - Create the admin users and the `admin_profiles` rows (task 1A.6).
 - **Free projects pause after inactivity** *(verify)*. Open the dashboard the week before and again the day before the exam. Rehearsal days count as activity, but do not rely on that.
@@ -256,6 +260,7 @@ Do not run `npm run build` on the box while an exam is live. Deploys happen the 
 
 **One week before**
 - [ ] Rehearsal done; restore drill done; load numbers in §9 recorded
+- [ ] Worker single-instance guard (6A.1) and 30-second heartbeat (6A.6) are implemented; guard/crash/takeover and stale-heartbeat tests passed. Production scheduler deployment is blocked until this is checked
 - [ ] Supabase dashboard opened (project active); backup cron has run at least once
 - [ ] Real candidates assigned; the complete composed question list and examiner answer keys are ready
 - [ ] Image tags and `.env` values frozen. No more deploys except fixes found in testing.
@@ -271,6 +276,7 @@ Do not run `npm run build` on the box while an exam is live. Deploys happen the 
 
 **30 minutes before**
 - [ ] Admins logged in, grid shows everyone *Ready*; fix camera/mic problems
+- [ ] Confirm exactly one worker instance is active and its heartbeat advances; do not start a laptop worker against production
 - [ ] `check-stack.sh` once more, `journalctl -u exam-worker -n 20` has no errors
 - [ ] Super admin has the health page and the alert phone open
 

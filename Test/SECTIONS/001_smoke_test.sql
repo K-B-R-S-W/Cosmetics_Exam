@@ -1,7 +1,7 @@
 -- =====================================================================
--- 001_smoke_test.sql  —  run AFTER migrations 001, 002, 003, 004 and 005 in the Supabase SQL editor.
+-- 001_smoke_test.sql  —  run AFTER migrations 001, 002, 003, 004, 005 and 006 in the Supabase SQL editor.
 -- Everything runs inside a transaction that is ROLLED BACK, so no data is left behind.
--- Success = the last notice says "SMOKE TEST PASSED". Any failure raises an error naming the check.
+-- Success = the final result-grid row says "SMOKE TEST PASSED". Any failure raises an error naming the check.
 -- =====================================================================
 begin;
 
@@ -36,7 +36,10 @@ declare
     'public.save_question(uuid,uuid,text,text,numeric,integer,text,text,text,integer,jsonb,uuid,text,text,jsonb)',
     'public.delete_question(uuid,uuid)',
     'public.reorder_questions(uuid,uuid[])',
-    'public.save_answer_key(uuid,uuid,text,text,jsonb)'
+    'public.save_answer_key(uuid,uuid,text,text,jsonb)',
+    'public.start_exam(uuid,boolean)',
+    'public.submit_due_attempt(uuid)',
+    'public.finalize_exam_if_closed(uuid)'
   ];
 begin
   assert not exists (
@@ -449,6 +452,8 @@ begin
 
   select out_result, out_position into v_res, v_pos from public.advance_position(v_att, 2, v_third, 'answer three', null, 1);
   assert v_res = 'last_question', '3e: last question should use Submit, got ' || v_res;
+  assert (select answer_text from public.answers where attempt_id = v_att and question_id = v_third) = 'answer three',
+    '3e: last-question answer must be saved before returning last_question';
 
   -- 4. Revision rule: a stale revision never overwrites
   assert public.save_answer(v_att, v_third, 'rev 5', null, false, 5) = 'saved',          '4a: first save';
@@ -666,7 +671,6 @@ begin
   assert public.save_answer(v_att, v_third, 'too late', null, false, 11) = 'closed',
     '13b: force-end window must close after 15 seconds';
 
-  raise notice 'SMOKE TEST PASSED';
 end $$;
 
 -- 14. Question-builder RPCs are atomic, retryable and status-guarded (migration 005).
@@ -845,6 +849,155 @@ begin
     assert sqlerrm = 'grading_in_progress',
       '14k: expected grading_in_progress, got ' || sqlerrm;
   end;
+end $$;
+
+-- 15. Scheduler RPCs use the database clock, submit every open attempt state,
+-- preserve a visible ended tick, and never resurrect an ended exam (migration 006).
+do $$
+declare
+  v_exam uuid := gen_random_uuid();
+  v_unready_exam uuid := gen_random_uuid();
+  v_future_exam uuid := gen_random_uuid();
+  v_force_exam uuid := gen_random_uuid();
+  v_question uuid := gen_random_uuid();
+  v_candidate1 uuid := gen_random_uuid();
+  v_candidate2 uuid := gen_random_uuid();
+  v_candidate3 uuid := gen_random_uuid();
+  v_attempt1 uuid;
+  v_attempt2 uuid;
+  v_attempt3 uuid;
+  v_future_attempt uuid;
+  v_force_attempt uuid;
+  v_result text;
+  v_reason text;
+  v_status text;
+  v_missing text[];
+  v_finalized int;
+begin
+  insert into public.candidates (id, mer_code, full_name, nic_hash) values
+    (v_candidate1, 'SCHED-001', 'Scheduler Candidate One', 'synthetic-hash'),
+    (v_candidate2, 'SCHED-002', 'Scheduler Candidate Two', 'synthetic-hash'),
+    (v_candidate3, 'SCHED-003', 'Scheduler Candidate Three', 'synthetic-hash');
+
+  insert into public.exams (
+    id, title, scheduled_start_at, duration_min, status
+  ) values (
+    v_unready_exam, 'Unready scheduler smoke', now() - interval '1 minute', 30, 'scheduled'
+  );
+
+  select out_result, out_missing into v_result, v_missing
+    from public.start_exam(v_unready_exam, true);
+  assert v_result = 'not_ready', '15a: an unready scheduled exam must stay scheduled';
+  assert v_missing = array['questions', 'candidates']::text[],
+    '15a: start must report only the missing readiness categories';
+  assert (select status from public.exams where id = v_unready_exam) = 'scheduled',
+    '15a: an unready exam must not change status';
+
+  insert into public.exams (
+    id, title, scheduled_start_at, duration_min, status
+  ) values (
+    v_exam, 'Scheduler smoke', now() - interval '1 minute', 30, 'scheduled'
+  );
+  insert into public.questions (id, exam_id, position, type, body_html, marks)
+  values (v_question, v_exam, 0, 'written', '<p>Scheduler question</p>', 1);
+  insert into public.exam_candidates (exam_id, candidate_id) values
+    (v_exam, v_candidate1), (v_exam, v_candidate2), (v_exam, v_candidate3);
+
+  select out_result, out_status into v_result, v_status
+    from public.start_exam(v_exam, true);
+  assert v_result = 'started' and v_status = 'live',
+    '15b: a due and ready scheduled exam must start';
+  assert (select started_at is not null and ends_at > started_at
+            from public.exams where id = v_exam),
+    '15b: start must set both timestamps from the database clock';
+
+  select id into v_attempt1 from public.attempts
+   where exam_id = v_exam and candidate_id = v_candidate1;
+  select id into v_attempt2 from public.attempts
+   where exam_id = v_exam and candidate_id = v_candidate2;
+  select id into v_attempt3 from public.attempts
+   where exam_id = v_exam and candidate_id = v_candidate3;
+  update public.attempts set status = 'acknowledged', acknowledged_at = now()
+   where id = v_attempt2;
+  update public.attempts set status = 'in_progress', joined_at = now()
+   where id = v_attempt3;
+  update public.exams set ends_at = now() - interval '16 seconds' where id = v_exam;
+
+  select out_result, out_reason into v_result, v_reason
+    from public.submit_due_attempt(v_attempt1);
+  assert v_result = 'submitted' and v_reason = 'auto',
+    '15c: a due not-started attempt must auto-submit';
+  select out_result, out_reason into v_result, v_reason
+    from public.submit_due_attempt(v_attempt2);
+  assert v_result = 'submitted' and v_reason = 'auto',
+    '15c: a due acknowledged attempt must auto-submit';
+  select out_result, out_reason into v_result, v_reason
+    from public.submit_due_attempt(v_attempt3);
+  assert v_result = 'submitted' and v_reason = 'auto',
+    '15c: a due in-progress attempt must auto-submit';
+  select out_result, out_reason into v_result, v_reason
+    from public.submit_due_attempt(v_attempt3);
+  assert v_result = 'already_submitted' and v_reason = 'auto',
+    '15c: retrying a due submission must be idempotent';
+  assert not exists (
+    select 1 from public.answers a where a.attempt_id in (v_attempt1, v_attempt2, v_attempt3)
+  ), '15c: scheduler submission must not synthesize answers';
+
+  select out_result, out_exam_status into v_result, v_status
+    from public.finalize_exam_if_closed(v_exam);
+  assert v_result = 'ended' and v_status = 'ended',
+    '15d: the first lifecycle pass must leave an ordinary exam ended';
+  assert (select bool_and(status = 'submitted') from public.attempts where exam_id = v_exam),
+    '15d: attempts must remain submitted during the observable ended tick';
+
+  select out_result, out_exam_status, out_finalized_attempts
+    into v_result, v_status, v_finalized
+    from public.finalize_exam_if_closed(v_exam);
+  assert v_result = 'finalized' and v_status = 'finalized' and v_finalized = 3,
+    '15e: the next lifecycle pass must finalize the exam and submitted attempts';
+  assert (select bool_and(status = 'finalized') from public.attempts where exam_id = v_exam),
+    '15e: every submitted attempt must be finalized';
+
+  select out_result into v_result from public.start_exam(v_exam, false);
+  assert v_result = 'invalid_status'
+     and (select status from public.exams where id = v_exam) = 'finalized',
+    '15f: an ended or finalized exam must never be resurrected';
+
+  insert into public.exams (
+    id, title, scheduled_start_at, started_at, ends_at, duration_min, status
+  ) values (
+    v_future_exam, 'Future scheduler smoke', now() + interval '5 minutes',
+    now(), now() + interval '5 minutes', 30, 'live'
+  );
+  insert into public.exam_candidates (exam_id, candidate_id)
+  values (v_future_exam, v_candidate1);
+  select id into v_future_attempt from public.attempts
+   where exam_id = v_future_exam and candidate_id = v_candidate1;
+  select out_result into v_result from public.submit_due_attempt(v_future_attempt);
+  assert v_result = 'not_due'
+     and (select status from public.attempts where id = v_future_attempt) = 'not_started',
+    '15g: the database clock must refuse an early submission';
+
+  insert into public.exams (
+    id, title, scheduled_start_at, started_at, ends_at, force_ended_at, duration_min, status
+  ) values (
+    v_force_exam, 'Force scheduler smoke', now() - interval '1 hour',
+    now() - interval '30 minutes', now() - interval '16 seconds',
+    now() - interval '16 seconds', 30, 'ended'
+  );
+  insert into public.exam_candidates (exam_id, candidate_id)
+  values (v_force_exam, v_candidate2);
+  select id into v_force_attempt from public.attempts
+   where exam_id = v_force_exam and candidate_id = v_candidate2;
+  select out_result, out_reason into v_result, v_reason
+    from public.submit_due_attempt(v_force_attempt);
+  assert v_result = 'submitted' and v_reason = 'forced',
+    '15h: a remaining force-ended attempt must submit as forced after 15 seconds';
+  select out_result, out_exam_status, out_finalized_attempts
+    into v_result, v_status, v_finalized
+    from public.finalize_exam_if_closed(v_force_exam);
+  assert v_result = 'finalized' and v_status = 'finalized' and v_finalized = 1,
+    '15h: a force-ended exam may finalize once collection is closed';
 end $$;
 
 select

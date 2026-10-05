@@ -629,9 +629,9 @@ Calls `delete_question(exam_id, question_id)`, which takes the same exam-row loc
 
 **`POST /api/admin/exams/[id]/start`**
 Empty body. Preconditions: status `draft` or `scheduled`, at least one question, at least one assigned candidate (`409 invalid_status`, `409 exam_has_no_questions`, `409 no_candidates_assigned`).
-Implementation: one conditional update, `status='live', started_at=now(), ends_at=now() + duration_min` **where status in ('draft','scheduled')**, returning the row. Zero rows means someone else (the worker's scheduled start, or another admin) won the race: `409 invalid_status`. Then publish `exam_started`.
+Implementation: call `start_exam(exam_id, false)`. Under an exam-row lock it performs one conditional update, `status='live', started_at=<database now>, ends_at=<database now> + duration_min` **where status in ('draft','scheduled')**, returning the row. `not_ready` maps its `questions`/`candidates` categories to the errors above; `invalid_status` means someone else (the worker's scheduled start, or another admin) won the race. Then publish `exam_started`.
 `200 { "exam": { "status": "live", "started_at": "<iso>", "ends_at": "<iso>" } }`.
-The worker's scheduled start must use the same conditional update, so the two cannot both fire.
+The worker calls the same function with `p_scheduled_only = true`, so it additionally requires `status='scheduled'` and `scheduled_start_at <=` the database clock. The two paths cannot both fire. An unready scheduled exam stays scheduled and is reconsidered on every tick; no start Broadcast is sent by the worker, because candidate polling is the handoff.
 
 **`POST /api/admin/exams/[id]/extend`**
 `{ "minutes": 10, "attempt_id": "<uuid, optional>" }` with `minutes` from 1 to 120.
@@ -643,9 +643,9 @@ The worker's scheduled start must use the same conditional update, so the two ca
 **`POST /api/admin/exams/[id]/force-end`**
 `{ "confirm": true }` (required, `400` without it). Exam must be `live` (`409 invalid_status`).
 1. Atomically `update exams set status='ended', ends_at=now(), force_ended_at=now() where id = X and status='live'`. Candidate screens lock immediately.
-2. Immediately submit `not_started` and `acknowledged` attempts as `forced`. Leave `in_progress` attempts open only for final answer collection: `save_answer` and the submit route accept their pending answers until `force_ended_at + 15 seconds`; no navigation or continued editing is allowed.
+2. Leave all still-open attempts for the final collection window. `in_progress` candidates may send pending answers until `force_ended_at + 15 seconds`; `not_started` and `acknowledged` attempts have no synthetic answers added. No navigation or continued editing is allowed.
 3. Publish `exam_ended`. Connected clients flush `pending_answers`; the submit route derives `forced` server-side and closes each attempt.
-4. After 15 seconds the worker submits every remaining attempt as `forced` from the latest answers already stored, then finalizes. Partial written answers are graded like any other non-blank answer.
+4. After 15 seconds the worker submits every remaining `not_started`, `acknowledged`, or `in_progress` attempt as `forced` from the latest answers already stored, then finalizes. Partial written answers are graded like any other non-blank answer.
 
 `202 { "exam": { "status": "ended", "ends_at": "<iso>", "force_ended_at": "<iso>" }, "collection_deadline": "<iso>", "collecting": 21, "already_submitted": 2 }`. Final counts are available after the collection window.
 
@@ -819,8 +819,8 @@ These are worker-side behaviours the contracts above depend on. The proctoring s
 
 | Behaviour | Rule |
 |---|---|
-| Scheduled start | Every 30 s: for exams `scheduled` with `scheduled_start_at <= now()`, run the **same conditional update as the Start route** |
-| Exam end and finalize | Ordinary deadlines: submit each attempt after its own `grace_deadline` with reason **`auto`**. Admin force-end: wait only until `force_ended_at + 15 seconds`, then submit remaining attempts with **`forced`** from their latest stored answers. Finally mark submitted attempts `finalized`. Partial non-blank written answers always receive Gemini grading |
+| Scheduled start | Every 30 s: conservatively select scheduled exams whose start is within the next 60 seconds, then call `start_exam(id, true)`. The RPC's database clock alone decides whether the exam is due. It leaves an unready exam scheduled and returns only the missing `questions`/`candidates` categories. No worker Broadcast is sent; the existing state poll discovers the transition |
+| Exam end and finalize | Conservatively select open attempts whose possible deadline is within the next 60 seconds, then call `submit_due_attempt(id)`. The RPC's database clock is authoritative. Ordinary deadlines submit every remaining attempt state after its own `grace_deadline` with **`auto`**; force-end waits through `force_ended_at + 15 seconds` and uses **`forced`**. It never creates answer rows. Then call `finalize_exam_if_closed(exam_id)`: a live ordinary exam becomes `ended` only after every collection window is closed and no open attempt remains; a later tick changes submitted attempts and the exam to `finalized`. A force-ended exam is already `ended` and may finalize after its collection window closes. Partial non-blank written answers always receive Gemini grading |
 | `DISCONNECTED` events | **Two-pass rule (send-on-end model).** **Pass 1 (30s):** every 30 s, for `in_progress` attempts with `last_seen_at` older than 30 s, insert `DISCONNECTED` with `counts = false`, `meta.last_seen_at` = the attempt's current `last_seen_at` (exact timestamptz string from the DB), and no `meta.count_reason`. Skip if the attempt's most recent `DISCONNECTED`/`RECONNECTED` is already a `DISCONNECTED`. **Pass 2:** every 30 s, call `resolve_disconnects()` (RPC, `revoke execute from public, anon, authenticated; grant to service_role`). This function runs two guarded statements: **(1) Mark overlaps** — rows where a focus-type event's interval (using `coalesce(f.duration_ms, 0)`) starts inside the gap get `count_reason = 'overlap'`. The interval rule (Section 4 §5): only the lower bound matters (`incident_end >= gap_start - 10s`); the old upper-bound check on `f.occurred_at` is removed, so an incident starting anywhere inside the gap counts as overlap. **(2) Flip remaining** — unmatched rows get `counts = true, count_reason = 'long_gap'`. Both include `a.status = 'in_progress'`, `coalesce(f.duration_ms, 0)`, `count_reason IS NULL` guard, and `timestamptz` casts. The trigger handles +1/-1. If a late focus event arrives after a flip, the events route calls `reverse_disconnects_for_incident(event_id)` — only touches `long_gap` rows. The heartbeat route sets `count_reason = 'short_gap'` (uses `coalesce(meta, '{}'::jsonb)` and `IS NULL` guard). **Worker reversal safety net:** after Pass 2, call `reverse_disconnects_for_incident()` for any attention incidents inserted in the last 5 minutes (idempotent) |
 | Key check | Every 5 minutes, per key: call the model-listing endpoint, then write `api_key_state` (`active`, or `disabled` with `last_error` on 400/403). This is the only place Gemini keys are used outside grading |
 | Grading jobs | See Section 5 §7. When the last job of an attempt finishes, call `recomputeResults(attemptId)`. The worker auto-resumes pauses it caused itself (`keys_exhausted`) |
@@ -828,6 +828,20 @@ These are worker-side behaviours the contracts above depend on. The proctoring s
 | Unattached question images | Once a day, delete `question-images` objects older than 24 hours that no `questions.image_path` references; never delete referenced exam content |
 | Worker heartbeat | `system_health` row every 30 s (6A.6) |
 | Shared code | `recomputeResults`, the conditional start update, and the snapshot purge are written once and imported by both the Next.js app and the worker |
+
+### 7.1 Scheduler transaction and failure rules
+
+Migration 006 is the database authority for the lifecycle transitions:
+
+- `start_exam(uuid, boolean)` returns `started`, `not_due`, `not_ready`, `invalid_status`, or `not_found`. It never moves an `ended` or `finalized` exam back to `live`.
+- `submit_due_attempt(uuid)` returns `submitted`, `already_submitted`, `not_due`, or `not_found`. Candidate-submitted-first and overlapping ticks are normal idempotent outcomes, not errors.
+- `finalize_exam_if_closed(uuid)` returns `ended`, `finalized`, `already_finalized`, `not_closed`, `pending_attempts`, or `not_found`. “Collection closed” means the database clock is strictly later than every ordinary attempt's `ends_at + extra_minutes + 15 seconds`, or strictly later than `force_ended_at + 15 seconds` for a force-end, and no attempt remains open. An ordinary exam is intentionally observable as `ended` for one 30-second tick before it is finalized.
+
+Every function that needs both levels locks the exam row first, then attempt rows in UUID order. The migration aligns `generate_paper`, `save_answer`, and `advance_position`; `unassign_exam_candidates` already follows that order; question RPCs lock only the exam before question-owned rows. `submit_attempt` locks one attempt and never later locks its exam. There is therefore no exam/attempt lock cycle among these paths. Besides preventing deadlocks, the shared exam lock prevents a final answer save from committing after finalization.
+
+The worker isolates each RPC call: one failed start, submit, or finalize is logged without candidate content and does not abort the remaining work in the tick. It logs only state changes and errors—there is no routine line every 30 seconds. An unready scheduled exam is an error entry containing only its exam ID and missing category names, and remains scheduled for retry.
+
+Expected scheduler Data API profile before the later guard/heartbeat work: an idle tick makes three bounded reads (scheduled-start candidates, open-attempt deadline candidates, and live/ended lifecycle candidates) and no RPC calls. With 23 attempts due in one exam it makes those three reads, 23 independent `submit_due_attempt` RPCs, and one `finalize_exam_if_closed` RPC: 27 calls. The next tick makes the three reads plus one finalization RPC: 4 calls. A due scheduled exam adds one `start_exam` RPC. Local selection is deliberately up to 60 seconds early, so worker clock skew can add harmless `not_due` calls but cannot delay a database-due action.
 
 New environment variables: `SNAPSHOT_RETENTION_DAYS` (default `14`), `NEXT_PUBLIC_LIVEKIT_URL`. Already planned: `NIC_PEPPER`, the session secret, the Supabase keys, and the LiveKit key and secret. Gemini keys go **only** in the worker environment. There is no Discord/Telegram alert webhook.
 
