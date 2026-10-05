@@ -21,7 +21,7 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 >
 > The `save_question` lock was separately verified with a two-session test: concurrent creates received positions 0 and 1 after changing its lock to `FOR NO KEY UPDATE`; Start waited while a save held the exam-row lock; and a save begun after Start returned `exam_locked`. This concurrency property cannot be asserted deterministically by the single-session transactional smoke test.
 >
-> **Migration 006 is written but not yet applied.** Review and run it after this commit, then run the revised smoke test (including block 15) and record the result here before starting the worker application.
+> **Migration 006 verification (5 October 2026):** migration 006 applied cleanly to the Supabase development project. The revised smoke test, including block 15, returned **SMOKE TEST PASSED** and measured `generate_paper` with 100 questions at **4.87 ms**. A separate privileges check confirmed `start_exam`, `submit_due_attempt`, and `finalize_exam_if_closed` are executable by `service_role` only; both `anon` and `authenticated` reported false.
 
 ---
 

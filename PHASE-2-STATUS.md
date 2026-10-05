@@ -1,8 +1,8 @@
 # Phase 2 status
 
-**Status:** Phase 2 locally complete except task 2F.5 (worker scheduler); credential-backed manual verification and load timing pending
+**Status:** Phase 2 locally complete, including task 2F.5; credential-backed rehearsal and production deployment pending
 
-This record covers the locally implemented Phase 2 candidate flow. Task 2F.5 has its own upcoming Gate 1 and no worker application exists yet.
+This record covers the locally implemented Phase 2 candidate flow and exam lifecycle scheduler. The worker exists under `worker/`, but production deployment is blocked until the single-instance guard (6A.1) and heartbeat (6A.6) are implemented and rehearsed.
 
 | Task | Local status | Note |
 |---|---|---|
@@ -81,7 +81,7 @@ The route calculates the deadline with the same `attemptDeadline()` and `examPha
 | 2F.1–2F.2 Submit | Complete | Manual/auto hints, server-derived reason, up to 200 pending answers at concurrency 8, exact dialog copy, deadline lock and 15 s client retry window |
 | 2F.3 Done | Complete | Reason-specific confirmation, no scores, local-draft cleanup, media/fullscreen cleanup and one logout call |
 | 2F.4 Reconnect | Complete locally | Same attempt/paper plus server-vs-device revision merge; server wins when another device is ahead |
-| 2F.5 Worker scheduler | **Deferred** | Requires its own Gate 1. A closed tab is not server-side auto-submitted until this task exists |
+| 2F.5 Worker scheduler | Complete locally | 10-second non-overlapping loop, conservative discovery, database-authoritative start/submit/finalize RPCs, per-item failure isolation, change/error-only logs, and standalone bundle self-test |
 | 2F.6 Sequential Next | Complete | No-grace route check, five database calls on advancement, direct last-answer save, no `submit_now`, and 1/2/4/8/10 s transient retry backoff |
 
 The temporary exam-state mechanism is one replaceable 10-second poll. It continues while locked, backs off silently offline, stops when `/done` unmounts `/exam`, and is supplemented by an immediate refresh after successful Next. It costs two database round trips per poll, including authentication: at 23 candidates that is about **138 database calls per minute** (23 × 6 polls × 2 calls), excluding Next and save traffic. Task 3B.4 replaces this hook with heartbeat without adding a second poll.
@@ -99,13 +99,35 @@ The temporary exam-state mechanism is one replaceable 10-second poll. It continu
 - Tests must not hard-code absolute dates that are compared with the real clock; pin or inject the test clock so fixtures do not expire.
 - Paper loading classifies draft/scheduled as `exam_not_live`, but ended/finalized/force-ended and expired attempts as `exam_closed`. This prevents the closed in-progress route guard from bouncing `/exam` to `/waiting` and back.
 - Transient paper failures still retry every five seconds. After six consecutive failures both waiting and exam loading show "This is taking longer than expected. Tell the exam team if this continues." while quiet retries continue; a successful load resets the counter.
-- Camera, fullscreen, heartbeat, proctoring/events, announcements and worker changes remain outside this batch. Autosave and the finished Done page are now implemented.
+- Camera, fullscreen, heartbeat, proctoring/events and announcements remain outside this batch. Autosave, Done, and the lifecycle-only worker scheduler are implemented.
 
 ### Batch 3 accepted limitations and races
 
 - `POST /api/exam/next` checks the deadline before `advance_position`, but the database RPC does not repeat it. A request crossing the boundary by milliseconds can advance once; the screen immediately locks from the timer or next state poll and no extra answering time is granted. Revisit with the paper-route race during Phase 6.
-- Without task 2F.5, a candidate who closes the page cannot be auto-submitted by the server. The Phase 2 done-when line's server-side auto-submit outcome therefore remains unmet until the worker gate.
-- A force-end is observed through state refresh. The client submits immediately on observation, so polling delay consumes part of the 15-second collection window; the future worker remains the authoritative closer for disconnected candidates.
+- A force-end is observed through state refresh. The client submits immediately on observation, so polling delay consumes part of the 15-second collection window; the worker remains the authoritative closer for disconnected candidates.
+
+## Task 2F.5: lifecycle worker scheduler
+
+Migration 006 was applied successfully to the Supabase development project on 5 October 2026. The revised smoke test returned **SMOKE TEST PASSED**, measured `generate_paper` with 100 questions at **4.87 ms**, and confirmed `start_exam`, `submit_due_attempt`, and `finalize_exam_if_closed` are executable by `service_role` only (`anon = false`, `authenticated = false`).
+
+The shared `apps/web/lib/exam-lifecycle.ts` module is the only TypeScript entry to those three RPCs. It contains no deadline or transition rules. The worker and the future Phase 5 admin Start route use that wrapper; the database clock and migration 006 remain authoritative. The scheduler performs one immediate tick and then non-overlapping ticks every 10 seconds. Discovery selects work up to 60 seconds early so a moderately slow worker clock cannot delay a due transition; early candidates safely receive `not_due` from the database.
+
+The shared module has no Next.js or `server-only` import, so esbuild can include it in the standalone worker. The bundle target is `node22`, the worker uses Node 22 type definitions and declares `node >=22 <23`, `infra/ec2/setup-ec2.sh` defaults to Node major 22, and Section 6 specifies Node 22 LTS.
+
+Per tick database-call profile:
+
+- **Idle at this exam scale:** 3 reads (scheduled-start candidates, open-attempt candidates, lifecycle-exam candidates), 0 RPCs/writes.
+- **Lead-in minute for 23 attempts sharing one deadline:** up to 6 ticks × (3 reads + 23 early `submit_due_attempt` RPCs returning `not_due` + 1 early finalization RPC returning `not_closed`) = **162 calls**. Of those, **138 are no-op attempt RPCs**, 6 are no-op finalization RPCs, and 18 are reads. Each early attempt RPC briefly takes the migration's exam/attempt locks, so it can contend with only that candidate's save/advance transaction. `not_due` and `already_submitted` are silent idempotent outcomes: neither logs a line nor increments a failure count.
+- **23 attempts due in one exam:** 3 reads + 23 independent `submit_due_attempt` RPCs + 1 `finalize_exam_if_closed` RPC = **27 calls**. The following ordinary-exam tick is 3 reads + 1 finalization RPC = **4 calls**.
+- A scheduled exam within the conservative window adds 1 `start_exam` RPC. An early candidate may therefore add a harmless `not_due` call; this is the approved clock-skew safeguard, not an additional periodic write.
+
+Every discovery query is ordered by UUID and limited to **500 rows per request**. A full page immediately fetches the next 500-row page in the same tick until a short page is reached, so overflow is neither dropped nor permanently starved. The profiles above assume each of the three scans fits in its first page, as it does for 23 candidates. Each additional page is one additional read; an exact full page also requires the following read to prove there is no overflow.
+
+One RPC failure is logged with operation, exam/attempt ID and safe error code only, then the rest of the tick continues. Unready scheduled exams remain scheduled, retry each tick, and log only exam ID plus `questions`/`candidates` missing categories. Idempotent no-change results and idle ticks produce no log line. No answer rows, broadcasts, grading, proctoring, guard, heartbeat or alerts are created by task 2F.5.
+
+The unit tests mock the Supabase client and prove orchestration, filtering, idempotent outcomes and failure isolation. They **cannot prove PostgreSQL row-lock races**. Migration 006's lock behavior is covered by the SQL smoke test and must receive a two-session concurrency rehearsal before production; the TypeScript test report must not be cited as proof of row-level serialization.
+
+The plan's 6A.7 row remains stale: it still describes Discord/Telegram webhooks, contrary to the locked in-app-alert decision. It was intentionally left unchanged in this task. Production deployment is blocked until 6A.1 and 6A.6 are complete, and the worker bundle must be deployed and observed before any real exam.
 
 ### Batch 3 manual checklist
 

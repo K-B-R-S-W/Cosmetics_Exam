@@ -124,9 +124,9 @@ On EC2 the instance only sees its private address. `use_external_ip: true` makes
 
 ## 5. The worker service
 
-Task 2F.5 implements only the restart-safe 30-second exam lifecycle scheduler. The single-instance guard (6A.1) and database heartbeat (6A.6) remain separate deployment work. **Do not deploy or run the scheduler against production until both are implemented and the guard/crash tests in §13 pass.** Scheduler start handoff is polling-only; it does not send a Realtime Broadcast.
+Task 2F.5 implements only the restart-safe 10-second exam lifecycle scheduler. The single-instance guard (6A.1) and 30-second database heartbeat (6A.6) remain separate deployment work. **Do not deploy or run the scheduler against production until both are implemented and the guard/crash tests in §13 pass.** Scheduler start handoff is polling-only; it does not send a Realtime Broadcast.
 
-The scheduler logs only state changes and errors, never one routine line per 30-second tick. An unready scheduled exam stays scheduled; its error log contains only the exam ID and missing category names. One failed lifecycle RPC is isolated and does not prevent the other exams or attempts in that tick from being processed.
+The scheduler logs only state changes and errors, never one routine line per 10-second tick. An unready scheduled exam stays scheduled; its error log contains only the exam ID and missing category names. One failed lifecycle RPC is isolated and does not prevent the other exams or attempts in that tick from being processed.
 
 ### 5.1 Environment file
 
@@ -267,6 +267,7 @@ Do not run `npm run build` on the box while an exam is live. Deploys happen the 
 
 **Day before**
 - [ ] `bash infra/ec2/check-stack.sh` all OK, certificate expiry is more than 14 days away
+- [ ] The worker bundle has been deployed to `/opt/exam-worker`, `npm run test:dist` passed before deployment, and the lifecycle scheduler is running. No real exam may proceed without the worker
 - [ ] Health page all green: Supabase, LiveKit, worker heartbeat under 60 s, three Gemini keys active
 - [ ] Manual backup taken
 - [ ] A test alert reaches the phone that will be watched during the exam
