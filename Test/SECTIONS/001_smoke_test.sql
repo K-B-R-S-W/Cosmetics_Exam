@@ -1338,9 +1338,11 @@ begin
     '16q: the 31st client event inside 60 seconds must be rate limited';
 
   v_before := (select violation_count from public.attempts where id = v_attempt);
-  assert public.record_login_violation(
-           v_attempt, 'MULTI_LOGIN', jsonb_build_object('source', 'login')
-         ) is not null
+  v_event := public.record_login_violation(
+    v_attempt, 'MULTI_LOGIN', jsonb_build_object('source', 'login')
+  );
+  assert v_event is not null
+     and (select counts from public.violation_events where id = v_event)
      and (select violation_count from public.attempts where id = v_attempt) = v_before + 1,
     '16r: a second login must create one counted MULTI_LOGIN event';
 

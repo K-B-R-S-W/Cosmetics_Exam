@@ -5,6 +5,7 @@ export type SchedulerLogContext = {
   reason?: string | null;
   missing?: string[];
   finalized_attempts?: number;
+  changed?: number;
   error_code?: string;
 };
 

@@ -1,4 +1,5 @@
 export const SCHEDULER_INTERVAL_MS = 10_000;
+export const PROCTORING_INTERVAL_MS = 30_000;
 export const SCHEDULER_EARLY_WINDOW_MS = 60_000;
 
 export type WorkerConfig = {

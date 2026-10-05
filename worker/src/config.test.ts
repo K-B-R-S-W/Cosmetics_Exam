@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { SCHEDULER_EARLY_WINDOW_MS, SCHEDULER_INTERVAL_MS, loadWorkerConfig } from "./config";
+import { PROCTORING_INTERVAL_MS, SCHEDULER_EARLY_WINDOW_MS, SCHEDULER_INTERVAL_MS, loadWorkerConfig } from "./config";
 
 describe("worker config", () => {
   it("uses the approved scheduler cadence and conservative scan window", () => {
     expect(SCHEDULER_INTERVAL_MS).toBe(10_000);
+    expect(PROCTORING_INTERVAL_MS).toBe(30_000);
     expect(SCHEDULER_EARLY_WINDOW_MS).toBe(60_000);
   });
 
