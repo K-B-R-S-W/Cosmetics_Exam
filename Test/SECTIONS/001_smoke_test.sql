@@ -1007,20 +1007,28 @@ do $$
 declare
   v_exam uuid := gen_random_uuid();
   v_candidate uuid := gen_random_uuid();
+  v_submitted_candidate uuid := gen_random_uuid();
+  v_admin uuid := gen_random_uuid();
   v_attempt uuid;
+  v_submitted_attempt uuid;
   v_session uuid := gen_random_uuid();
   v_event uuid := gen_random_uuid();
   v_disconnect uuid;
+  v_review_event uuid;
+  v_review_disconnect uuid;
+  v_review_focus uuid;
   v_result text;
   v_counts boolean;
   v_snapshot text;
   v_state jsonb;
   v_before int;
+  v_audit_before int;
   i int;
   f text;
   service_functions constant text[] := array[
     'public.record_candidate_event(uuid,uuid,text,text[],integer,integer,jsonb,boolean)',
     'public.mark_violation_snapshot_failed(uuid)',
+    'public.classify_disconnect(uuid,uuid,timestamp with time zone)',
     'public.candidate_heartbeat(uuid)',
     'public.record_login_violation(uuid,text,jsonb)',
     'public.record_disconnects()',
@@ -1054,6 +1062,19 @@ begin
        ])
   ), '16b: all three low-churn proctoring indexes must exist';
 
+  insert into auth.users (
+    instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+    raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+    confirmation_token, email_change, recovery_token
+  ) values (
+    '00000000-0000-0000-0000-000000000000', v_admin,
+    'authenticated', 'authenticated', v_admin::text || '@example.invalid', '', now(),
+    '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb, now(), now(),
+    '', '', ''
+  );
+  insert into public.admin_profiles (id, name, role)
+  values (v_admin, 'Synthetic Smoke Admin', 'admin');
+
   insert into public.candidates (id, mer_code, full_name, nic_hash)
   values (v_candidate, 'TEST-PROCTOR-007', 'Synthetic Proctor Candidate', 'synthetic-hash');
   insert into public.exams (id, title, duration_min, status, started_at, ends_at)
@@ -1067,6 +1088,16 @@ begin
    where exam_id = v_exam and candidate_id = v_candidate;
   insert into public.sessions (id, candidate_id, attempt_id)
   values (v_session, v_candidate, v_attempt);
+
+  select out_result into v_result
+    from public.candidate_heartbeat(gen_random_uuid());
+  assert v_result = 'unauthenticated',
+    '16c: an unknown heartbeat session must return unauthenticated';
+  update public.sessions set revoked_at = now() where id = v_session;
+  select out_result into v_result from public.candidate_heartbeat(v_session);
+  assert v_result = 'session_revoked',
+    '16c: a revoked heartbeat session must return session_revoked';
+  update public.sessions set revoked_at = null where id = v_session;
 
   select out_result into v_result from public.record_candidate_event(
     v_session, v_event, 'TAB_HIDDEN', array[]::text[], 0, 1500, null, false
@@ -1083,6 +1114,12 @@ begin
     );
   assert v_result = 'inserted' and not v_counts,
     '16d: waiting-room incidents must not count';
+  v_event := gen_random_uuid();
+  select out_result into v_result from public.record_candidate_event(
+    v_session, v_event, 'COPY', array[]::text[], 0, null, '[]'::jsonb, false
+  );
+  assert v_result = 'validation_failed',
+    '16d: event meta must be a JSON object';
   v_before := (select violation_count from public.attempts where id = v_attempt);
   v_event := public.record_login_violation(
     v_attempt, 'MULTI_LOGIN', jsonb_build_object('source', 'login')
@@ -1171,10 +1208,12 @@ begin
    order by occurred_at desc, id desc limit 1;
   assert (select meta->>'count_reason' is null from public.violation_events where id = v_disconnect),
     '16k: Pass 1 must open a later disconnect after reconnect';
-  perform public.resolve_disconnects();
+  select out_result into v_result from public.candidate_heartbeat(v_session);
+  assert v_result = 'ok',
+    '16k: heartbeat after a long gap must still return state';
   assert (select counts and meta->>'count_reason' = 'long_gap'
             from public.violation_events where id = v_disconnect),
-    '16k: Pass 2 must count a clean long gap';
+    '16k: heartbeat must count a clean gap at or above two minutes';
 
   v_event := gen_random_uuid();
   select out_result into v_result from public.record_candidate_event(
@@ -1184,6 +1223,87 @@ begin
      and (select not counts and meta->>'count_reason' = 'reversed_by_focus'
             from public.violation_events where id = v_disconnect),
     '16l: a late overlapping focus incident must reverse the disconnect count';
+
+  insert into public.candidates (id, mer_code, full_name, nic_hash)
+  values (
+    v_submitted_candidate, 'TEST-PROCTOR-SUBMITTED',
+    'Synthetic Submitted Candidate', 'synthetic-hash'
+  );
+  insert into public.exam_candidates (exam_id, candidate_id)
+  values (v_exam, v_submitted_candidate);
+  select id into v_submitted_attempt from public.attempts
+   where exam_id = v_exam and candidate_id = v_submitted_candidate;
+  update public.attempts
+     set status = 'submitted', submit_reason = 'auto', submitted_at = now(),
+         last_seen_at = now() - interval '5 minutes'
+   where id = v_submitted_attempt;
+  perform public.record_disconnects();
+  assert not exists (
+    select 1 from public.violation_events
+     where attempt_id = v_submitted_attempt and type = 'DISCONNECTED'
+  ), '16m: Pass 1 must not create disconnects for submitted attempts';
+
+  v_audit_before := (select count(*) from public.admin_actions where admin_id = v_admin);
+  insert into public.violation_events (attempt_id, type, counts, meta)
+  values (v_attempt, 'RELOAD', true, null)
+  returning id into v_review_event;
+  v_before := (select violation_count from public.attempts where id = v_attempt);
+  select out_result, out_counts into v_result, v_counts
+    from public.dismiss_violation_event(
+      v_review_event, v_admin, true, 'Synthetic false positive'
+    );
+  assert v_result = 'updated' and not v_counts
+     and (select not counts and meta->'dismissed'->>'note' = 'Synthetic false positive'
+            from public.violation_events where id = v_review_event)
+     and (select violation_count from public.attempts where id = v_attempt) = v_before - 1,
+    '16n: dismiss must handle null meta and decrement the badge';
+  select out_result, out_counts into v_result, v_counts
+    from public.dismiss_violation_event(
+      v_review_event, v_admin, false, 'Synthetic restore'
+    );
+  assert v_result = 'updated' and v_counts
+     and (select counts and not (meta ? 'dismissed')
+            from public.violation_events where id = v_review_event)
+     and (select violation_count from public.attempts where id = v_attempt) = v_before,
+    '16n: restore must remove dismissed metadata and restore the badge';
+
+  insert into public.violation_events (
+    attempt_id, type, counts, occurred_at, meta
+  ) values (
+    v_attempt, 'DISCONNECTED', true, now() - interval '2 minutes',
+    jsonb_build_object(
+      'last_seen_at', (now() - interval '3 minutes')::timestamptz::text,
+      'count_reason', 'long_gap'
+    )
+  ) returning id into v_review_disconnect;
+  insert into public.violation_events (
+    attempt_id, type, counts, occurred_at, duration_ms
+  ) values (
+    v_attempt, 'FOCUS_LOST', true, now() - interval '90 seconds', 10000
+  ) returning id into v_review_focus;
+  select out_result into v_result from public.dismiss_violation_event(
+    v_review_disconnect, v_admin, true, 'Synthetic dismissed disconnect'
+  );
+  assert v_result = 'updated'
+     and public.reverse_disconnects_for_incident(v_review_focus) = 0
+     and (select not counts
+                  and meta->>'count_reason' = 'dismissed'
+                  and meta ? 'dismissed'
+            from public.violation_events where id = v_review_disconnect),
+    '16o: reversal must not change an admin-dismissed disconnect';
+  select out_result into v_result from public.dismiss_violation_event(
+    v_review_disconnect, v_admin, false, 'Synthetic restored disconnect'
+  );
+  assert v_result = 'updated'
+     and public.reverse_disconnects_for_incident(v_review_focus) = 0
+     and (select counts
+                  and meta->>'count_reason' = 'restored'
+                  and not (meta ? 'dismissed')
+            from public.violation_events where id = v_review_disconnect),
+    '16o: reversal must not change an admin-restored disconnect';
+  assert (select count(*) from public.admin_actions where admin_id = v_admin)
+           = v_audit_before + 4,
+    '16o: dismiss and restore must each write an admin audit row';
 
   for i in 1..60 loop
     insert into public.violation_events (
@@ -1200,7 +1320,7 @@ begin
     );
   assert v_result = 'inserted' and v_snapshot is null
      and (select meta->>'snapshot_skipped' from public.violation_events where id = v_event) = 'limit',
-    '16m: the 61st snapshot request must keep the event but skip the image';
+    '16p: the 61st snapshot request must keep the event but skip the image';
 
   for i in 1..30 loop
     insert into public.violation_events (attempt_id, type, counts)
@@ -1211,20 +1331,20 @@ begin
     v_session, v_event, 'COPY', array[]::text[], 0, null, null, false
   );
   assert v_result = 'rate_limited',
-    '16n: the 31st client event inside 60 seconds must be rate limited';
+    '16q: the 31st client event inside 60 seconds must be rate limited';
 
   v_before := (select violation_count from public.attempts where id = v_attempt);
   assert public.record_login_violation(
            v_attempt, 'MULTI_LOGIN', jsonb_build_object('source', 'login')
          ) is not null
      and (select violation_count from public.attempts where id = v_attempt) = v_before + 1,
-    '16o: a second login must create one counted MULTI_LOGIN event';
+    '16r: a second login must create one counted MULTI_LOGIN event';
 
   select out_result into v_result from public.dismiss_violation_event(
     v_event, gen_random_uuid(), true, 'Synthetic review'
   );
   assert v_result = 'forbidden',
-    '16p: dismiss RPC must reject an id without an admin profile';
+    '16s: dismiss RPC must reject an id without an admin profile';
 
   update public.attempts
      set status = 'submitted', submit_reason = 'manual', submitted_at = now()
@@ -1234,7 +1354,7 @@ begin
     v_session, v_event, 'RELOAD', array[]::text[], 0, null, null, false
   );
   assert v_result = 'ignored',
-    '16q: submitted attempts must ignore late client incidents';
+    '16t: submitted attempts must ignore late client incidents';
 end $$;
 
 select

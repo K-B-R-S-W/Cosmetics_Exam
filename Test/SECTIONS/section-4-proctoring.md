@@ -183,7 +183,9 @@ Known limits:
 
 The canonical SQL for both parts is in migration 007.
 
-**Reversal safety:** if the events route inserts an attention incident but the `reverse_disconnects_for_incident` call fails, the double count stays. The route retries once (the function is idempotent). As a second safety net, the worker's Pass 2 also calls `reverse_disconnects_for_incident` for any attention incidents inserted in the last 5 minutes. Running it again is harmless.
+**Reversal safety:** if the events route inserts an attention incident but the `reverse_disconnects_for_incident` call fails, the double count stays. The route retries once (the function is idempotent). As a second safety net, the worker calls `reverse_recent_disconnects()` for relevant attention incidents inserted in the last 5 minutes. Because the function holds locks until return, it groups by distinct attempt and locks those attempts in UUID order before processing event ids. Running it again is harmless.
+
+**Shared gap boundary:** heartbeat and worker Pass 2 both call `classify_disconnect()`. A gap strictly below two minutes is `short_gap`. At exactly two minutes or later, the helper applies the same overlap rule above; an overlap becomes `overlap`, otherwise it becomes counted `long_gap`. This prevents heartbeat from winning the row lock after a long outage and incorrectly labelling it short.
 
 ---
 
@@ -218,7 +220,7 @@ Each row shows the type, merged types, start time, duration, the snapshot (if an
 
 | `count_reason` | Meaning shown |
 |---|---|
-| `long_gap` | Counted: no heartbeat for about 2.5 to 3 minutes |
+| `long_gap` | Counted: no heartbeat for at least 2 minutes |
 | `short_gap` | Not counted: the candidate returned quickly |
 | `overlap` | Not counted: a tab-switch incident already covers this absence |
 | `reversed_by_focus` | Was counted, then reversed when the tab-switch incident arrived |
@@ -268,7 +270,7 @@ Client values live in `lib/proctoring-config.ts`. Counting rules live in `lib/pr
 | Heartbeat interval | 10 s | Unchanged |
 | Offline label after | 25 s | Display only |
 | `DISCONNECTED` row after | 30 s | Worker pass 1 |
-| Disconnect counts after | 2 min of silence (about 2.5 to 3 min in practice) | Worker pass 2 |
+| Disconnect counts after | 2 min of silence; heartbeat uses the same boundary if it returns before Pass 2 | Shared database helper |
 | Overlap margin | 10 s | Before the gap start |
 | Events rate limit | 30 per minute per attempt | Unchanged |
 | `SNAPSHOT_RETENTION_DAYS` | 14 | Purge job and rules screen |

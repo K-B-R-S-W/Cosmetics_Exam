@@ -107,6 +107,10 @@ begin
     return query select 'validation_failed'::text, p_event_id, false, null::text;
     return;
   end if;
+  if p_meta is not null and jsonb_typeof(p_meta) <> 'object' then
+    return query select 'validation_failed'::text, p_event_id, false, null::text;
+    return;
+  end if;
   if p_meta is not null and octet_length(p_meta::text) > 2048 then
     return query select 'validation_failed'::text, p_event_id, false, null::text;
     return;
@@ -210,6 +214,83 @@ begin
   return found;
 end $$;
 
+-- Both heartbeat and worker Pass 2 call this helper while holding (or before
+-- acquiring) the same attempt lock. It is the sole authority for the exact
+-- two-minute boundary and the attention-overlap rule.
+create or replace function public.classify_disconnect(
+  p_attempt_id uuid,
+  p_disconnect_id uuid,
+  p_now timestamptz
+)
+returns text
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_attempt_last_seen timestamptz;
+  v_disconnect_last_seen timestamptz;
+  v_existing_reason text;
+begin
+  select a.last_seen_at into v_attempt_last_seen
+    from public.attempts a
+   where a.id = p_attempt_id
+     and a.status = 'in_progress'
+   for update;
+  if not found then return 'ignored'; end if;
+
+  select (d.meta->>'last_seen_at')::timestamptz,
+         d.meta->>'count_reason'
+    into v_disconnect_last_seen, v_existing_reason
+    from public.violation_events d
+   where d.id = p_disconnect_id
+     and d.attempt_id = p_attempt_id
+     and d.type = 'DISCONNECTED'
+   for update;
+  if not found then return 'not_found'; end if;
+  if v_existing_reason is not null then return v_existing_reason; end if;
+  if v_disconnect_last_seen is null
+     or v_attempt_last_seen is distinct from v_disconnect_last_seen then
+    return 'stale';
+  end if;
+
+  if p_now - v_disconnect_last_seen < interval '2 minutes' then
+    update public.violation_events d
+       set meta = jsonb_set(coalesce(d.meta, '{}'::jsonb), '{count_reason}', '"short_gap"')
+     where d.id = p_disconnect_id
+       and d.attempt_id = p_attempt_id
+       and d.counts = false
+       and d.meta->>'count_reason' is null;
+    return 'short_gap';
+  end if;
+
+  if exists (
+    select 1
+      from public.violation_events f
+     where f.attempt_id = p_attempt_id
+       and f.type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED')
+       and f.occurred_at + (coalesce(f.duration_ms, 0) * interval '1 millisecond')
+           >= v_disconnect_last_seen - interval '10 seconds'
+  ) then
+    update public.violation_events d
+       set meta = jsonb_set(coalesce(d.meta, '{}'::jsonb), '{count_reason}', '"overlap"')
+     where d.id = p_disconnect_id
+       and d.attempt_id = p_attempt_id
+       and d.counts = false
+       and d.meta->>'count_reason' is null;
+    return 'overlap';
+  end if;
+
+  update public.violation_events d
+     set counts = true,
+         meta = jsonb_set(coalesce(d.meta, '{}'::jsonb), '{count_reason}', '"long_gap"')
+   where d.id = p_disconnect_id
+     and d.attempt_id = p_attempt_id
+     and d.counts = false
+     and d.meta->>'count_reason' is null;
+  return 'long_gap';
+end $$;
+
 create or replace function public.candidate_heartbeat(p_session_id uuid)
 returns table (out_result text, out_state jsonb)
 language plpgsql
@@ -264,11 +345,6 @@ begin
 
   v_now := clock_timestamp();
   v_previous_seen := v_attempt.last_seen_at;
-  if v_attempt.status in ('acknowledged', 'in_progress') then
-    update public.attempts a set last_seen_at = v_now where a.id = v_attempt.id;
-    v_attempt.last_seen_at := v_now;
-  end if;
-
   if v_attempt.status = 'in_progress'
      and v_previous_seen is not null
      and v_previous_seen < v_now - interval '30 seconds' then
@@ -281,6 +357,7 @@ begin
 
     if v_disconnect_id is not null
        and (select ve.type from public.violation_events ve where ve.id = v_disconnect_id) = 'DISCONNECTED' then
+      perform public.classify_disconnect(v_attempt.id, v_disconnect_id, v_now);
       v_gap_ms := least(
         floor(extract(epoch from (v_now - v_previous_seen)) * 1000)::bigint,
         2147483647
@@ -290,17 +367,12 @@ begin
       ) values (
         v_attempt.id, 'RECONNECTED', false, v_now, v_gap_ms
       );
-
-      update public.violation_events ve
-         set meta = jsonb_set(
-           coalesce(ve.meta, '{}'::jsonb), '{count_reason}', '"short_gap"'
-         )
-       where ve.id = v_disconnect_id
-         and ve.attempt_id = v_attempt.id
-         and ve.type = 'DISCONNECTED'
-         and ve.counts = false
-         and ve.meta->>'count_reason' is null;
     end if;
+  end if;
+
+  if v_attempt.status in ('acknowledged', 'in_progress') then
+    update public.attempts a set last_seen_at = v_now where a.id = v_attempt.id;
+    v_attempt.last_seen_at := v_now;
   end if;
 
   v_deadline := case when v_exam.ends_at is null then null
@@ -436,6 +508,7 @@ set search_path = public, pg_temp
 as $$
 declare
   v_attempt record;
+  v_disconnect record;
   v_now timestamptz := clock_timestamp();
 begin
   -- Resolved rows leave this eligibility set, so batches beyond 500 remain
@@ -450,38 +523,26 @@ begin
             and d.type = 'DISCONNECTED'
             and d.counts = false
             and d.meta->>'count_reason' is null
-            and (d.meta->>'last_seen_at')::timestamptz < v_now - interval '2 minutes'
+            and (d.meta->>'last_seen_at')::timestamptz <= v_now - interval '2 minutes'
             and a.last_seen_at = (d.meta->>'last_seen_at')::timestamptz
        )
      order by a.id
      limit 500
      for update skip locked
   loop
-    update public.violation_events d
-       set meta = jsonb_set(coalesce(d.meta, '{}'::jsonb), '{count_reason}', '"overlap"')
-     where d.attempt_id = v_attempt.id
-       and d.type = 'DISCONNECTED'
-       and d.counts = false
-       and d.meta->>'count_reason' is null
-       and (d.meta->>'last_seen_at')::timestamptz < v_now - interval '2 minutes'
-       and v_attempt.last_seen_at = (d.meta->>'last_seen_at')::timestamptz
-       and exists (
-         select 1 from public.violation_events f
-          where f.attempt_id = d.attempt_id
-            and f.type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED')
-            and f.occurred_at + (coalesce(f.duration_ms, 0) * interval '1 millisecond')
-                >= (d.meta->>'last_seen_at')::timestamptz - interval '10 seconds'
-       );
-
-    update public.violation_events d
-       set counts = true,
-           meta = jsonb_set(coalesce(d.meta, '{}'::jsonb), '{count_reason}', '"long_gap"')
-     where d.attempt_id = v_attempt.id
-       and d.type = 'DISCONNECTED'
-       and d.counts = false
-       and d.meta->>'count_reason' is null
-       and (d.meta->>'last_seen_at')::timestamptz < v_now - interval '2 minutes'
-       and v_attempt.last_seen_at = (d.meta->>'last_seen_at')::timestamptz;
+    for v_disconnect in
+      select d.id
+        from public.violation_events d
+       where d.attempt_id = v_attempt.id
+         and d.type = 'DISCONNECTED'
+         and d.counts = false
+         and d.meta->>'count_reason' is null
+         and (d.meta->>'last_seen_at')::timestamptz <= v_now - interval '2 minutes'
+         and v_attempt.last_seen_at = (d.meta->>'last_seen_at')::timestamptz
+       order by d.id
+    loop
+      perform public.classify_disconnect(v_attempt.id, v_disconnect.id, v_now);
+    end loop;
   end loop;
 end $$;
 
@@ -540,11 +601,14 @@ security invoker
 set search_path = public, pg_temp
 as $$
 declare
+  v_attempt record;
   v_event record;
   v_total int := 0;
 begin
-  for v_event in
-    select ve.id
+  -- This function retains row locks until it returns. Lock distinct attempts
+  -- in UUID order, matching finalize_exam_if_closed and every other batch path.
+  for v_attempt in
+    select distinct ve.attempt_id
       from public.violation_events ve
      where ve.type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED')
        and ve.occurred_at >= clock_timestamp() - interval '5 minutes'
@@ -567,10 +631,42 @@ begin
               clock_timestamp()
             )
        )
-     order by ve.id
+     order by ve.attempt_id
      limit 500
   loop
-    v_total := v_total + public.reverse_disconnects_for_incident(v_event.id);
+    perform a.id from public.attempts a
+     where a.id = v_attempt.attempt_id
+     for update;
+
+    for v_event in
+      select ve.id
+        from public.violation_events ve
+       where ve.attempt_id = v_attempt.attempt_id
+         and ve.type in ('TAB_HIDDEN','FOCUS_LOST','FULLSCREEN_EXIT','VIEWPORT_CHANGED')
+         and ve.occurred_at >= clock_timestamp() - interval '5 minutes'
+         and exists (
+           select 1
+             from public.violation_events d
+            where d.attempt_id = ve.attempt_id
+              and d.type = 'DISCONNECTED'
+              and d.counts = true
+              and d.meta->>'count_reason' = 'long_gap'
+              and ve.occurred_at
+                  + (coalesce(ve.duration_ms, 0) * interval '1 millisecond')
+                  >= (d.meta->>'last_seen_at')::timestamptz - interval '10 seconds'
+              and ve.occurred_at <= coalesce(
+                (select min(r.occurred_at)
+                   from public.violation_events r
+                  where r.attempt_id = d.attempt_id
+                    and r.type = 'RECONNECTED'
+                    and r.occurred_at > d.occurred_at),
+                clock_timestamp()
+              )
+         )
+       order by ve.id
+    loop
+      v_total := v_total + public.reverse_disconnects_for_incident(v_event.id);
+    end loop;
   end loop;
   return v_total;
 end $$;
@@ -678,6 +774,10 @@ grant execute on function public.record_candidate_event(uuid, uuid, text, text[]
 revoke execute on function public.mark_violation_snapshot_failed(uuid)
   from public, anon, authenticated;
 grant execute on function public.mark_violation_snapshot_failed(uuid) to service_role;
+
+revoke execute on function public.classify_disconnect(uuid, uuid, timestamptz)
+  from public, anon, authenticated;
+grant execute on function public.classify_disconnect(uuid, uuid, timestamptz) to service_role;
 
 revoke execute on function public.candidate_heartbeat(uuid)
   from public, anon, authenticated;
