@@ -8,7 +8,7 @@ const copiedDist = join(temporaryRoot, "dist");
 
 try {
   await cp(resolve("dist"), copiedDist, { recursive: true });
-  const result = spawnSync(process.execPath, [join(copiedDist, "index.js")], {
+  const result = spawnSync(process.execPath, [join(copiedDist, "index.cjs")], {
     cwd: temporaryRoot,
     encoding: "utf8",
     timeout: 10_000,

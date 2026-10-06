@@ -9,7 +9,7 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "lint": "eslint src scripts esbuild.mjs",
-    "start": "node dist/index.js",
+    "start": "node dist/index.cjs",
     "test": "vitest run",
     "test:dist": "node scripts/test-dist.mjs",
     "typecheck": "tsc --noEmit"
