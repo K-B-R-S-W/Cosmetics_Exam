@@ -109,4 +109,66 @@ describe("useProctoring", () => {
     expect(types).toContain("CAMERA_LOST");
     expect(types).toContain("MIC_LOST");
   });
+
+  it("records a LiveKit-only outage as non-counting source metadata", async () => {
+    const hook = renderHook(({ disconnected }) => useProctoring({
+      enabled: true,
+      inProgress: true,
+      mediaTracks: [],
+      liveKitDisconnected: disconnected,
+    }), { initialProps: { disconnected: true } });
+    hook.rerender({ disconnected: false });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
+    const mediaEvents = vi.mocked(fetch).mock.calls
+      .filter(([url]) => url === "/api/events")
+      .map((call) => candidateEventSchema.parse(JSON.parse(String(call[1]?.body))))
+      .filter((body) => body.type === "CAMERA_LOST" || body.type === "MIC_LOST");
+    expect(mediaEvents).toHaveLength(2);
+    expect(mediaEvents.every((body) => body.meta?.source === "livekit")).toBe(true);
+  });
+
+  it("records unavailable permission media as device-source loss", async () => {
+    const hook = renderHook(({ unavailable }) => useProctoring({
+      enabled: true,
+      inProgress: false,
+      mediaTracks: [],
+      cameraUnavailable: unavailable,
+      microphoneUnavailable: unavailable,
+    }), { initialProps: { unavailable: true } });
+    hook.rerender({ unavailable: false });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
+    const mediaEvents = vi.mocked(fetch).mock.calls
+      .filter(([url]) => url === "/api/events")
+      .map((call) => candidateEventSchema.parse(JSON.parse(String(call[1]?.body))))
+      .filter((body) => body.type === "CAMERA_LOST" || body.type === "MIC_LOST");
+    expect(mediaEvents).toHaveLength(2);
+    expect(mediaEvents.every((body) => body.meta?.source === "track")).toBe(true);
+  });
+
+  it("escalates an open LiveKit outage to track source and waits for both sources to recover", async () => {
+    class FakeTrack extends EventTarget { kind = "video" as const; }
+    const camera = new FakeTrack();
+    const hook = renderHook(({ disconnected }) => useProctoring({
+      enabled: true,
+      inProgress: true,
+      mediaTracks: [{ kind: "video", track: camera as unknown as MediaStreamTrack, source: "track" }],
+      liveKitDisconnected: disconnected,
+    }), { initialProps: { disconnected: true } });
+    act(() => camera.dispatchEvent(new Event("mute")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    hook.rerender({ disconnected: false });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const beforeRestore = vi.mocked(fetch).mock.calls
+      .filter(([url]) => url === "/api/events")
+      .map((call) => candidateEventSchema.parse(JSON.parse(String(call[1]?.body))))
+      .filter((item) => item.type === "CAMERA_LOST");
+    expect(beforeRestore).toHaveLength(0);
+    act(() => camera.dispatchEvent(new Event("unmute")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
+    const body = vi.mocked(fetch).mock.calls
+      .filter(([url]) => url === "/api/events")
+      .map((call) => candidateEventSchema.parse(JSON.parse(String(call[1]?.body))))
+      .find((item) => item.type === "CAMERA_LOST");
+    expect(body?.meta?.source).toBe("track");
+  });
 });

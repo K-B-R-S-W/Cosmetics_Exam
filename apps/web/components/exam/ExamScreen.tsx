@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CandidateErrorScreen, CandidatePaperError, Notice, useCandidate } from "@/components/candidate/CandidateContext";
+import { useCandidateLiveKit } from "@/components/candidate/LiveKitContext";
+import { CameraBanner } from "@/components/exam/CameraBanner";
 import { QuestionCard, type DraftAnswer } from "@/components/exam/QuestionCard";
 import { QuestionList, answerStatus } from "@/components/exam/QuestionList";
 import { SaveIndicator } from "@/components/exam/SaveIndicator";
@@ -84,6 +86,7 @@ export function isTransientPaperFailure(error: unknown): boolean {
 export function ExamScreen() {
   const router = useRouter();
   const { state, me, paper, loadMe, loadPaper, refreshState, heartbeatNow } = useCandidate();
+  const media = useCandidateLiveKit();
   const [loadedPaper, setLoadedPaper] = useState<PaperBody | null>(paper);
   const [activeIndex, setActiveIndex] = useState(0);
   const [summary, setSummary] = useState(false);
@@ -141,7 +144,11 @@ export function ExamScreen() {
   const proctoring = useProctoring({
     enabled: Boolean(loadedPaper) && !locked,
     inProgress: state?.attempt.status === "in_progress",
-    mediaTracks: [],
+    video: media.previewElement,
+    mediaTracks: media.mediaTracks,
+    liveKitDisconnected: media.connectionLost,
+    cameraUnavailable: media.status === "permission_required",
+    microphoneUnavailable: media.status === "permission_required",
   });
 
   const load = useCallback(async (force = false) => {
@@ -385,6 +392,7 @@ export function ExamScreen() {
       </header>
       {moveNotice ? <Notice>{moveNotice}</Notice> : null}
       {actionError && !dialog ? <Notice warning>{actionError}</Notice> : null}
+      <CameraBanner cameraLost={media.cameraLost} microphoneLost={media.microphoneLost} connectionLost={media.connectionLost} />
       {proctoring.attentionWarning ? (
         <div className="mx-5 mt-4 flex items-center justify-between gap-4 border-l-4 border-warn bg-warn-tint p-4" role="alert">
           <p>You left the exam page. This was recorded and the exam team can see it. Please stay on this page.</p>

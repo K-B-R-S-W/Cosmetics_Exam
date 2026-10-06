@@ -25,6 +25,9 @@ type Options = {
   inProgress: boolean;
   video?: HTMLVideoElement | null;
   mediaTracks?: Array<{ kind: "audio" | "video"; track: MediaStreamTrack; source: "track" | "livekit" }>;
+  liveKitDisconnected?: boolean;
+  cameraUnavailable?: boolean;
+  microphoneUnavailable?: boolean;
   now?: () => number;
 };
 
@@ -45,7 +48,7 @@ export function candidateEventBody(event: QueuedEvent, now: number) {
   };
 }
 
-export function useProctoring({ enabled, inProgress, video = null, mediaTracks = noMediaTracks, now = systemNow }: Options) {
+export function useProctoring({ enabled, inProgress, video = null, mediaTracks = noMediaTracks, liveKitDisconnected = false, cameraUnavailable = false, microphoneUnavailable = false, now = systemNow }: Options) {
   const [fullscreenLost, setFullscreenLost] = useState(false);
   const [attentionWarning, setAttentionWarning] = useState(false);
   const [pasteBlocked, setPasteBlocked] = useState(false);
@@ -59,6 +62,7 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
   const pasteTimer = useRef<number | null>(null);
   const drainRef = useRef<() => Promise<void>>(async () => undefined);
   const lastInstant = useRef(new Map<ClientEventType, number>());
+  const mediaLossSources = useRef(new Map<ClientEventType, Set<"track" | "livekit">>());
 
   const persist = useCallback(() => {
     try { sessionStorage.setItem(storageKey, JSON.stringify(queue.current)); } catch { /* best effort */ }
@@ -78,7 +82,11 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
 
   const openSignal = useCallback((type: ClientEventType, meta: Record<string, unknown> | null = null) => {
     if (episodeTypes.has(type)) {
-      if (episodes.current.has(type)) return;
+      const current = episodes.current.get(type);
+      if (current) {
+        if (current.meta?.source === "livekit" && meta?.source === "track") current.meta = { ...current.meta, source: "track" };
+        return;
+      }
       const shot = snapshot(type);
       episodes.current.set(type, {
         id: crypto.randomUUID(),
@@ -134,6 +142,23 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
     active.current = null;
     signals.current.clear();
   }, [enqueue, inProgress, now, snapshot]);
+
+  const setMediaLoss = useCallback((type: "CAMERA_LOST" | "MIC_LOST", source: "track" | "livekit", lost: boolean) => {
+    const sources = mediaLossSources.current.get(type) ?? new Set<"track" | "livekit">();
+    if (lost) {
+      sources.add(source);
+      mediaLossSources.current.set(type, sources);
+      openSignal(type, { source: sources.has("track") ? "track" : "livekit" });
+      return;
+    }
+    sources.delete(source);
+    if (sources.size === 0) {
+      mediaLossSources.current.delete(type);
+      closeSignal(type);
+    } else {
+      mediaLossSources.current.set(type, sources);
+    }
+  }, [closeSignal, openSignal]);
 
   const instant = useCallback((type: ClientEventType, meta: Record<string, unknown> | null = null) => {
     const timestamp = now();
@@ -225,13 +250,33 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
     const cleanups = mediaTracks.map(({ kind, track, source }) => {
       let timer: number | null = null;
       const type = kind === "video" ? "CAMERA_LOST" : "MIC_LOST";
-      const lost = () => { timer = window.setTimeout(() => openSignal(type, { source }), MEDIA_LOSS_GRACE_MS); };
-      const restored = () => { if (timer !== null) window.clearTimeout(timer); closeSignal(type); };
+      const lost = () => { if (timer === null) timer = window.setTimeout(() => { timer = null; setMediaLoss(type, source, true); }, MEDIA_LOSS_GRACE_MS); };
+      const restored = () => { if (timer !== null) window.clearTimeout(timer); timer = null; setMediaLoss(type, source, false); };
       track.addEventListener("mute", lost); track.addEventListener("ended", lost); track.addEventListener("unmute", restored);
       return () => { if (timer !== null) window.clearTimeout(timer); track.removeEventListener("mute", lost); track.removeEventListener("ended", lost); track.removeEventListener("unmute", restored); };
     });
     return () => cleanups.forEach((cleanup) => cleanup());
-  }, [closeSignal, enabled, mediaTracks, openSignal]);
+  }, [enabled, mediaTracks, setMediaLoss]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    setMediaLoss("CAMERA_LOST", "livekit", liveKitDisconnected);
+    setMediaLoss("MIC_LOST", "livekit", liveKitDisconnected);
+    return () => {
+      setMediaLoss("CAMERA_LOST", "livekit", false);
+      setMediaLoss("MIC_LOST", "livekit", false);
+    };
+  }, [enabled, liveKitDisconnected, setMediaLoss]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    setMediaLoss("CAMERA_LOST", "track", cameraUnavailable);
+    setMediaLoss("MIC_LOST", "track", microphoneUnavailable);
+    return () => {
+      setMediaLoss("CAMERA_LOST", "track", false);
+      setMediaLoss("MIC_LOST", "track", false);
+    };
+  }, [cameraUnavailable, enabled, microphoneUnavailable, setMediaLoss]);
 
   useEffect(() => { if (enabled && inProgress) instant("RELOAD"); }, [enabled, inProgress, instant]);
   useEffect(() => {

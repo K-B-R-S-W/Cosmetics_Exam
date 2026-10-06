@@ -4,7 +4,9 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CandidateErrorScreen, CandidateFrame, CandidatePaperError, Notice, useCandidate } from "@/components/candidate/CandidateContext";
+import { useCandidateLiveKit } from "@/components/candidate/LiveKitContext";
 import { Button } from "@/components/ui/Button";
+import { CameraBanner } from "@/components/exam/CameraBanner";
 import { FullscreenOverlay } from "@/components/exam/FullscreenOverlay";
 import { useProctoring } from "@/hooks/useProctoring";
 import { useExamBroadcast } from "@/lib/broadcast";
@@ -18,6 +20,7 @@ const ANNOUNCE_AT_SECONDS = [600, 300, 120, 60];
 export function WaitingRoom() {
   const router = useRouter();
   const { state, refreshState, heartbeatNow, loadPaper } = useCandidate();
+  const media = useCandidateLiveKit();
   const now = useServerClock();
   const [connectionLost, setConnectionLost] = useState(false);
   const [changedTime, setChangedTime] = useState<string | null>(null);
@@ -34,7 +37,15 @@ export function WaitingRoom() {
   const handoffActive = useRef(false);
   const retryVisibleTimer = useRef<number | null>(null);
   const { recordFailure, resetFailures, showTakingLonger } = usePaperRetryTracker();
-  const proctoring = useProctoring({ enabled: true, inProgress: false, mediaTracks: [] });
+  const proctoring = useProctoring({
+    enabled: true,
+    inProgress: false,
+    video: media.previewElement,
+    mediaTracks: media.mediaTracks,
+    liveKitDisconnected: media.connectionLost,
+    cameraUnavailable: media.status === "permission_required",
+    microphoneUnavailable: media.status === "permission_required",
+  });
 
   const refresh = useCallback(async () => {
     try {
@@ -155,6 +166,7 @@ export function WaitingRoom() {
     <CandidateFrame wide>
       <h1 tabIndex={-1} className="text-title font-bold" lang={langFor(state.exam.title)}>{state.exam.title}</h1>
       {connectionLost ? <div className="mt-5"><Notice warning>Connection lost. Reconnecting…</Notice></div> : null}
+      <div className="mt-5"><CameraBanner cameraLost={media.cameraLost} microphoneLost={media.microphoneLost} connectionLost={media.connectionLost} /></div>
       {changedTime ? <div className="mt-5"><Notice>{changedTime}</Notice></div> : null}
       {notLiveNotice ? <div className="mt-5"><Notice>The exam hasn&apos;t started yet.</Notice></div> : null}
       <div className="mt-8">
