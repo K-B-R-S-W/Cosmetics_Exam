@@ -148,10 +148,11 @@ describe("useProctoring", () => {
   it("escalates an open LiveKit outage to track source and waits for both sources to recover", async () => {
     class FakeTrack extends EventTarget { kind = "video" as const; }
     const camera = new FakeTrack();
+    const tracks = [{ kind: "video" as const, track: camera as unknown as MediaStreamTrack, source: "track" as const }];
     const hook = renderHook(({ disconnected }) => useProctoring({
       enabled: true,
       inProgress: true,
-      mediaTracks: [{ kind: "video", track: camera as unknown as MediaStreamTrack, source: "track" }],
+      mediaTracks: tracks,
       liveKitDisconnected: disconnected,
     }), { initialProps: { disconnected: true } });
     act(() => camera.dispatchEvent(new Event("mute")));

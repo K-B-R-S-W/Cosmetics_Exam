@@ -253,7 +253,13 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
       const lost = () => { if (timer === null) timer = window.setTimeout(() => { timer = null; setMediaLoss(type, source, true); }, MEDIA_LOSS_GRACE_MS); };
       const restored = () => { if (timer !== null) window.clearTimeout(timer); timer = null; setMediaLoss(type, source, false); };
       track.addEventListener("mute", lost); track.addEventListener("ended", lost); track.addEventListener("unmute", restored);
-      return () => { if (timer !== null) window.clearTimeout(timer); track.removeEventListener("mute", lost); track.removeEventListener("ended", lost); track.removeEventListener("unmute", restored); };
+      return () => {
+        if (timer !== null) window.clearTimeout(timer);
+        track.removeEventListener("mute", lost);
+        track.removeEventListener("ended", lost);
+        track.removeEventListener("unmute", restored);
+        setMediaLoss(type, source, false);
+      };
     });
     return () => cleanups.forEach((cleanup) => cleanup());
   }, [enabled, mediaTracks, setMediaLoss]);

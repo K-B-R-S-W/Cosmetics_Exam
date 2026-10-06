@@ -8,9 +8,10 @@ import {
   Track,
   type LocalTrack,
 } from "livekit-client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 10_000] as const;
+const DEVICE_RECOVERY_DELAY_MS = 3_000;
 const MEDIA_PERMISSION_HINT = "candidateMediaPermissionGranted";
 
 export type CandidateMediaStatus =
@@ -72,6 +73,10 @@ export function useLiveKit() {
   const reconnectTimer = useRef<number | null>(null);
   const reconnectCount = useRef(0);
   const scheduleReconnectRef = useRef<() => void>(() => undefined);
+  const deviceRecoveryTimer = useRef<number | null>(null);
+  const deviceRecoveryPromise = useRef<Promise<void> | null>(null);
+  const recoverDevicesRef = useRef<() => void>(() => undefined);
+  const trackCleanups = useRef(new Map<LocalTrack, () => void>());
   const stopping = useRef(false);
   const stopped = useRef(false);
   const [status, setStatus] = useState<CandidateMediaStatus>("idle");
@@ -86,6 +91,21 @@ export function useLiveKit() {
     reconnectTimer.current = null;
   }, []);
 
+  const clearDeviceRecovery = useCallback(() => {
+    if (deviceRecoveryTimer.current !== null) window.clearTimeout(deviceRecoveryTimer.current);
+    deviceRecoveryTimer.current = null;
+  }, []);
+
+  const syncTracks = useCallback((tracks: LocalTrack[]) => {
+    const currentMediaTracks = tracks.map((track) => track.mediaStreamTrack);
+    setStream(new MediaStream(currentMediaTracks));
+    setMediaTracks(tracks.map((track) => ({
+      kind: track.kind === Track.Kind.Video ? "video" : "audio",
+      track: track.mediaStreamTrack,
+      source: "track",
+    })));
+  }, []);
+
   const updateDeviceState = useCallback(() => {
     const video = tracksRef.current.find((track) => track.kind === Track.Kind.Video)?.mediaStreamTrack;
     const audio = tracksRef.current.find((track) => track.kind === Track.Kind.Audio)?.mediaStreamTrack;
@@ -95,9 +115,19 @@ export function useLiveKit() {
 
   const bindTrackState = useCallback((track: LocalTrack) => {
     const media = track.mediaStreamTrack;
-    media.addEventListener("mute", updateDeviceState);
-    media.addEventListener("unmute", updateDeviceState);
-    media.addEventListener("ended", updateDeviceState);
+    const changed = () => updateDeviceState();
+    const ended = () => {
+      updateDeviceState();
+      recoverDevicesRef.current();
+    };
+    media.addEventListener("mute", changed);
+    media.addEventListener("unmute", changed);
+    media.addEventListener("ended", ended);
+    trackCleanups.current.set(track, () => {
+      media.removeEventListener("mute", changed);
+      media.removeEventListener("unmute", changed);
+      media.removeEventListener("ended", ended);
+    });
   }, [updateDeviceState]);
 
   const ensureTracks = useCallback(async () => {
@@ -114,17 +144,11 @@ export function useLiveKit() {
     }
     tracksRef.current = tracks;
     tracks.forEach(bindTrackState);
-    const mediaTracks = tracks.map((track) => track.mediaStreamTrack);
-    setStream(new MediaStream(mediaTracks));
-    setMediaTracks(tracks.map((track) => ({
-      kind: track.kind === Track.Kind.Video ? "video" : "audio",
-      track: track.mediaStreamTrack,
-      source: "track",
-    })));
+    syncTracks(tracks);
     updateDeviceState();
     try { sessionStorage.setItem(MEDIA_PERMISSION_HINT, "1"); } catch { /* hint only */ }
     return tracks;
-  }, [bindTrackState, updateDeviceState]);
+  }, [bindTrackState, syncTracks, updateDeviceState]);
 
   const connect = useCallback(async (): Promise<boolean> => {
     if (connectPromise.current) return connectPromise.current;
@@ -135,7 +159,7 @@ export function useLiveKit() {
         setStatus("connecting");
         const token = await requestCandidateToken();
         if (stopping.current) return false;
-        const room = roomRef.current ?? new Room({ adaptiveStream: false, dynacast: false });
+        const room = roomRef.current ?? new Room({ adaptiveStream: false, dynacast: false, stopLocalTrackOnUnpublish: false });
         roomRef.current = room;
         if (room.state !== ConnectionState.Connected) {
           await room.connect(token.url, token.token, { autoSubscribe: false });
@@ -190,14 +214,95 @@ export function useLiveKit() {
     return connected;
   }, [clearReconnect, connect, scheduleReconnect]);
 
+  const recoverEndedTracks = useCallback(async () => {
+    if (stopping.current || stopped.current || deviceRecoveryPromise.current) return;
+    const ended = tracksRef.current.filter((track) => track.mediaStreamTrack.readyState === "ended");
+    if (ended.length === 0) {
+      clearDeviceRecovery();
+      return;
+    }
+    const operation = (async () => {
+      for (const oldTrack of ended) {
+        if (stopping.current || stopped.current) return;
+        const kind = oldTrack.kind === Track.Kind.Video ? "camera" : "microphone";
+        if (await permissionGranted(kind) !== true) continue;
+        let replacements: LocalTrack[] = [];
+        try {
+          const frameRate = isAndroid() ? { ideal: 15, max: 15 } : { ideal: 30, max: 30 };
+          replacements = await createLocalTracks({
+            audio: kind === "microphone",
+            video: kind === "camera" ? { resolution: { width: 320, height: 240 }, frameRate } : false,
+          });
+          const replacement = replacements.find((track) => track.kind === oldTrack.kind);
+          if (!replacement || stopping.current || stopped.current) {
+            replacements.forEach((track) => track.stop());
+            continue;
+          }
+          const room = roomRef.current;
+          if (room?.state === ConnectionState.Connected) {
+            await room.localParticipant.unpublishTrack(oldTrack, false).catch(() => undefined);
+          }
+          trackCleanups.current.get(oldTrack)?.();
+          trackCleanups.current.delete(oldTrack);
+          oldTrack.stop();
+          const index = tracksRef.current.indexOf(oldTrack);
+          if (index < 0) {
+            replacement.stop();
+            continue;
+          }
+          tracksRef.current = tracksRef.current.map((track, trackIndex) => trackIndex === index ? replacement : track);
+          bindTrackState(replacement);
+          syncTracks(tracksRef.current);
+          if (room?.state === ConnectionState.Connected) {
+            await room.localParticipant.publishTrack(replacement, {
+              source: replacement.kind === Track.Kind.Video ? Track.Source.Camera : Track.Source.Microphone,
+              simulcast: false,
+            });
+          }
+          replacements.filter((track) => track !== replacement).forEach((track) => track.stop());
+          updateDeviceState();
+        } catch {
+          replacements.forEach((track) => track.stop());
+        }
+      }
+    })().finally(() => {
+      deviceRecoveryPromise.current = null;
+      if (!stopping.current && !stopped.current && tracksRef.current.some((track) => track.mediaStreamTrack.readyState === "ended")) {
+        clearDeviceRecovery();
+        deviceRecoveryTimer.current = window.setTimeout(() => recoverDevicesRef.current(), DEVICE_RECOVERY_DELAY_MS);
+      }
+    });
+    deviceRecoveryPromise.current = operation;
+    await operation;
+  }, [bindTrackState, clearDeviceRecovery, syncTracks, updateDeviceState]);
+
+  const scheduleDeviceRecovery = useCallback(() => {
+    if (stopping.current || stopped.current || deviceRecoveryTimer.current !== null) return;
+    deviceRecoveryTimer.current = window.setTimeout(() => {
+      deviceRecoveryTimer.current = null;
+      void recoverEndedTracks();
+    }, DEVICE_RECOVERY_DELAY_MS);
+  }, [recoverEndedTracks]);
+  useEffect(() => { recoverDevicesRef.current = scheduleDeviceRecovery; }, [scheduleDeviceRecovery]);
+
+  useEffect(() => {
+    const changed = () => {
+      if (!tracksRef.current.some((track) => track.mediaStreamTrack.readyState === "ended")) return;
+      clearDeviceRecovery();
+      void recoverEndedTracks();
+    };
+    navigator.mediaDevices?.addEventListener?.("devicechange", changed);
+    return () => navigator.mediaDevices?.removeEventListener?.("devicechange", changed);
+  }, [clearDeviceRecovery, recoverEndedTracks]);
+
   const trySilentReacquire = useCallback(async () => {
     if (tracksRef.current.length > 0 || connectPromise.current) return true;
     let hinted = false;
     try { hinted = sessionStorage.getItem(MEDIA_PERMISSION_HINT) === "1"; } catch { /* hint only */ }
+    if (hinted) setStatus("acquiring");
     const granted = await mayReacquireWithoutPrompt();
     if (!granted) {
       // The session flag can explain why recovery was attempted, but never authorises a prompt.
-      void hinted;
       setStatus("permission_required");
       setCameraLost(true);
       setMicrophoneLost(true);
@@ -211,11 +316,16 @@ export function useLiveKit() {
     stopping.current = true;
     stopped.current = true;
     clearReconnect();
+    clearDeviceRecovery();
     const room = roomRef.current;
     roomRef.current = null;
     const tracks = tracksRef.current;
     tracksRef.current = [];
-    tracks.forEach((track) => track.stop());
+    tracks.forEach((track) => {
+      trackCleanups.current.get(track)?.();
+      track.stop();
+    });
+    trackCleanups.current.clear();
     setStream(null);
     setMediaTracks([]);
     setConnectionLost(false);
@@ -224,7 +334,7 @@ export function useLiveKit() {
     if (room) await room.disconnect(false).catch(() => undefined);
     setStatus("stopped");
     stopping.current = false;
-  }, [clearReconnect]);
+  }, [clearDeviceRecovery, clearReconnect]);
 
   useEffect(() => {
     const room = roomRef.current;
@@ -257,7 +367,7 @@ export function useLiveKit() {
 
   useEffect(() => () => { void stop(); }, [stop]);
 
-  return {
+  return useMemo(() => ({
     status,
     stream,
     mediaTracks,
@@ -267,5 +377,5 @@ export function useLiveKit() {
     acquireAndConnect,
     trySilentReacquire,
     stop,
-  };
+  }), [acquireAndConnect, cameraLost, connectionLost, mediaTracks, microphoneLost, status, stop, stream, trySilentReacquire]);
 }
