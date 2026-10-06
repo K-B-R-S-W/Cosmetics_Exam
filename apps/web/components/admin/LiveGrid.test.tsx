@@ -93,4 +93,40 @@ describe("LiveGrid", () => {
     mocks.realtimeInput!.onViolationChanged("one");
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/events"))).toHaveLength(before + 1));
   });
+
+  it("keeps the previous timeline and clears loading when an event reload rejects", async () => {
+    const previousEvent = {
+      id: "event-1",
+      type: "FOCUS_LOST",
+      occurred_at: new Date().toISOString(),
+      duration_ms: 1_000,
+      counts: true,
+      merged_types: [],
+      meta: null,
+      snapshot_url: null,
+    };
+    let eventLoads = 0;
+    vi.mocked(fetch).mockImplementation((input: string | URL | Request) => {
+      if (String(input).includes("/events")) {
+        eventLoads += 1;
+        if (eventLoads === 1) return Promise.resolve(new Response(JSON.stringify({ events: [previousEvent] }), { status: 200 }));
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
+      const response = mocks.response as Record<string, unknown>;
+      return Promise.resolve(new Response(JSON.stringify({ ...response, server_time: new Date(Date.now()).toISOString() }), { status: 200 }));
+    });
+
+    render(<LiveGrid />);
+    fireEvent.click(await screen.findByRole("button", { name: /MER-2 Candidate MER-2/ }));
+    expect(await screen.findByText("FOCUS LOST")).toBeTruthy();
+
+    await act(async () => {
+      mocks.realtimeInput!.onViolationChanged("one");
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(eventLoads).toBe(2));
+
+    expect(screen.getByText("FOCUS LOST")).toBeTruthy();
+    expect(screen.queryByText(/Loading incidents/)).toBeNull();
+  });
 });

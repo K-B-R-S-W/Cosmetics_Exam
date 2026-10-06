@@ -143,6 +143,8 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
       const response = await fetch(`/api/admin/live/${attemptId}/events`, { cache: "no-store" });
       const next = response.ok ? await response.json() as { events: ViolationEvent[] } : { events: [] };
       setEvents(next.events);
+    } catch {
+      // Keep the last successful timeline while offline; the next Realtime change retries.
     } finally { setEventsLoading(false); }
   }, []);
 
