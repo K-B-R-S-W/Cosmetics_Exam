@@ -5,16 +5,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useViolationRealtime } from "./useViolationRealtime";
 
 const realtime = vi.hoisted(() => {
-  const handlers = new Map<string, (payload: { old: Record<string, unknown>; new: Record<string, unknown> }) => void>();
+  const handlers = new Map<string, (payload: Record<string, unknown>) => void>();
   const channel = {
     on: vi.fn(),
     subscribe: vi.fn(),
   };
+  const unsubscribeAuth = vi.fn();
   const client = {
     channel: vi.fn(),
     removeChannel: vi.fn(),
+    realtime: { setAuth: vi.fn() },
+    auth: { getSession: vi.fn(), onAuthStateChange: vi.fn() },
   };
-  return { handlers, channel, client, status: undefined as undefined | ((status: string) => void) };
+  return {
+    handlers,
+    channel,
+    client,
+    unsubscribeAuth,
+    status: undefined as undefined | ((status: string, error?: Error) => void),
+    authChanged: undefined as undefined | ((event: string, session: { access_token?: string } | null) => void),
+  };
 });
 
 vi.mock("@/lib/supabase/client", () => ({
@@ -40,19 +50,33 @@ function emitViolation() {
   realtime.handlers.get("violation_events")?.({ old: {}, new: {} });
 }
 
+async function settleRealtimeSetup() {
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve();
+  });
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   realtime.handlers.clear();
   realtime.channel.on.mockReset().mockImplementation(
-    (_event: string, filter: { table: string }, handler: (payload: { old: Record<string, unknown>; new: Record<string, unknown> }) => void) => {
-      realtime.handlers.set(filter.table, handler);
+    (event: string, filter: { table?: string }, handler: (payload: Record<string, unknown>) => void) => {
+      realtime.handlers.set(event === "system" ? "system" : String(filter.table), handler);
       return realtime.channel;
     },
   );
   realtime.status = undefined;
-  realtime.channel.subscribe.mockReset().mockImplementation((callback?: (status: string) => void) => { realtime.status = callback; return realtime.channel; });
+  realtime.authChanged = undefined;
+  realtime.channel.subscribe.mockReset().mockImplementation((callback?: (status: string, error?: Error) => void) => { realtime.status = callback; return realtime.channel; });
   realtime.client.channel.mockReset().mockReturnValue(realtime.channel);
   realtime.client.removeChannel.mockReset().mockResolvedValue(undefined);
+  realtime.client.realtime.setAuth.mockReset().mockResolvedValue(undefined);
+  realtime.client.auth.getSession.mockReset().mockResolvedValue({ data: { session: { access_token: "token-1" } }, error: null });
+  realtime.unsubscribeAuth.mockReset();
+  realtime.client.auth.onAuthStateChange.mockReset().mockImplementation((callback: typeof realtime.authChanged) => {
+    realtime.authChanged = callback;
+    return { data: { subscription: { unsubscribe: realtime.unsubscribeAuth } } };
+  });
 });
 
 afterEach(() => {
@@ -60,6 +84,48 @@ afterEach(() => {
 });
 
 describe("useViolationRealtime", () => {
+  it("sets the session token before subscribing, refreshes it, and cleans up auth", async () => {
+    const hook = renderHook(() => useViolationRealtime({
+      examId: "exam-1",
+      threshold: 10,
+      initialAttempts: [],
+      onRefresh: vi.fn(),
+      onFlagged: vi.fn(),
+    }));
+    await settleRealtimeSetup();
+
+    expect(realtime.client.realtime.setAuth).toHaveBeenCalledWith("token-1");
+    expect(realtime.client.realtime.setAuth.mock.invocationCallOrder[0]).toBeLessThan(
+      realtime.client.channel.mock.invocationCallOrder[0]!,
+    );
+
+    act(() => realtime.authChanged?.("TOKEN_REFRESHED", { access_token: "token-2" }));
+    await settleRealtimeSetup();
+    expect(realtime.client.realtime.setAuth).toHaveBeenLastCalledWith("token-2");
+
+    hook.unmount();
+    expect(realtime.unsubscribeAuth).toHaveBeenCalledTimes(1);
+    expect(realtime.client.removeChannel).toHaveBeenCalledWith(realtime.channel);
+  });
+
+  it("does not subscribe anonymously and enables the existing fallback when there is no session", async () => {
+    realtime.client.auth.getSession.mockResolvedValueOnce({ data: { session: null }, error: null });
+    const onRefresh = vi.fn();
+    const hook = renderHook(() => useViolationRealtime({
+      examId: "exam-1",
+      threshold: 10,
+      initialAttempts: [],
+      onRefresh,
+      onFlagged: vi.fn(),
+    }));
+    await settleRealtimeSetup();
+
+    expect(realtime.client.realtime.setAuth).not.toHaveBeenCalled();
+    expect(realtime.client.channel).not.toHaveBeenCalled();
+    expect(hook.result.current.liveUpdatesPaused).toBe(true);
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
   it("ignores last_seen_at-only updates with realistic primary-key-only old rows", async () => {
     const onRefresh = vi.fn();
     const onFlagged = vi.fn();
@@ -72,6 +138,7 @@ describe("useViolationRealtime", () => {
       onFlagged,
       onAttemptUpdated,
     }));
+    await settleRealtimeSetup();
 
     act(() => emitAttempt(attempt("attempt-1", 12, "two")));
     await act(() => vi.advanceTimersByTimeAsync(2_100));
@@ -96,6 +163,7 @@ describe("useViolationRealtime", () => {
       onRefresh,
       onFlagged,
     }));
+    await settleRealtimeSetup();
 
     act(() => emitAttempt(attempt("attempt-1", 4, "two")));
     await act(() => vi.advanceTimersByTimeAsync(2_100));
@@ -113,6 +181,7 @@ describe("useViolationRealtime", () => {
       onRefresh,
       onFlagged,
     }));
+    await settleRealtimeSetup();
 
     act(() => emitAttempt(attempt("attempt-1", 10, "two")));
     expect(onFlagged).toHaveBeenCalledWith("attempt-1");
@@ -130,6 +199,7 @@ describe("useViolationRealtime", () => {
       onRefresh,
       onFlagged,
     }));
+    await settleRealtimeSetup();
 
     act(() => emitAttempt(attempt("unknown", 14)));
     await act(() => vi.advanceTimersByTimeAsync(200));
@@ -152,6 +222,7 @@ describe("useViolationRealtime", () => {
       }),
       { initialProps: { threshold: 10, onRefresh: firstRefresh, onFlagged: firstFlagged } },
     );
+    await settleRealtimeSetup();
 
     hook.rerender({ threshold: 12, onRefresh: latestRefresh, onFlagged: latestFlagged });
     act(() => emitAttempt(attempt("attempt-1", 12, "two")));
@@ -173,6 +244,7 @@ describe("useViolationRealtime", () => {
       onRefresh,
       onFlagged: vi.fn(),
     }));
+    await settleRealtimeSetup();
 
     for (let elapsed = 0; elapsed < 2_000; elapsed += 100) {
       act(emitViolation);
@@ -193,8 +265,10 @@ describe("useViolationRealtime", () => {
       }),
       { initialProps: { examId: "exam-1" } },
     );
+    await settleRealtimeSetup();
     act(emitViolation);
     hook.rerender({ examId: "exam-2" });
+    await settleRealtimeSetup();
     await act(() => vi.advanceTimersByTimeAsync(250));
     expect(onRefresh).not.toHaveBeenCalled();
     expect(realtime.client.channel).toHaveBeenCalledTimes(2);
@@ -205,17 +279,40 @@ describe("useViolationRealtime", () => {
     expect(onRefresh).not.toHaveBeenCalled();
   });
 
-  it("reports a paused channel until Realtime subscribes again", () => {
+  it("reports a paused channel until Realtime subscribes again", async () => {
     const hook = renderHook(() => useViolationRealtime({ examId: "exam-1", threshold: 10, initialAttempts: [], onRefresh: vi.fn(), onFlagged: vi.fn() }));
+    await settleRealtimeSetup();
     act(() => realtime.status?.("CHANNEL_ERROR"));
     expect(hook.result.current.liveUpdatesPaused).toBe(true);
     act(() => realtime.status?.("SUBSCRIBED"));
     expect(hook.result.current.liveUpdatesPaused).toBe(false);
   });
 
+  it("pauses and falls back for terminal states, callback errors, and system errors", async () => {
+    const onRefresh = vi.fn();
+    const hook = renderHook(() => useViolationRealtime({ examId: "exam-1", threshold: 10, initialAttempts: [], onRefresh, onFlagged: vi.fn() }));
+    await settleRealtimeSetup();
+
+    for (const status of ["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"]) {
+      act(() => realtime.status?.(status));
+      expect(hook.result.current.liveUpdatesPaused).toBe(true);
+      act(() => realtime.status?.("SUBSCRIBED"));
+      expect(hook.result.current.liveUpdatesPaused).toBe(false);
+    }
+
+    act(() => realtime.status?.("SUBSCRIBED", new Error("server rejected subscription")));
+    expect(hook.result.current.liveUpdatesPaused).toBe(true);
+    act(() => realtime.status?.("SUBSCRIBED"));
+    act(() => realtime.handlers.get("system")?.({ status: "error", message: "Unable to subscribe to changes" }));
+    expect(hook.result.current.liveUpdatesPaused).toBe(true);
+
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
   it("debounces the affected attempt id for violation event and count changes", async () => {
     const onViolationChanged = vi.fn();
     renderHook(() => useViolationRealtime({ examId: "exam-1", threshold: 10, initialAttempts: [attempt("attempt-1", 1)], onRefresh: vi.fn(), onFlagged: vi.fn(), onViolationChanged }));
+    await settleRealtimeSetup();
     act(() => realtime.handlers.get("violation_events")?.({ old: {}, new: { attempt_id: "attempt-1" } }));
     act(() => emitAttempt(attempt("attempt-1", 2)));
     expect(onViolationChanged).not.toHaveBeenCalled();
