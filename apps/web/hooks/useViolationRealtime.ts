@@ -52,6 +52,7 @@ export function useViolationRealtime({
   onRefresh,
   onFlagged,
   onAttemptUpdated,
+  onViolationChanged,
 }: {
   examId: string | null;
   threshold: number;
@@ -59,14 +60,15 @@ export function useViolationRealtime({
   onRefresh: () => void;
   onFlagged: (attemptId: string) => void;
   onAttemptUpdated?: (attempt: Record<string, unknown>) => void;
+  onViolationChanged?: (attemptId: string | null) => void;
 }) {
-  const callbacks = useRef({ onRefresh, onFlagged, onAttemptUpdated, threshold });
+  const callbacks = useRef({ onRefresh, onFlagged, onAttemptUpdated, onViolationChanged, threshold });
   const materialCache = useRef(new Map<string, MaterialAttempt>());
   const [liveUpdatesPaused, setLiveUpdatesPaused] = useState(false);
 
   useEffect(() => {
-    callbacks.current = { onRefresh, onFlagged, onAttemptUpdated, threshold };
-  }, [onAttemptUpdated, onFlagged, onRefresh, threshold]);
+    callbacks.current = { onRefresh, onFlagged, onAttemptUpdated, onViolationChanged, threshold };
+  }, [onAttemptUpdated, onFlagged, onRefresh, onViolationChanged, threshold]);
 
   useEffect(() => {
     materialCache.current.clear();
@@ -85,12 +87,15 @@ export function useViolationRealtime({
     const client = createBrowserSupabaseClient();
     let refreshTimer: number | null = null;
     let refreshWindowStartedAt: number | null = null;
+    const changedViolationAttempts = new Set<string | null>();
 
     const flushRefresh = () => {
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
       refreshTimer = null;
       refreshWindowStartedAt = null;
       callbacks.current.onRefresh();
+      for (const attemptId of changedViolationAttempts) callbacks.current.onViolationChanged?.(attemptId);
+      changedViolationAttempts.clear();
     };
 
     const scheduleRefresh = () => {
@@ -113,7 +118,11 @@ export function useViolationRealtime({
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "violation_events" },
-        scheduleRefresh,
+        (payload) => {
+          const row = (payload.new ?? payload.old) as Record<string, unknown>;
+          changedViolationAttempts.add(typeof row.attempt_id === "string" ? row.attempt_id : null);
+          scheduleRefresh();
+        },
       )
       .on(
         "postgres_changes",
@@ -134,6 +143,8 @@ export function useViolationRealtime({
             return;
           }
           if (sameMaterial(previous, after)) return;
+
+          if (previous.violation_count !== after.violation_count) changedViolationAttempts.add(after.id);
 
           const currentThreshold = callbacks.current.threshold;
           if (

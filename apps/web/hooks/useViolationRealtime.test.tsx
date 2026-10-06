@@ -212,4 +212,15 @@ describe("useViolationRealtime", () => {
     act(() => realtime.status?.("SUBSCRIBED"));
     expect(hook.result.current.liveUpdatesPaused).toBe(false);
   });
+
+  it("debounces the affected attempt id for violation event and count changes", async () => {
+    const onViolationChanged = vi.fn();
+    renderHook(() => useViolationRealtime({ examId: "exam-1", threshold: 10, initialAttempts: [attempt("attempt-1", 1)], onRefresh: vi.fn(), onFlagged: vi.fn(), onViolationChanged }));
+    act(() => realtime.handlers.get("violation_events")?.({ old: {}, new: { attempt_id: "attempt-1" } }));
+    act(() => emitAttempt(attempt("attempt-1", 2)));
+    expect(onViolationChanged).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    expect(onViolationChanged).toHaveBeenCalledTimes(1);
+    expect(onViolationChanged).toHaveBeenCalledWith("attempt-1");
+  });
 });

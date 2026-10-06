@@ -27,6 +27,7 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
   const [toast, setToast] = useState<string>();
   const [returnFocus, setReturnFocus] = useState<HTMLElement | null>(null);
   const [missingSince, setMissingSince] = useState<Record<string, number>>({});
+  const [clockOffsetMs, setClockOffsetMs] = useState(0);
   const examId = body?.exam?.id ?? requestedExamId ?? null;
   const liveKit = useAdminLiveKit(examId);
 
@@ -36,6 +37,7 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
       const response = await fetch(`/api/admin/live${query}`, { cache: "no-store" });
       if (!response.ok) throw new Error("load_failed");
       const next = await response.json() as LiveBody;
+      setClockOffsetMs(Date.parse(next.server_time) - Date.now());
       setBody(next);
       setError(undefined);
     } catch {
@@ -79,6 +81,9 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
       const attempt = attemptById.get(attemptId);
       if (attempt) setToast(`${attempt.candidate.mer_code} reached the flag threshold.`);
     },
+    onViolationChanged: (attemptId) => {
+      if (selectedId && (!attemptId || selectedId === attemptId)) void loadEvents(selectedId);
+    },
   });
 
   useEffect(() => {
@@ -98,7 +103,8 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
         try {
           const response = await fetch(`/api/admin/live?view=progress&exam=${body.exam!.id}`, { cache: "no-store" });
           if (!response.ok) return;
-          const next = await response.json() as { progress: LiveProgress[] };
+          const next = await response.json() as { server_time: string; progress: LiveProgress[] };
+          setClockOffsetMs(Date.parse(next.server_time) - Date.now());
           setBody((current) => current ? { ...current, progress: next.progress } : current);
         } catch { /* The next poll or Realtime refresh retries quietly. */ }
       })();
@@ -112,17 +118,17 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
         const next = { ...current };
         for (const attempt of attempts) {
           if (liveKit.videoTracks[attempt.id] || (attempt.status !== "acknowledged" && attempt.status !== "in_progress")) delete next[attempt.id];
-          else next[attempt.id] ??= Date.now();
+          else next[attempt.id] ??= Date.now() + clockOffsetMs;
         }
         return next;
       });
     }, 1_000);
     return () => window.clearInterval(timer);
-  }, [attempts, liveKit.videoTracks]);
+  }, [attempts, clockOffsetMs, liveKit.videoTracks]);
 
   const statusFor = (attempt: LiveAttempt): LiveStatus => {
     const hasVideo = Boolean(liveKit.videoTracks[attempt.id]);
-    return deriveLiveStatus({ attempt, hasVideo, videoMissingSince: missingSince[attempt.id] ?? null, now });
+    return deriveLiveStatus({ attempt, hasVideo: hasVideo || liveKit.connectionLost, videoMissingSince: liveKit.connectionLost ? null : missingSince[attempt.id] ?? null, now: now + clockOffsetMs });
   };
 
   const rows = attempts.map((attempt) => ({ attempt, status: statusFor(attempt) }));
@@ -145,7 +151,7 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
 
   const exam = body.exam;
   const deadline = exam.ends_at ? Date.parse(exam.ends_at) : null;
-  const remaining = deadline === null ? null : Math.max(0, deadline - now);
+  const remaining = deadline === null ? null : Math.max(0, deadline - (now + clockOffsetMs));
 
   return (
     <section aria-labelledby="live-title">

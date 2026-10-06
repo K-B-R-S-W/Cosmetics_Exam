@@ -28,7 +28,7 @@ export function CandidatePanel({ attempt, status, threshold, progress, videoTrac
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onCloseRef.current();
+      if (event.key === "Escape" && !document.querySelector('[role="dialog"]')) onCloseRef.current();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => {
@@ -49,7 +49,7 @@ export function CandidatePanel({ attempt, status, threshold, progress, videoTrac
     : "Not yet";
 
   return (
-    <aside role="dialog" aria-modal="true" aria-labelledby="candidate-panel-title" className="fixed inset-y-0 right-0 z-30 w-full max-w-[440px] overflow-y-auto border-l border-hairline bg-surface p-5 shadow-xl">
+    <aside role="complementary" aria-label={`Candidate ${attempt.candidate.mer_code}`} className="fixed inset-y-0 right-0 z-30 w-full max-w-[440px] overflow-y-auto border-l border-hairline bg-surface p-5 shadow-xl">
       <div className="flex items-start justify-between gap-4">
         <div><p className="text-sm text-muted">Candidate</p><h2 id="candidate-panel-title" className="text-xl font-bold">{attempt.candidate.mer_code}</h2><p>{attempt.candidate.full_name}</p></div>
         <Button autoFocus variant="quiet" onClick={onClose}>Close</Button>
