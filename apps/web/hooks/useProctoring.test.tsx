@@ -36,6 +36,20 @@ describe("useProctoring", () => {
     });
   });
 
+  it("rounds fractional performance timings to non-negative integers accepted by the real schema", () => {
+    const queued = { ...event(5), opened_at_ms: 10.75, duration_ms: 1_234.6 };
+    const body = candidateEventBody(queued, 2_010.35);
+
+    expect(body.occurred_ago_ms).toBe(2_000);
+    expect(body.duration_ms).toBe(1_235);
+    expect(Number.isInteger(body.occurred_ago_ms)).toBe(true);
+    expect(Number.isInteger(body.duration_ms)).toBe(true);
+    expect(candidateEventSchema.parse(body)).toEqual(body);
+
+    const beforeOpen = candidateEventBody(queued, 9.9);
+    expect(beforeOpen.occurred_ago_ms).toBe(0);
+  });
+
   it("drops 400 responses and retries 429 with backoff", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(new Response("{}", { status: 400 })).mockResolvedValueOnce(new Response("{}", { status: 429 })).mockResolvedValueOnce(new Response("{}", { status: 200 }));
     const hook = renderHook(() => useProctoring({ enabled: true, inProgress: false, mediaTracks: [] }));

@@ -41,8 +41,8 @@ export function candidateEventBody(event: QueuedEvent, now: number) {
     id: event.id,
     type: event.type,
     merged_types: event.merged_types,
-    occurred_ago_ms: Math.max(0, now - event.opened_at_ms),
-    duration_ms: event.duration_ms,
+    occurred_ago_ms: Math.max(0, Math.round(now - event.opened_at_ms)),
+    duration_ms: event.duration_ms === null ? null : Math.max(0, Math.round(event.duration_ms)),
     meta: event.meta,
     snapshot_jpeg_base64: event.snapshot_jpeg_base64 ?? null,
   };
