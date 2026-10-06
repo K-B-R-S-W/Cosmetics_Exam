@@ -113,8 +113,9 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
   }, [body?.exam, liveUpdatesPaused, loadFull]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
+    const timer = window.setTimeout(() => {
       setMissingSince((current) => {
+        if (liveKit.connectionLost) return {};
         const next = { ...current };
         for (const attempt of attempts) {
           if (liveKit.videoTracks[attempt.id] || (attempt.status !== "acknowledged" && attempt.status !== "in_progress")) delete next[attempt.id];
@@ -122,9 +123,9 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
         }
         return next;
       });
-    }, 1_000);
-    return () => window.clearInterval(timer);
-  }, [attempts, clockOffsetMs, liveKit.videoTracks]);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [attempts, clockOffsetMs, liveKit.connectionLost, liveKit.videoTracks]);
 
   const statusFor = (attempt: LiveAttempt): LiveStatus => {
     const hasVideo = Boolean(liveKit.videoTracks[attempt.id]);
