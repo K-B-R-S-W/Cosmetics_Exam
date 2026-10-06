@@ -8,6 +8,21 @@ import { z } from "zod";
 const ROUTE = "/api/admin/events/[id]";
 type DismissRow = { out_result: string; out_counts: boolean; out_violation_count: number };
 
+export async function GET(_request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+  try {
+    await requireAdmin();
+    const id = z.string().uuid().parse((await context.params).id);
+    const client = createServiceRoleClient();
+    const { data, error } = await client.from("violation_events").select("id,snapshot_path").eq("id", id).maybeSingle();
+    if (error) throw new Error("event_snapshot_load_failed");
+    if (!data) throw new ApiError("not_found", 404, "Incident not found.");
+    if (!data.snapshot_path) return jsonResponse({ id, snapshot_url: null });
+    const { data: signed, error: signError } = await client.storage.from("snapshots").createSignedUrl(data.snapshot_path, 300);
+    if (signError || !signed?.signedUrl) return jsonResponse({ id, snapshot_url: null });
+    return jsonResponse({ id, snapshot_url: signed.signedUrl });
+  } catch (error) { return apiErrorResponse(error, ROUTE); }
+}
+
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   try {
     assertSameOrigin(request);

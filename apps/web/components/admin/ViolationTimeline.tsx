@@ -19,6 +19,23 @@ export function ViolationTimeline({
   const [reviewing, setReviewing] = useState<string>();
   const [note, setNote] = useState("");
   const [error, setError] = useState<string>();
+  const [snapshot, setSnapshot] = useState<{ alt: string; url: string }>();
+  const [snapshotError, setSnapshotError] = useState<string>();
+
+  async function openSnapshot(id: string, type: string) {
+    setSnapshotError(undefined);
+    const response = await fetch(`/api/admin/events/${id}`, { cache: "no-store" });
+    if (!response.ok) {
+      setSnapshotError("The snapshot could not be loaded.");
+      return;
+    }
+    const body = await response.json() as { id: string; snapshot_url: string | null };
+    if (!body.snapshot_url) {
+      setSnapshotError("The snapshot is no longer available.");
+      return;
+    }
+    setSnapshot({ url: body.snapshot_url, alt: `Snapshot for ${type.replaceAll("_", " ")}` });
+  }
 
   async function review(id: string, dismissed: boolean) {
     if (!note.trim()) {
@@ -41,6 +58,7 @@ export function ViolationTimeline({
   }
 
   return (
+    <>
     <ol className="space-y-4" aria-label="Violation timeline">
       {items.map((item) => {
         const dismissed = Boolean(item.meta?.dismissed);
@@ -67,14 +85,9 @@ export function ViolationTimeline({
               </p>
             ) : null}
             {item.snapshot_url ? (
-              <Image
-                unoptimized
-                className="mt-3 h-auto max-h-60 w-auto"
-                src={item.snapshot_url}
-                width={320}
-                height={240}
-                alt={`Snapshot for ${item.type.replaceAll("_", " ")}`}
-              />
+              <button type="button" className="mt-3" aria-label={`Open snapshot for ${item.type.replaceAll("_", " ")}`} onClick={() => void openSnapshot(item.id, item.type)}>
+                <Image unoptimized className="h-12 w-16 object-cover" src={item.snapshot_url} width={64} height={48} alt="" />
+              </button>
             ) : null}
             {item.counts || dismissed ? (
               <Button
@@ -116,5 +129,8 @@ export function ViolationTimeline({
         );
       })}
     </ol>
+    {snapshotError ? <p role="alert" className="text-alert">{snapshotError}</p> : null}
+    {snapshot ? <div role="dialog" aria-modal="true" aria-label="Incident snapshot" className="fixed inset-0 z-50 grid place-items-center bg-ink/75 p-6"><div className="max-w-3xl bg-surface p-4"><Button variant="secondary" onClick={() => setSnapshot(undefined)}>Close</Button><Image unoptimized className="mt-4 h-auto max-h-[75vh] w-auto" src={snapshot.url} width={1280} height={960} alt={snapshot.alt} /></div></div> : null}
+    </>
   );
 }

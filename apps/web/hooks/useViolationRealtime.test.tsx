@@ -14,7 +14,7 @@ const realtime = vi.hoisted(() => {
     channel: vi.fn(),
     removeChannel: vi.fn(),
   };
-  return { handlers, channel, client };
+  return { handlers, channel, client, status: undefined as undefined | ((status: string) => void) };
 });
 
 vi.mock("@/lib/supabase/client", () => ({
@@ -49,7 +49,8 @@ beforeEach(() => {
       return realtime.channel;
     },
   );
-  realtime.channel.subscribe.mockReset().mockReturnValue(realtime.channel);
+  realtime.status = undefined;
+  realtime.channel.subscribe.mockReset().mockImplementation((callback?: (status: string) => void) => { realtime.status = callback; return realtime.channel; });
   realtime.client.channel.mockReset().mockReturnValue(realtime.channel);
   realtime.client.removeChannel.mockReset().mockResolvedValue(undefined);
 });
@@ -62,12 +63,14 @@ describe("useViolationRealtime", () => {
   it("ignores last_seen_at-only updates with realistic primary-key-only old rows", async () => {
     const onRefresh = vi.fn();
     const onFlagged = vi.fn();
+    const onAttemptUpdated = vi.fn();
     renderHook(() => useViolationRealtime({
       examId: "exam-1",
       threshold: 10,
       initialAttempts: [attempt("attempt-1", 12)],
       onRefresh,
       onFlagged,
+      onAttemptUpdated,
     }));
 
     act(() => emitAttempt(attempt("attempt-1", 12, "two")));
@@ -75,6 +78,7 @@ describe("useViolationRealtime", () => {
 
     expect(onRefresh).not.toHaveBeenCalled();
     expect(onFlagged).not.toHaveBeenCalled();
+    expect(onAttemptUpdated).toHaveBeenCalledWith(expect.objectContaining({ id: "attempt-1", last_seen_at: "two" }));
   });
 
   it("ignores extra Phase 4 seed fields outside the material allowlist", async () => {
@@ -199,5 +203,13 @@ describe("useViolationRealtime", () => {
     hook.unmount();
     await act(() => vi.advanceTimersByTimeAsync(250));
     expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it("reports a paused channel until Realtime subscribes again", () => {
+    const hook = renderHook(() => useViolationRealtime({ examId: "exam-1", threshold: 10, initialAttempts: [], onRefresh: vi.fn(), onFlagged: vi.fn() }));
+    act(() => realtime.status?.("CHANNEL_ERROR"));
+    expect(hook.result.current.liveUpdatesPaused).toBe(true);
+    act(() => realtime.status?.("SUBSCRIBED"));
+    expect(hook.result.current.liveUpdatesPaused).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 
 const REFRESH_DEBOUNCE_MS = 200;
@@ -51,19 +51,22 @@ export function useViolationRealtime({
   initialAttempts,
   onRefresh,
   onFlagged,
+  onAttemptUpdated,
 }: {
-  examId: string;
+  examId: string | null;
   threshold: number;
   initialAttempts: InitialViolationAttempt[];
   onRefresh: () => void;
   onFlagged: (attemptId: string) => void;
+  onAttemptUpdated?: (attempt: Record<string, unknown>) => void;
 }) {
-  const callbacks = useRef({ onRefresh, onFlagged, threshold });
+  const callbacks = useRef({ onRefresh, onFlagged, onAttemptUpdated, threshold });
   const materialCache = useRef(new Map<string, MaterialAttempt>());
+  const [liveUpdatesPaused, setLiveUpdatesPaused] = useState(false);
 
   useEffect(() => {
-    callbacks.current = { onRefresh, onFlagged, threshold };
-  }, [onFlagged, onRefresh, threshold]);
+    callbacks.current = { onRefresh, onFlagged, onAttemptUpdated, threshold };
+  }, [onAttemptUpdated, onFlagged, onRefresh, threshold]);
 
   useEffect(() => {
     materialCache.current.clear();
@@ -78,6 +81,7 @@ export function useViolationRealtime({
   }, [examId, initialAttempts]);
 
   useEffect(() => {
+    if (!examId) return;
     const client = createBrowserSupabaseClient();
     let refreshTimer: number | null = null;
     let refreshWindowStartedAt: number | null = null;
@@ -120,6 +124,7 @@ export function useViolationRealtime({
           filter: `exam_id=eq.${examId}`,
         },
         (payload) => {
+          callbacks.current.onAttemptUpdated?.(payload.new as Record<string, unknown>);
           const after = materialAttempt(payload.new as Record<string, unknown>);
           const previous = materialCache.current.get(after.id);
           materialCache.current.set(after.id, after);
@@ -140,7 +145,15 @@ export function useViolationRealtime({
           scheduleRefresh();
         },
       )
-      .subscribe();
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "exams", filter: `id=eq.${examId}` },
+        scheduleRefresh,
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") setLiveUpdatesPaused(false);
+        else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setLiveUpdatesPaused(true);
+      });
 
     return () => {
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
@@ -149,4 +162,6 @@ export function useViolationRealtime({
       void client.removeChannel(channel);
     };
   }, [examId]);
+
+  return { liveUpdatesPaused };
 }

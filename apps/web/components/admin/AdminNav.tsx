@@ -5,7 +5,7 @@ import type { AdminRole } from "@/lib/auth";
 const NAV_ITEMS = [
   { label: "Exams", href: "/admin/exams", superAdminOnly: false },
   { label: "Candidates", href: "/admin/candidates", superAdminOnly: false },
-  { label: "Live", href: null, superAdminOnly: false },
+  { label: "Live", href: "/admin/live", superAdminOnly: false },
   { label: "Results", href: null, superAdminOnly: false },
   { label: "Health", href: null, superAdminOnly: true },
 ] as const;
