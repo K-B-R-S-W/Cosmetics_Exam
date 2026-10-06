@@ -110,7 +110,7 @@ Part D: event types seen; snapshot-eligible results; split/side-panel result; al
 ## Part E. Admin grid and audio
 
 1. Open `/admin/live`, choose the live exam and keep the candidate visible on camera.
-2. Confirm the tile shows the right MER/name, status, violation count and progress. Check that Offline and time-left remain correct after deliberately changing the admin PC clock; the route's `server_time` offset must win.
+2. Confirm the tile shows the right MER/name, status, violation count and progress. The server-clock-offset behaviour is unit-test covered but is **not live-verifiable on a one-PC setup**, because the Next server and admin browser use the same machine clock. If a second machine is available, turn off its automatic time synchronization, skew its clock by about one minute, use it only as the admin browser, and confirm Offline and time-left still follow the route's `server_time` rather than that browser's clock. Restore automatic time synchronization immediately after this check.
 3. Click Candidate 1's speaker control. This click must invoke Chrome audio start and attach the remote microphone track.
 4. Speak near Candidate 1's microphone and confirm the admin hears it.
 5. Switch the speaker to Candidate 2. Confirm Candidate 1 becomes silent and only Candidate 2 can be heard.
