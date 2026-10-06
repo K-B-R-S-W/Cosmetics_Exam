@@ -1,6 +1,18 @@
 # Section 4 - Proctoring Spec
 
-> Status: migration 007 and its full smoke block are verified on the development Supabase project. Phase 3 application and worker code is locally implemented; anything marked *(test)* still depends on browser/device rehearsal (Phase 8). Appendix A is retained only as superseded design history and must not be run.
+> Status: migration 007 and its full smoke block are verified on the development Supabase project. Phase 3 application and worker code and the Phase 4 media integration are locally implemented; anything marked *(test)* still depends on browser/device rehearsal (Phase 8). Appendix A is retained only as superseded design history and must not be run.
+
+### Phase 4 media integration
+
+- The candidate route-group provider owns one camera/microphone stream and one LiveKit room across Check → Waiting → Exam. Done stops the media exactly once before logout. A provider failure never blocks the candidate screens.
+- The camera preview remains mounted, playing, visible and non-zero-size on Waiting and Exam because snapshot capture reads that same video element. It is mirrored and has an accessible name.
+- Candidate publishing uses one 320x240 camera layer with no simulcast. Android is capped at 15 fps; other Chrome clients request 30 fps.
+- `stopLocalTrackOnUnpublish` is false. A terminal LiveKit disconnect keeps the app-owned device tracks live, records non-counting `CAMERA_LOST`/`MIC_LOST` episodes with `meta.source = 'livekit'`, and republishes those same tracks after the app-level reconnect.
+- A device track that ends or stays muted past the grace period records a counted episode with `meta.source = 'track'`. Silent reacquisition is attempted on `devicechange` and every three seconds only when `navigator.permissions.query` reports `granted`; otherwise the warning remains and the browser is not prompted. Successful replacement rebinds the preview, snapshot source, listeners and LiveKit publication, then closes the episode.
+- The admin connection auto-subscribes to no tracks, subscribes to every camera publication, and subscribes/attaches audio for at most one selected candidate. The speaker click calls `room.startAudio()`; autoplay failure is shown as a blocked-audio state. Failed initial connections and terminal disconnects retry with bounded backoff and do not require a page reload.
+- While the admin LiveKit connection is down, the grid does not derive Camera off. On reconnection every missing-video timer restarts, giving each tile the full 10-second window before Camera off can appear.
+
+These behaviours have mocked browser/SDK coverage. Real Chrome still must verify autoplay, Permissions API/device behaviour, actual video-element frames and snapshots, UDP/TCP recovery, and camera unplug/replug using `PHASE-4-TEST-STEPS.md`.
 
 ---
 

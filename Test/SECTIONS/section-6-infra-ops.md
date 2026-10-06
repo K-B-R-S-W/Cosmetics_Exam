@@ -2,7 +2,7 @@
 
 Covers: the EC2 box (t3.small), LiveKit and Caddy, the worker service, environment variables, alerts, backups, monitoring, the exam-day runbook (replaces §18 of the old plan) and a failure playbook.
 
-**Verification status.** The config files have been reviewed, every shell script has passed `bash -n`, and the compose file has been parsed. These are static/local checks only. **The stack has not run on your EC2 yet, so no earlier sandbox run is treated as current deployment evidence.** Items marked *(verify)* depend on AWS, LiveKit, Let's Encrypt, DuckDNS or Supabase behaviour that changes. The rehearsal (Phase 8) is the real proof.
+**Verification status.** The config files have been reviewed, every shell script has passed `bash -n`, and the production compose file has been parsed. A narrow Docker Desktop sanity test verified `livekit-client` 2.22.3 publishing camera and microphone over UDP 7882 to LiveKit Server v1.13.7, and a hidden admin-grant subscriber receiving both tracks with the local single-port UDP configuration and `node_ip: 127.0.0.1`. **The stack has not run on your EC2, and the sanity test did not exercise the complete application UI, reconnect/device recovery, TLS, TURN, mobile data or load, so none of those is treated as live deployment evidence.** Items marked *(verify)* depend on AWS, LiveKit, Let's Encrypt, DuckDNS or Supabase behaviour that changes. The rehearsal (Phase 8) is the real proof.
 
 ---
 
@@ -80,6 +80,12 @@ New profile → SSH → host = Elastic IP, user = `ubuntu`, authentication = the
 ---
 
 ## 4. LiveKit, Caddy, Redis
+
+### 4.0 Local Docker Desktop server
+
+For the Phase 4 local build, copy `infra/livekit/livekit.local.yaml.example` to the ignored `infra/livekit/livekit.local.yaml`, replace its secret, and put the same key and secret in `apps/web/.env.local`. Use `LIVEKIT_URL=ws://localhost:7880` and `NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880`, then start `infra/livekit/docker-compose.local.yml`. It pins LiveKit Server v1.13.7 and exposes signalling on TCP 7880, ICE/TCP on 7881 and media on UDP 7882. The local file deliberately uses `node_ip: 127.0.0.1`; it is not the EC2 configuration.
+
+The exact local commands and browser checks are in `PHASE-4-TEST-STEPS.md`. The two Phase 3 prerequisites remain in the root `PHASE-3-FINISH-RUNBOOK.md` and `PHASE-3-LIVE-TEST-STEPS.md`; reference their named parts and steps rather than copying their SQL or operational instructions.
 
 ### 4.1 Install
 

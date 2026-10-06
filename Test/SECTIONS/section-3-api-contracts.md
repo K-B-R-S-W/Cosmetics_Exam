@@ -792,6 +792,30 @@ Dismiss or restore a wrongly counted incident.
 
 Initial page loads, joins, view polling, review data, health data and broadcast history go through authenticated admin API routes using the server-only `service_role` client. Writing also always goes through section 4. The browser Supabase client uses the signed-in admin session only to read its own `admin_profiles` row and subscribe to the six published Realtime tables: `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams`. It has no direct DML, sequence, RPC, view, or other table access.
 
+### 5.1 Phase 4 live-grid read routes
+
+These three admin-only GET routes were added during Phase 4. They call `requireAdmin()` themselves and return explicit candidate-safe/admin-safe columns only.
+
+**`GET /api/admin/live?exam=<uuid>&view=full|progress`**
+
+- The strict query accepts only optional `exam` and `view`; `view` defaults to `full`.
+- Full response: `{ "server_time", "exams", "exam", "attempts", "progress" }`. The route chooses the live exam first, then a scheduled exam, unless `exam` is supplied. Attempts include candidate id, MER, name and outlet; no NIC or answer data is returned.
+- Progress response: `{ "server_time", "progress" }`; `exam` is required. The browser calls this every 10 seconds because `attempt_progress` is not in Realtime.
+- Full request profile: cached admin authentication (Auth `getUser` plus one `admin_profiles` query), one exams query, then attempts and `attempt_progress` queries in parallel = **5 database calls**. Progress-only profile: cached admin authentication plus one `attempt_progress` query = **3 calls**, or **18 calls/minute** while the page is open.
+- `server_time` is ISO 8601. The grid computes an offset on every full/progress response and uses it for the 25-second Offline rule and time-left display, so the admin PC clock is not authoritative.
+
+**`GET /api/admin/live/[attemptId]/events`**
+
+- Response: `{ "events": [{ "id", "type", "occurred_at", "duration_ms", "counts", "merged_types", "meta", "snapshot_url" }] }`, newest first.
+- Profile: cached admin authentication plus one `violation_events` query = **3 database calls**. If any event has a snapshot, one batched Storage signing request creates five-minute URLs; a missing URL remains `null`.
+
+**`GET /api/admin/events/[id]`**
+
+- Response: `{ "id", "snapshot_url" }`. It returns `null` when the event has no snapshot or signing fails, and `404 not_found` for an unknown event.
+- Profile: cached admin authentication plus one event query = **3 database calls**, with one optional Storage signing request.
+
+Realtime attempt/event changes trigger a trailing-debounced full live-grid reload and, when a candidate panel is open, a debounced event reload. Quiet Realtime costs zero calls. An isolated full reload costs 5 database calls; with the selected timeline it costs 8 plus optional Storage signing. The two-second maximum wait bounds continuous change traffic at a theoretical 150 database calls/minute without a panel or 240 with one. A future attempts-only refresh would reduce the violation-refresh path, but is not needed at the expected 23-candidate scale.
+
 | Data | Source | Live updates |
 |---|---|---|
 | Grid rows: status, `last_seen_at`, violation count, `current_position` | Server route reads `attempts` joined with `candidates (mer_code, full_name, outlet)` | Browser Realtime on `attempts`, filtered by `exam_id`; `useViolationRealtime` ignores updates where only `last_seen_at` changed |

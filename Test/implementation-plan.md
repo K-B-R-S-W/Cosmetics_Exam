@@ -239,19 +239,21 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 
 **Dependencies:** Phase 2 (candidate auth and exam engine must work)
 
+**Local build status (6 October 2026):** tasks 4A.1, 4A.3, 4B.1–4B.4 and 4C.1–4C.5 are locally implemented and covered by mocked tests. Local Docker configuration is also present. A narrow real sanity test verified `livekit-client` 2.22.3 publishing camera and microphone through UDP 7882 to LiveKit Server v1.13.7, and a hidden admin-grant subscriber receiving both tracks with `node_ip: 127.0.0.1`. This does **not** verify the complete candidate/admin UI, browser recovery, autoplay, device recovery, EC2, TLS, mobile data or load behaviour; use `PHASE-4-TEST-STEPS.md`. Tasks 4D.1–4D.8 remain deployment/rehearsal work.
+
 ### 4A — LiveKit Cloud Setup (0.5 day)
 
 | # | Task | Files |
 |---|---|---|
-| 4A.1 | Install LiveKit SDK | `package.json` — `livekit-client`, `@livekit/components-react` |
-| 4A.2 | LiveKit Cloud account | Create free account, get API key + secret. 🔧²² Stays for local development only (production uses self-hosted EC2 per Section 6 §2–§4) |
-| 4A.3 | Token generation | `app/api/livekit/token/route.ts` — 🔧⁹🔧¹⁰ candidate token: identity = **`c_{attempt_id}`** (not `cand_{candidateId}` — the kick route needs attempt_id to match), name = `{mer_code} {full_name}`, publish video+audio, subscribe none. Admin token: identity = `admin_{adminId}`, name = `Admin`, publish none, subscribe all, hidden. Use `as: 'candidate' | 'admin'` in the request to select the grant. Admin tokens set `autoSubscribe: false` (grid subscribes selectively) |
+| 4A.1 | Install LiveKit SDK | `package.json` — exact pins `livekit-client@2.22.3` and server-only `livekit-server-sdk@2.19.1`; no React component package is required |
+| 4A.2 | Local LiveKit server | Docker Desktop runs pinned `livekit/livekit-server:v1.13.7` from `infra/livekit/docker-compose.local.yml`; production still uses the self-hosted EC2 configuration in Section 6 §2–§4 |
+| 4A.3 | Token generation | `app/api/livekit/token/route.ts` — 🔧⁹🔧¹⁰ candidate token: identity = **`c_{attempt_id}`**, name = `{mer_code}`, publish video+audio, subscribe none. Admin token: identity = **`a_{admin_id}`**, publish none, subscribe all, hidden. Use `as: 'candidate' | 'admin'` in the request to select the grant. The admin room connects with `autoSubscribe: false` (grid subscribes selectively) |
 
 ### 4B — Candidate Publishing (0.5 day)
 
 | # | Task | Files |
 |---|---|---|
-| 4B.1 | Camera/mic hook | `hooks/useLiveKit.ts` — connect, publish camera at 320x240 + mic. 🔧⁴🔧⁵ **Cap Android camera**: `frameRate: { ideal: 15, max: 15 }` (4 GB tablets struggle at higher rates). Detect Android via UA. **Laptops stay at 30 fps**. Tune the Android value in the tablet rehearsal (8.27) |
+| 4B.1 | Camera/mic hook | `hooks/useLiveKit.ts` — connect, publish one 320x240 camera layer plus mic; keep app-owned tracks alive across LiveKit-only disconnects and silently reacquire ended device tracks only when the Permissions API says permission remains granted. 🔧⁴🔧⁵ **Cap Android camera**: `frameRate: { ideal: 15, max: 15 }` (4 GB tablets struggle at higher rates). Detect Android via UA. **Laptops stay at 30 fps**. Tune the Android value in the tablet rehearsal (8.27) |
 | 🔧 4B.2 | LiveKit layout provider | `app/(candidate)/layout.tsx` | 🔧 **Put LiveKit connection in a layout-level provider** inside the `(candidate)` route group. This keeps the camera alive across waiting room → exam → done without reconnecting. Route groups with separate root layouts trigger full page reload, which kills fullscreen |
 | 4B.3 | Integrate into waiting room + exam | Both pages consume the layout-level LiveKit context |
 | 4B.4 | Degradation banner | `components/exam/CameraBanner.tsx` — 🔧 **"Camera disconnected. Please reconnect. Your exam continues and this is logged."** (not "marks may be reduced" — if EC2 goes down, candidates shouldn't panic over something that isn't their fault). State any penalty policy on the rules screen instead. 🔧¹⁹ A LiveKit-only loss is logged as `CAMERA_LOST` / `MIC_LOST` with `meta.source = 'livekit'` and **does not count** (Section 4 §2, §4.1) |
@@ -262,7 +264,7 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 |---|---|---|
 | 4C.1 | Live grid page | `app/(admin)/admin/live/page.tsx` |
 | 4C.2 | Video tile component | `components/admin/VideoTile.tsx` — MER label, name, status badge, violation count, speaker button. 🔧³🔧⁶ **Progress label**: read from `attempt_progress` view. 🔧⁹ **Poll the view every 10s** (views are not in Realtime publications). Show "Q 7/20" (`current_position + 1`/`total_questions` in sequential) or "14 answered" (`answered_count` in free) per candidate |
-| 4C.3 | Manual subscription | Subscribe to all video tracks; audio only when speaker toggled on |
+| 4C.3 | Manual subscription | Subscribe to all video tracks; attach audio only for the one candidate whose speaker control is on. The click calls `room.startAudio()` and a blocked-audio state is visible |
 | 4C.4 | Tile enlarge | Click tile to enlarge + show violation timeline |
 | 4C.5 | Status badges | Not joined, Ready, In exam, Offline, Submitted, Camera Off |
 
