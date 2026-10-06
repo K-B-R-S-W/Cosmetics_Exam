@@ -255,4 +255,28 @@ describe("useLiveKit", () => {
     expect(vi.mocked(navigator.permissions.query).mock.calls).toHaveLength(permissionChecks);
     expect(mocks.createLocalTracks).toHaveBeenCalledTimes(1);
   });
+
+  it("retries ended-track recovery every three seconds until it succeeds without devicechange", async () => {
+    vi.useFakeTimers();
+    const originalVideo = new FakeLocalTrack("video");
+    const originalAudio = new FakeLocalTrack("audio");
+    const replacementVideo = new FakeLocalTrack("video");
+    mocks.createLocalTracks.mockReset().mockResolvedValueOnce([originalVideo, originalAudio]);
+    const hook = renderHook(() => useLiveKit());
+    await act(async () => { await hook.result.current.acquireAndConnect(); });
+    mocks.createLocalTracks
+      .mockReset()
+      .mockRejectedValueOnce(new Error("missing-1"))
+      .mockRejectedValueOnce(new Error("missing-2"))
+      .mockRejectedValueOnce(new Error("missing-3"))
+      .mockResolvedValueOnce([replacementVideo]);
+    originalVideo.mediaStreamTrack.readyState = "ended";
+    act(() => originalVideo.mediaStreamTrack.dispatchEvent(new Event("ended")));
+    expect(hook.result.current.cameraLost).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(mocks.createLocalTracks).toHaveBeenCalledTimes(4);
+    expect(hook.result.current.cameraLost).toBe(false);
+    await act(async () => { await hook.result.current.stop(); await vi.advanceTimersByTimeAsync(9_000); });
+    expect(mocks.createLocalTracks).toHaveBeenCalledTimes(4);
+  });
 });

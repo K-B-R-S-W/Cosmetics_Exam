@@ -75,7 +75,8 @@ export function useLiveKit() {
   const scheduleReconnectRef = useRef<() => void>(() => undefined);
   const deviceRecoveryTimer = useRef<number | null>(null);
   const deviceRecoveryPromise = useRef<Promise<void> | null>(null);
-  const recoverDevicesRef = useRef<() => void>(() => undefined);
+  const recoverEndedTracksRef = useRef<() => void>(() => undefined);
+  const scheduleDeviceRecoveryRef = useRef<() => void>(() => undefined);
   const trackCleanups = useRef(new Map<LocalTrack, () => void>());
   const stopping = useRef(false);
   const stopped = useRef(false);
@@ -118,7 +119,7 @@ export function useLiveKit() {
     const changed = () => updateDeviceState();
     const ended = () => {
       updateDeviceState();
-      recoverDevicesRef.current();
+      scheduleDeviceRecoveryRef.current();
     };
     media.addEventListener("mute", changed);
     media.addEventListener("unmute", changed);
@@ -269,7 +270,10 @@ export function useLiveKit() {
       deviceRecoveryPromise.current = null;
       if (!stopping.current && !stopped.current && tracksRef.current.some((track) => track.mediaStreamTrack.readyState === "ended")) {
         clearDeviceRecovery();
-        deviceRecoveryTimer.current = window.setTimeout(() => recoverDevicesRef.current(), DEVICE_RECOVERY_DELAY_MS);
+        deviceRecoveryTimer.current = window.setTimeout(() => {
+          deviceRecoveryTimer.current = null;
+          recoverEndedTracksRef.current();
+        }, DEVICE_RECOVERY_DELAY_MS);
       }
     });
     deviceRecoveryPromise.current = operation;
@@ -283,7 +287,8 @@ export function useLiveKit() {
       void recoverEndedTracks();
     }, DEVICE_RECOVERY_DELAY_MS);
   }, [recoverEndedTracks]);
-  useEffect(() => { recoverDevicesRef.current = scheduleDeviceRecovery; }, [scheduleDeviceRecovery]);
+  useEffect(() => { recoverEndedTracksRef.current = () => { void recoverEndedTracks(); }; }, [recoverEndedTracks]);
+  useEffect(() => { scheduleDeviceRecoveryRef.current = scheduleDeviceRecovery; }, [scheduleDeviceRecovery]);
 
   useEffect(() => {
     const changed = () => {
