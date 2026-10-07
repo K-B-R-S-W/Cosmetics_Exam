@@ -17,7 +17,7 @@ These steps separate local automated coverage from behavior that needs the devel
 5. Send all-candidate and selected-candidate announcements. Confirm exact recipients see one top-right toast for 5 seconds and history is newest-first.
 6. Force-submit one candidate using the confirmation dialog. Confirm partial saved answers remain and the candidate reaches Done.
 7. Kick one candidate. Confirm active sessions are revoked before LiveKit removal, the browser reaches the signed-out screen within the heartbeat interval, media stops once, saved answers remain, and signing in again resumes.
-8. Force-end a live exam. Confirm the screen locks immediately, the 15-second collection window remains, and the worker submits remaining attempts as `forced` without synthetic answers. Retry and confirm `already_ended: true` with no duplicate side effects.
+8. Force-end a live exam. Confirm the screen locks immediately, the 15-second collection window remains, and the worker submits remaining attempts as `forced` without synthetic answers. Wait for the worker to finalize the exam, retry force-end, and confirm 200 `already_ended: true` with no duplicate audit or Broadcast. To simulate a missing audit in your own SQL editor, delete the `force_end` `admin_actions` row for that exam, retry, and confirm exactly one new row appears.
 
 ## Part B — 5B pre-exam check
 

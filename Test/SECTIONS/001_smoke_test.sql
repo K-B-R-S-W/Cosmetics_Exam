@@ -1373,6 +1373,8 @@ declare
   v_result text;
   v_ends_at timestamptz;
   v_force_ended_at timestamptz;
+  v_original_ends_at timestamptz;
+  v_original_force_ended_at timestamptz;
   v_deadline timestamptz;
   v_collecting int;
   v_submitted int;
@@ -1397,6 +1399,8 @@ begin
      and v_deadline = v_force_ended_at + interval '15 seconds'
      and v_collecting = 1 and v_submitted = 1,
     '17a: force-end must use one database timestamp and leave open attempts for collection';
+  v_original_ends_at := v_ends_at;
+  v_original_force_ended_at := v_force_ended_at;
   assert (select status from public.attempts where exam_id = v_exam and candidate_id = v_candidate_open) = 'not_started',
     '17a: force-end must not submit or synthesize an open attempt';
 
@@ -1405,6 +1409,20 @@ begin
     from public.force_end_exam(v_exam);
   assert v_result = 'already_ended' and v_ends_at = v_force_ended_at,
     '17b: repeated force-end must return the existing transition';
+
+  update public.exams set status = 'finalized' where id = v_exam;
+  select out_result, out_ends_at, out_force_ended_at
+    into v_result, v_ends_at, v_force_ended_at
+    from public.force_end_exam(v_exam);
+  assert v_result = 'already_ended'
+     and v_ends_at = v_original_ends_at
+     and v_force_ended_at = v_original_force_ended_at,
+    '17b: retry after finalization must return the existing force-end transition';
+
+  update public.exams set force_ended_at = null where id = v_exam;
+  select out_result into v_result from public.force_end_exam(v_exam);
+  assert v_result = 'invalid_status',
+    '17b: a normally finalized exam must not be treated as already force-ended';
 
   assert has_function_privilege('service_role', 'public.force_end_exam(uuid)', 'EXECUTE')
      and not has_function_privilege('anon', 'public.force_end_exam(uuid)', 'EXECUTE')

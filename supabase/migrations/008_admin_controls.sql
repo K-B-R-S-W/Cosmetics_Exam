@@ -34,7 +34,7 @@ begin
     return;
   end if;
 
-  if v_exam.status = 'ended' and v_exam.force_ended_at is not null then
+  if v_exam.status in ('ended', 'finalized') and v_exam.force_ended_at is not null then
     select count(*) filter (where status in ('not_started', 'acknowledged', 'in_progress')),
            count(*) filter (where status in ('submitted', 'finalized'))
       into v_collecting, v_submitted

@@ -25,7 +25,15 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (row.out_result === "not_found") throw new ApiError("not_found", 404, "Exam not found.");
     if (row.out_result === "invalid_status") throw new ApiError("invalid_status", 409, "Only a live exam can be ended.");
     const body = { exam: { status: row.out_status, ends_at: row.out_ends_at, force_ended_at: row.out_force_ended_at }, collection_deadline: row.out_collection_deadline, collecting: row.out_collecting, already_submitted: row.out_already_submitted };
-    if (row.out_result === "already_ended") return jsonResponse({ ...body, already_ended: true });
+    if (row.out_result === "already_ended") {
+      const { data: actions, error: lookupError } = await client.from("admin_actions").select("id").eq("action", "force_end").eq("target", id).limit(1);
+      if (lookupError) throw new Error("force_end_audit_lookup_failed");
+      if ((actions?.length ?? 0) === 0) {
+        await recordAdminAction(client, admin, "force_end", id, { collecting: row.out_collecting, already_submitted: row.out_already_submitted });
+        await publishExamBroadcast(id, { type: "exam_ended" });
+      }
+      return jsonResponse({ ...body, already_ended: true });
+    }
     if (row.out_result !== "ended") throw new Error("force_end_exam_unexpected");
     await recordAdminAction(client, admin, "force_end", id, { collecting: row.out_collecting, already_submitted: row.out_already_submitted });
     await publishExamBroadcast(id, { type: "exam_ended" });

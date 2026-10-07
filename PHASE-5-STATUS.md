@@ -6,7 +6,7 @@ Phase 5 is being implemented locally. Nothing in this file is a claim of live ve
 
 Status: locally implemented and unit-tested. Migration `008_admin_controls.sql` is written but has **not** been applied or run by the agent.
 
-- Start and force-end are safe to retry. A recognized repeat returns stored state and does not audit or publish again.
+- Start and force-end are safe to retry. A recognized force-end repeat also works after worker finalization; it returns stored state without duplicate side effects, or self-heals the missing `force_end` audit row and `exam_ended` Broadcast if the original audit write failed.
 - Extend and broadcast are not idempotent. After a 503 or audit failure, the UI reloads server state before offering another attempt because the database change may already have committed.
 - Kick revokes sessions before best-effort LiveKit removal. The signed-out candidate lifecycle remains the only browser-side terminal media stop.
 - The existing worker remains responsible for submissions after the force-end collection window; the route does not loop over attempts or synthesize answers.
@@ -20,7 +20,7 @@ Counts include the normal admin authorization (`getUser` plus the cached profile
 - Extend everyone, usual success: 2 auth + 1 exam read + 1 conditional update + 1 audit insert + 1 Broadcast = **6 calls**. Three lost compare-and-set attempts: 2 auth + 6 database calls = **8 calls**, then 409.
 - Extend one candidate, usual success: 2 auth + 1 joined attempt/exam read + 1 conditional update + 1 audit insert + 1 Broadcast = **6 calls**; maximum **8** before 409.
 - Force-end, first success: 2 auth + 1 `force_end_exam` RPC + 1 audit insert + 1 Broadcast = **5 calls**.
-- Force-end, recognized retry: 2 auth + 1 RPC = **3 calls**; no new write or Broadcast.
+- Force-end, recognized retry with an existing audit: 2 auth + 1 RPC + 1 audit lookup = **4 calls**; no new write or Broadcast. If the audit row is missing: add 1 audit insert + 1 Broadcast = **6 calls**, healing both side effects.
 - Force-submit: 2 auth + 1 attempt lookup + 1 `submit_attempt` RPC; on a changed row add 1 audit insert + 1 Broadcast = **4–6 calls**.
 - Kick: 2 auth + 1 attempt lookup + 1 session update + 1 LiveKit removal + 1 audit insert + 1 Broadcast = **7 calls**.
 - Broadcast send: 2 auth + 1 `create_broadcast` RPC + 1 audit insert + 1 Broadcast = **5 calls**. History load is 2 auth + 1 select = **3 calls**.
