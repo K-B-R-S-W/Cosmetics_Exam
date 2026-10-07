@@ -3,10 +3,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ push: vi.fn(), setCheckPassed: vi.fn(), acquire: vi.fn(), status: "idle" }));
+const mocks = vi.hoisted(() => ({ push: vi.fn(), setCheckPassed: vi.fn(), markExamHandoff: vi.fn(), acquire: vi.fn(), status: "idle", phase: "waiting" }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("@/components/candidate/CandidateContext", () => ({
-  useCandidate: () => ({ state: { phase: "waiting" }, setCheckPassed: mocks.setCheckPassed }),
+  useCandidate: () => ({ state: { phase: mocks.phase }, setCheckPassed: mocks.setCheckPassed, markExamHandoff: mocks.markExamHandoff }),
   CandidateFrame: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
   Notice: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
@@ -17,7 +17,7 @@ vi.mock("@/components/candidate/LiveKitContext", () => ({
 import { CheckScreen } from "./CheckScreen";
 
 beforeEach(() => {
-  mocks.push.mockReset(); mocks.setCheckPassed.mockReset(); mocks.acquire.mockReset().mockResolvedValue(true); mocks.status = "idle";
+  mocks.push.mockReset(); mocks.setCheckPassed.mockReset(); mocks.markExamHandoff.mockReset(); mocks.acquire.mockReset().mockResolvedValue(true); mocks.status = "idle"; mocks.phase = "waiting";
 });
 afterEach(cleanup);
 
@@ -30,8 +30,11 @@ describe("CheckScreen", () => {
     mocks.status = "connected";
     view.rerender(<CheckScreen />);
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(mocks.markExamHandoff).toHaveBeenCalledTimes(1);
     expect(mocks.setCheckPassed).toHaveBeenCalledWith(true);
     expect(mocks.push).toHaveBeenCalledWith("/waiting");
+    expect(mocks.markExamHandoff.mock.invocationCallOrder[0]).toBeLessThan(mocks.setCheckPassed.mock.invocationCallOrder[0]!);
+    expect(mocks.markExamHandoff.mock.invocationCallOrder[0]).toBeLessThan(mocks.push.mock.invocationCallOrder[0]!);
   });
 
   it("does not block continuing after a provider failure", async () => {
@@ -43,5 +46,16 @@ describe("CheckScreen", () => {
     expect(continueButton.disabled).toBe(false);
     fireEvent.click(continueButton);
     expect(mocks.push).toHaveBeenCalledWith("/waiting");
+  });
+
+  it("marks a live Check to Exam handoff before the transient redirect", () => {
+    mocks.phase = "live";
+    mocks.status = "connected";
+    render(<CheckScreen />);
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(mocks.markExamHandoff).toHaveBeenCalledTimes(1);
+    expect(mocks.push).toHaveBeenCalledWith("/exam");
+    expect(mocks.markExamHandoff.mock.invocationCallOrder[0]).toBeLessThan(mocks.setCheckPassed.mock.invocationCallOrder[0]!);
+    expect(mocks.markExamHandoff.mock.invocationCallOrder[0]).toBeLessThan(mocks.push.mock.invocationCallOrder[0]!);
   });
 });

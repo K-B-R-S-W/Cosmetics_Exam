@@ -43,8 +43,12 @@ vi.mock("@/lib/time", async (importOriginal) => {
 });
 
 import CandidateLayout from "@/app/(candidate)/layout";
+import { CheckScreen } from "./CheckScreen";
 import { WaitingRoom } from "./WaitingRoom";
 import { ExamScreen } from "@/components/exam/ExamScreen";
+
+let paperLoaded = false;
+let serverState: StateBody;
 
 function candidateState(phase: "waiting" | "live", status: "acknowledged" | "in_progress"): StateBody {
   return {
@@ -83,7 +87,10 @@ const paper: PaperBody = {
 };
 
 function Page() {
-  return navigation.path === "/waiting" ? <WaitingRoom /> : <ExamScreen />;
+  if (navigation.path === "/login") return <p>Login</p>;
+  if (navigation.path === "/check") return <CheckScreen />;
+  if (navigation.path === "/waiting") return <WaitingRoom />;
+  return <ExamScreen />;
 }
 
 function json(body: unknown, status = 200): Promise<Response> {
@@ -98,10 +105,11 @@ beforeEach(() => {
   media.trySilentReacquire.mockClear();
   media.stop.mockClear();
   sessionStorage.clear();
-  let paperLoaded = false;
+  paperLoaded = false;
+  serverState = candidateState("waiting", "acknowledged");
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
-    if (url === "/api/exam/state") return json(candidateState(paperLoaded ? "live" : "waiting", paperLoaded ? "in_progress" : "acknowledged"));
+    if (url === "/api/exam/state") return json(paperLoaded ? candidateState("live", "in_progress") : serverState);
     if (url === "/api/exam/paper") {
       paperLoaded = true;
       return json(paper);
@@ -137,5 +145,43 @@ describe("candidate exam handoff", () => {
       .map(([, init]) => JSON.parse(String(init?.body)) as { type: string })
       .filter(({ type }) => type === "RELOAD");
     expect(reloads).toHaveLength(0);
+  });
+
+  it("does not record RELOAD when a kicked candidate resets, re-enters through Check and continues to Exam", async () => {
+    navigation.path = "/login";
+    serverState = candidateState("live", "in_progress");
+    const view = render(<CandidateLayout><Page /></CandidateLayout>);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    navigation.path = "/check";
+    view.rerender(<CandidateLayout><Page /></CandidateLayout>);
+    await screen.findByRole("heading", { name: "Pre-exam check" });
+    navigation.push.mockClear();
+    screen.getByRole("button", { name: "Continue" }).click();
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/exam"));
+
+    navigation.path = "/exam";
+    view.rerender(<CandidateLayout><Page /></CandidateLayout>);
+    await screen.findByRole("heading", { name: "Question 1" });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    const reloads = vi.mocked(fetch).mock.calls
+      .filter(([url]) => String(url) === "/api/events")
+      .map(([, init]) => JSON.parse(String(init?.body)) as { type: string })
+      .filter(({ type }) => type === "RELOAD");
+    expect(reloads).toHaveLength(0);
+  });
+
+  it("records exactly one snapshot-free RELOAD on a direct full page load into an in-progress exam", async () => {
+    navigation.path = "/exam";
+    serverState = candidateState("live", "in_progress");
+    render(<CandidateLayout><Page /></CandidateLayout>);
+    await screen.findByRole("heading", { name: "Question 1" });
+    await waitFor(() => {
+      const reloads = vi.mocked(fetch).mock.calls
+        .filter(([url]) => String(url) === "/api/events")
+        .map(([, init]) => JSON.parse(String(init?.body)) as { type: string; snapshot_jpeg_base64: string | null })
+        .filter(({ type }) => type === "RELOAD");
+      expect(reloads).toEqual([expect.objectContaining({ type: "RELOAD", snapshot_jpeg_base64: null })]);
+    });
   });
 });

@@ -69,7 +69,7 @@ Event types are exactly those in `001_initial.sql` (the `violation_events.type` 
 | `COPY` / `PASTE` / `CONTEXT_MENU` | Handlers (action blocked) | client | No | `null` | No |
 | `RELOAD` | Exam page load that is a reload or back/forward, or any load when this tab already has the exam-page marker | client | Yes | `null` | No |
 
-`RELOAD` is recorded only when the exam page loads for an attempt that was already in progress; normal in-app entry from the waiting room or a late join is not a reload.
+`RELOAD` is recorded only on a full page load directly onto `/exam` for an attempt that was already in progress; normal in-app entry through Check or the waiting room is not a reload.
 
 Notes:
 - `duration_ms` for an attention incident is the length of the **whole incident** (section 3.2), not of the first signal.
