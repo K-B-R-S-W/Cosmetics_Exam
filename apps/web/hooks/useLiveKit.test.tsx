@@ -209,6 +209,25 @@ describe("useLiveKit", () => {
     expect(mediaEvents.every((body) => body.meta?.source === "livekit")).toBe(true);
   });
 
+  it("backs off rejected reconnect tokens after a kick without emitting a counted incident", async () => {
+    vi.useFakeTimers();
+    const hook = renderHook(() => {
+      const liveKit = useLiveKit();
+      useProctoring({ enabled: true, inProgress: true, mediaTracks: liveKit.mediaTracks, liveKitDisconnected: liveKit.connectionLost });
+      return liveKit;
+    });
+    await act(async () => { await hook.result.current.acquireAndConnect(); });
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => String(input) === "/api/livekit/token"
+      ? Promise.resolve(new Response(JSON.stringify({ error: { code: "unauthenticated" } }), { status: 401 }))
+      : Promise.resolve(new Response(JSON.stringify({ id: "event" }), { status: 200 })));
+    act(() => mocks.rooms[0]!.emit("disconnected"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(25_000); });
+    const tokenCalls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/livekit/token");
+    expect(tokenCalls).toHaveLength(6);
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/events")).toHaveLength(0);
+    await act(async () => { await hook.result.current.stop(); });
+  });
+
   it("reacquires and republishes an ended camera on devicechange", async () => {
     vi.useFakeTimers();
     const originalVideo = new FakeLocalTrack("video");

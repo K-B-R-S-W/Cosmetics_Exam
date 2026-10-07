@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { ExamTabs } from "@/components/admin/exams/ExamTabs";
+import { AdminExamControls } from "@/components/admin/AdminExamControls";
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
 import {
@@ -114,6 +115,7 @@ export function ExamForm({ examId }: { examId: string | null }) {
   return <section className="border-t border-hairline pt-6" aria-labelledby="exam-form-title">
     <p className="mb-2 text-sm text-muted">Exams</p><h1 id="exam-form-title" className="text-title font-bold">{editing ? title || "Exam settings" : "New exam"}</h1>
     {examId ? <ExamTabs examId={examId} current="settings" onNavigate={requestNavigation} /> : null}
+    {exam && (exam.status === "draft" || exam.status === "scheduled") ? <div className="mt-5"><AdminExamControls exam={exam} onChanged={() => { router.push(`/admin/live?exam=${exam.id}`); router.refresh(); }} /></div> : null}
     {exam ? <div className="mt-6 border border-hairline bg-surface p-5"><h2 className="text-question font-bold">Readiness</h2><ul className="mt-3 space-y-2"><li>{exam.question_count >= 1 ? `Questions: ${exam.question_count}` : <><strong>No questions yet.</strong> Question building arrives in Phase 1E.</>}</li><li>{exam.assigned_count >= 1 ? `Candidates: ${exam.assigned_count}` : <><strong>No candidates assigned.</strong> <Link className="underline" href={`/admin/exams/${exam.id}/candidates`}>Assign candidates</Link></>}</li><li>{startTimeReady ? "Start time is at least one minute ahead." : startLocal ? <strong>The start time has passed. Choose a new one.</strong> : <strong>No start time set.</strong>}</li>{missingKeys ? <li className="text-warn">{missingKeys} questions have no answer key yet. You can add them before grading.</li> : <li>Answer keys complete.</li>}</ul></div> : null}
     {locked ? <p className="mt-5 border-l-4 border-warn bg-warn-tint px-4 py-3">Locked while the exam is live. Only the title and flag threshold can change{thresholdLocked ? "; finalized exams lock the threshold too" : ""}.</p> : null}
     {message ? <p role="status" className="mt-5 border-l-4 border-ok bg-ok-tint px-4 py-3">{message}</p> : null}{error ? <p role="alert" className="mt-5 border-l-4 border-alert bg-alert-tint px-4 py-3">{error}</p> : null}

@@ -87,7 +87,7 @@ The admin layout's authorization check runs only on full loads; client-side navi
 - Client IP for `login_attempts` and `sessions`: first value of `x-forwarded-for`.
 
 ### 1.5 Idempotency
-Safe to retry with the same body: `/api/answers` (revision rule), `/api/exam/next` (`expected_position`), `/api/exam/submit`, `/api/auth/acknowledge`, `/api/heartbeat`, all `GET`s, `start`, `force-end`, `force-submit`, `resolve`. Not idempotent (each call does something new): `broadcast`, `extend`, `override`, `regrade`, `grade`.
+Safe to retry with the same body: `/api/answers` (revision rule), `/api/exam/next` (`expected_position`), `/api/exam/submit`, `/api/auth/acknowledge`, `/api/heartbeat`, all `GET`s, `start`, `force-end`, `force-submit`, `resolve`. A repeated admin Start for an exam already started by that control returns the existing live timestamps with `already_started: true`; a repeated force-end returns the original force-end timestamps with `already_ended: true`. Neither repeat writes another audit row or Broadcast. Not idempotent (each call does something new): `broadcast`, `extend`, `override`, `regrade`, `grade`. After a 503 from `broadcast` or `extend`, the admin client reloads server state before offering a retry because the change may already have committed.
 
 ### 1.6 Admin audit log
 Every admin route that changes something writes one `admin_actions` row (`admin_id`, `action`, `target`, `detail`). Action names: `candidate_create`, `candidate_update`, `candidate_delete`, `candidate_import`, `candidate_unlock`, `exam_create`, `exam_update`, `exam_delete`, `exam_assign`, `exam_unassign`, `question_save`, `question_delete`, `question_reorder`, `answer_key_save`, `start`, `extend`, `force_end`, `force_submit`, `kick`, `broadcast`, `grade_start`, `grade_resume`, `override`, `regrade`, `regrade_question`, `alert_resolve`, `snapshot_purge`, `event_dismiss`, `event_restore`.
@@ -642,7 +642,7 @@ Calls `delete_question(exam_id, question_id)`, which takes the same exam-row loc
 **`POST /api/admin/exams/[id]/start`**
 Empty body. Preconditions: status `draft` or `scheduled`, at least one question, at least one assigned candidate (`409 invalid_status`, `409 exam_has_no_questions`, `409 no_candidates_assigned`).
 Implementation: call `start_exam(exam_id, false)`. Under an exam-row lock it performs one conditional update, `status='live', started_at=<database now>, ends_at=<database now> + duration_min` **where status in ('draft','scheduled')**, returning the row. `not_ready` maps its `questions`/`candidates` categories to the errors above; `invalid_status` means someone else (the worker's scheduled start, or another admin) won the race. Then publish `exam_started`.
-`200 { "exam": { "status": "live", "started_at": "<iso>", "ends_at": "<iso>" } }`.
+`200 { "already_started": false, "exam": { "status": "live", "started_at": "<iso>", "ends_at": "<iso>" } }`. A safe retry after this admin control already started the exam returns the same shape with `already_started: true`, the stored timestamps, and no second audit row or Broadcast. A live exam started by another path still returns `409 invalid_status`.
 The worker calls the same function with `p_scheduled_only = true`, so it additionally requires `status='scheduled'` and `scheduled_start_at <=` the database clock. The two paths cannot both fire. An unready scheduled exam stays scheduled and is reconsidered on every tick; no start Broadcast is sent by the worker, because candidate polling is the handoff.
 
 **`POST /api/admin/exams/[id]/extend`**
@@ -654,12 +654,12 @@ The worker calls the same function with `p_scheduled_only = true`, so it additio
 
 **`POST /api/admin/exams/[id]/force-end`**
 `{ "confirm": true }` (required, `400` without it). Exam must be `live` (`409 invalid_status`).
-1. Atomically `update exams set status='ended', ends_at=now(), force_ended_at=now() where id = X and status='live'`. Candidate screens lock immediately.
+1. Call `force_end_exam(exam_id)`. Under the exam-row lock it atomically sets `status='ended', ends_at=<database clock>, force_ended_at=<same database clock>` only from `live`. Candidate screens lock immediately.
 2. Leave all still-open attempts for the final collection window. `in_progress` candidates may send pending answers until `force_ended_at + 15 seconds`; `not_started` and `acknowledged` attempts have no synthetic answers added. No navigation or continued editing is allowed.
 3. Publish `exam_ended`. Connected clients flush `pending_answers`; the submit route derives `forced` server-side and closes each attempt.
 4. After 15 seconds the worker submits every remaining `not_started`, `acknowledged`, or `in_progress` attempt as `forced` from the latest answers already stored, then finalizes. Partial written answers are graded like any other non-blank answer.
 
-`202 { "exam": { "status": "ended", "ends_at": "<iso>", "force_ended_at": "<iso>" }, "collection_deadline": "<iso>", "collecting": 21, "already_submitted": 2 }`. Final counts are available after the collection window.
+`202 { "already_ended": false, "exam": { "status": "ended", "ends_at": "<iso>", "force_ended_at": "<iso>" }, "collection_deadline": "<iso>", "collecting": 21, "already_submitted": 2 }`. A safe retry of that same force-end returns `200` with `already_ended: true` and the original timestamps, with no mutation, audit row or Broadcast. Any other non-live status is `409 invalid_status`. Final counts are available after the collection window.
 
 **`POST /api/admin/attempts/[id]/force-submit`**
 `{ "confirm": true }`. `rpc('submit_attempt', { p_reason: 'forced' })`. `200 { "submitted": true }`, or `false` if already submitted. Publishes `attempt_changed`.
@@ -683,6 +683,8 @@ Request examples:
 - There is **no per-exam count limit**. The exam must be `scheduled` or `live`.
 
 The route calls `create_broadcast(uuid, text, text, uuid[])`, which atomically inserts the announcement and exact recipient rows. Map `no_recipients` to `400 no_recipients`, `invalid_recipient` to `409 invalid_recipient`, and the other validation exceptions to `400 validation_failed`. Then write the `broadcast` admin action with audience and recipient count—but not a duplicate copy of the message—publish the content-free `message` nudge, and return `200 { "id": "<uuid>", "recipient_count": 23 }`. Publish failure does not fail the send; the heartbeat is the backup. Discord and Telegram are not used.
+
+**`GET /api/admin/exams/[id]/broadcast`** returns the admin-only message history newest first as `{ "items": [{ "id", "message", "audience", "sent_at", "recipient_count" }] }`. Candidate APIs never return this history.
 
 ### 4.5 Operations (super admin)
 

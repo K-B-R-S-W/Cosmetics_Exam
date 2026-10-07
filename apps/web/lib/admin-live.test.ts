@@ -5,7 +5,7 @@ const attempt = (status: LiveAttempt["status"], overrides: Partial<LiveAttempt> 
   id: "a", status, current_position: 0, extra_minutes: 0, last_seen_at: null, violation_count: 0, submitted_at: null,
   candidate: { id: "c", mer_code: "MER-2", full_name: "Candidate", outlet: null }, ...overrides,
 });
-const exam: LiveExam = { id: "e", title: "Exam", status: "live", navigation_mode: "sequential", scheduled_start_at: null, started_at: null, ends_at: null, flag_threshold: 10 };
+const exam: LiveExam = { id: "e", title: "Exam", status: "live", navigation_mode: "sequential", scheduled_start_at: null, started_at: null, ends_at: null, force_ended_at: null, duration_min: 45, flag_threshold: 10 };
 
 describe("admin live derivation", () => {
   it("uses the exact status precedence", () => {

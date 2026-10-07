@@ -4,11 +4,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { ApiError } from "@/lib/api";
 import type { AdminContext } from "@/lib/auth";
+import type { AdminActionName } from "@/lib/admin-controls";
 
 export async function recordAdminAction(
   client: SupabaseClient,
   admin: AdminContext,
-  action: string,
+  action: AdminActionName,
   target: string | null,
   detail: Record<string, unknown> | null = null,
 ): Promise<void> {

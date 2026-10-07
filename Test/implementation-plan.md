@@ -299,7 +299,7 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 | 5A.4 | Force-submit + kick | `app/api/admin/attempts/[id]/force-submit/route.ts`, `/kick/route.ts` — 🔧⁹ Force-submit requires `confirm: true`; kick revokes sessions and removes from LiveKit |
 | 5A.5 | Broadcast API | `app/api/admin/exams/[id]/broadcast/route.ts` — save to `broadcasts`, snapshot all/custom recipients, and publish a content-free nudge. Messages are 1–5,000 characters, sends per exam are unlimited, and candidate toasts display top-right for a fixed 5 seconds. Publish failure is logged but **never fails the admin action** (the 10s heartbeat is the backup) |
 | 5A.6 | Admin action logging | Write all actions to `admin_actions`. 🔧⁹ **Use action names from Section 3 §1.6** |
-| 5A.7 | Exam edit restrictions | UI disables fields based on exam status (draft/scheduled: full edit; live: extend/force-end only) |
+| 5A.7 | Exam edit restrictions | UI disables composition and timing settings after start. Draft/scheduled allow full edit; live allows controls plus title/flag-threshold edits; ended allows title/flag-threshold edits; finalized allows title only |
 
 ### 5B — Pre-exam Check (0.5 day)
 
@@ -308,7 +308,7 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 | 5B.1 | Pre-exam check page | `app/(candidate)/check/page.tsx` |
 | 5B.2 | Chrome check | 🔧⁴ `navigator.userAgentData.brands` check — **fall back to `navigator.userAgent` string** on older Chrome where `userAgentData` is undefined |
 | 5B.3 | Camera preview | Show video feed, confirm working |
-| 5B.4 | Mic level | Show mic input level indicator |
+| 5B.4 | Microphone check | Confirm the existing microphone track is live and not muted. No level meter (Section 2B §5: candidates share one room, so a meter adds no useful acceptance signal) |
 | 5B.5 | Fullscreen test | Request fullscreen, confirm it works |
 | 5B.6 | Network check | Test API connectivity |
 | 5B.7 | Monitor check | `screen.isExtended` warning (🔧⁴ guarded — skip on Android where it doesn't exist) |

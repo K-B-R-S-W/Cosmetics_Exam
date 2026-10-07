@@ -6,6 +6,8 @@ export type LiveExam = {
   scheduled_start_at: string | null;
   started_at: string | null;
   ends_at: string | null;
+  force_ended_at: string | null;
+  duration_min: number;
   flag_threshold: number;
 };
 

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { AccessToken, TrackSource } from "livekit-server-sdk";
+import { AccessToken, RoomServiceClient, TrackSource } from "livekit-server-sdk";
 
 const CANDIDATE_TOKEN_TTL_SECONDS = 4 * 60 * 60;
 const ADMIN_TOKEN_TTL_SECONDS = 12 * 60 * 60;
@@ -100,4 +100,15 @@ export async function buildAdminLiveKitToken(input: {
     canUpdateOwnMetadata: false,
   });
   return { token: await accessToken.toJwt(), url: configuration.url, room, identity };
+}
+
+export async function removeCandidateParticipant(examId: string, attemptId: string): Promise<boolean> {
+  try {
+    const configuration = readLiveKitConfiguration();
+    const rooms = new RoomServiceClient(configuration.httpUrl, configuration.apiKey, configuration.apiSecret);
+    await rooms.removeParticipant(`exam_${examId}`, `c_${attemptId}`);
+    return true;
+  } catch {
+    return false;
+  }
 }

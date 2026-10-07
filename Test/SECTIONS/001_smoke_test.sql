@@ -1363,6 +1363,55 @@ begin
     '16t: submitted attempts must ignore late client incidents';
 end $$;
 
+-- 17. Phase 5 admin force-end uses one database timestamp and is retry-safe.
+do $$
+declare
+  v_exam uuid;
+  v_candidate_open uuid;
+  v_candidate_done uuid;
+  v_attempt_done uuid;
+  v_result text;
+  v_ends_at timestamptz;
+  v_force_ended_at timestamptz;
+  v_deadline timestamptz;
+  v_collecting int;
+  v_submitted int;
+begin
+  insert into public.exams (title, duration_min, status, started_at, ends_at)
+  values ('Smoke force-end exam', 30, 'live', clock_timestamp(), clock_timestamp() + interval '30 minutes')
+  returning id into v_exam;
+  insert into public.candidates (mer_code, full_name, nic_hash)
+  values ('SMOKE-FORCE-OPEN', 'Synthetic Open', 'synthetic-hash-open') returning id into v_candidate_open;
+  insert into public.candidates (mer_code, full_name, nic_hash)
+  values ('SMOKE-FORCE-DONE', 'Synthetic Done', 'synthetic-hash-done') returning id into v_candidate_done;
+  insert into public.exam_candidates (exam_id, candidate_id) values
+    (v_exam, v_candidate_open), (v_exam, v_candidate_done);
+  select id into v_attempt_done from public.attempts where exam_id = v_exam and candidate_id = v_candidate_done;
+  update public.attempts set status = 'submitted', submit_reason = 'manual', submitted_at = clock_timestamp() where id = v_attempt_done;
+
+  select out_result, out_ends_at, out_force_ended_at, out_collection_deadline,
+         out_collecting, out_already_submitted
+    into v_result, v_ends_at, v_force_ended_at, v_deadline, v_collecting, v_submitted
+    from public.force_end_exam(v_exam);
+  assert v_result = 'ended' and v_ends_at = v_force_ended_at
+     and v_deadline = v_force_ended_at + interval '15 seconds'
+     and v_collecting = 1 and v_submitted = 1,
+    '17a: force-end must use one database timestamp and leave open attempts for collection';
+  assert (select status from public.attempts where exam_id = v_exam and candidate_id = v_candidate_open) = 'not_started',
+    '17a: force-end must not submit or synthesize an open attempt';
+
+  select out_result, out_ends_at, out_force_ended_at
+    into v_result, v_ends_at, v_force_ended_at
+    from public.force_end_exam(v_exam);
+  assert v_result = 'already_ended' and v_ends_at = v_force_ended_at,
+    '17b: repeated force-end must return the existing transition';
+
+  assert has_function_privilege('service_role', 'public.force_end_exam(uuid)', 'EXECUTE')
+     and not has_function_privilege('anon', 'public.force_end_exam(uuid)', 'EXECUTE')
+     and not has_function_privilege('authenticated', 'public.force_end_exam(uuid)', 'EXECUTE'),
+    '17c: force_end_exam must be service-role only';
+end $$;
+
 select
   'SMOKE TEST PASSED' as result,
   current_setting('app.smoke_generate_paper_ms')::numeric as generate_paper_100_question_ms;

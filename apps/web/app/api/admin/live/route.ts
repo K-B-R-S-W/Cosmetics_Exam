@@ -6,7 +6,7 @@ import type { LiveAttempt, LiveExam, LiveProgress } from "@/lib/admin-live";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
 const ROUTE = "/api/admin/live";
-const EXAM_COLUMNS = "id,title,status,navigation_mode,scheduled_start_at,started_at,ends_at,flag_threshold";
+const EXAM_COLUMNS = "id,title,status,navigation_mode,scheduled_start_at,started_at,ends_at,force_ended_at,duration_min,flag_threshold";
 const ATTEMPT_COLUMNS = "id,status,current_position,extra_minutes,last_seen_at,violation_count,submitted_at,candidates!inner(id,mer_code,full_name,outlet)";
 const PROGRESS_COLUMNS = "attempt_id,status,current_position,total_questions,answered_count,flagged_count";
 const querySchema = z.object({ exam: z.string().uuid().optional(), view: z.enum(["full", "progress"]).default("full") }).strict();

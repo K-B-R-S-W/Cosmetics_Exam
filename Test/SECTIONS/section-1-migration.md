@@ -93,6 +93,7 @@ The Security Advisor warnings for `is_admin()` and `is_super_admin()` are accept
 | 1E.6–1E.7 | Run `005_question_rpcs.sql`; question save/delete/reorder and answer-key save are atomic and lock the exam row |
 | 2F.5 | Run `006_exam_scheduler.sql`; scheduled start, due submission and finalization use database-clock RPCs, and ordinary exams remain visibly `ended` for one worker tick before finalization |
 | 3B.1–3B.7 | Run `007_proctoring.sql`; event, heartbeat, disconnect, snapshot-failure, login-event and dismiss/restore mutations are atomic and callable only by `service_role` |
+| 5A.3 | Run `008_admin_controls.sql`; force-end is an atomic database-clock transition and repeated calls return the original timestamps without resubmitting attempts |
 | 1A.2 | Run the checked-in smoke test after all migrations and require `SMOKE TEST PASSED` |
 | 1A.3 | Verify RLS plus the explicit `anon`, `authenticated`, and `service_role` ACL assertions in the smoke test |
 | 1A.4 | Verify the six Realtime publication tables listed above |
@@ -144,6 +145,7 @@ The migration and smoke test are intentionally not embedded here. Use these chec
 - [`005_question_rpcs.sql`](../../supabase/migrations/005_question_rpcs.sql)
 - [`006_exam_scheduler.sql`](../../supabase/migrations/006_exam_scheduler.sql)
 - [`007_proctoring.sql`](../../supabase/migrations/007_proctoring.sql)
+- [`008_admin_controls.sql`](../../supabase/migrations/008_admin_controls.sql)
 - [`001_smoke_test.sql`](./001_smoke_test.sql)
 
 This prevents the documentation copy from drifting away from the executable source of truth.

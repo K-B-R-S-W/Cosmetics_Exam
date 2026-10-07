@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { AdminExamControls } from "@/components/admin/AdminExamControls";
 import { CandidatePanel } from "@/components/admin/CandidatePanel";
 import { ThresholdControl } from "@/components/admin/ThresholdControl";
 import { VideoTile } from "@/components/admin/VideoTile";
@@ -165,13 +166,14 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
           <div className="w-32"><ThresholdControl examId={exam.id} initialValue={exam.flag_threshold} disabled={exam.status === "finalized"} /></div>
         </div>
       </div>
+      <div className="mt-4"><AdminExamControls exam={exam} attempts={attempts} onChanged={loadFull} /></div>
       {liveUpdatesPaused ? <p role="status" className="mt-4 border border-warn bg-warn-tint p-3">Live updates paused. Reconnecting…</p> : null}
       {liveKit.connectionLost ? <p role="status" className="mt-4 border border-warn bg-warn-tint p-3">Video is not available. Status, progress and violations still update.</p> : null}
       {liveKit.audioBlocked ? <p role="alert" className="mt-4 border border-warn bg-warn-tint p-3">Audio was blocked by the browser. Click Listen again.</p> : null}
       <div className="mt-5 flex flex-wrap gap-2" aria-label="Candidate filters">{FILTERS.map((name) => <button key={name} type="button" aria-pressed={filter === name} onClick={() => setFilter(name)} className={`rounded-full border border-line px-4 py-2 ${filter === name ? "bg-ink text-surface" : "bg-surface"}`}>{name} ({counts[name]})</button>)}</div>
       <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{visible.map(({ attempt, status }) => <VideoTile key={attempt.id} attempt={attempt} status={status} threshold={exam.flag_threshold} progress={progressLabel(exam, attempt, progressById.get(attempt.id))} videoTrack={liveKit.videoTracks[attempt.id]} speakerOn={liveKit.speakerAttemptId === attempt.id} onToggleSpeaker={() => void liveKit.toggleSpeaker(attempt.id)} onOpen={() => { setReturnFocus(document.activeElement as HTMLElement); setSelectedId(attempt.id); void loadEvents(attempt.id); }} />)}</div>
       {!visible.length ? <p className="mt-8 text-center text-muted">No candidates match this filter.</p> : null}
-      {selected ? <CandidatePanel attempt={selected} status={statusFor(selected)} threshold={exam.flag_threshold} progress={progressLabel(exam, selected, progressById.get(selected.id))} videoTrack={liveKit.videoTracks[selected.id]} speakerOn={liveKit.speakerAttemptId === selected.id} events={events} eventsLoading={eventsLoading} onToggleSpeaker={() => void liveKit.toggleSpeaker(selected.id)} onEventsChanged={() => { void loadEvents(selected.id); void loadFull(); }} onClose={() => { setSelectedId(undefined); setEvents([]); }} returnFocus={returnFocus} /> : null}
+      {selected ? <CandidatePanel examId={exam.id} attempt={selected} status={statusFor(selected)} threshold={exam.flag_threshold} progress={progressLabel(exam, selected, progressById.get(selected.id))} videoTrack={liveKit.videoTracks[selected.id]} speakerOn={liveKit.speakerAttemptId === selected.id} events={events} eventsLoading={eventsLoading} onToggleSpeaker={() => void liveKit.toggleSpeaker(selected.id)} onEventsChanged={() => { void loadEvents(selected.id); void loadFull(); }} onClose={() => { setSelectedId(undefined); setEvents([]); }} returnFocus={returnFocus} /> : null}
       {toast ? <p role="status" className="fixed bottom-5 right-5 z-40 max-w-sm border border-alert bg-surface p-4 shadow-lg">{toast}</p> : null}
     </section>
   );

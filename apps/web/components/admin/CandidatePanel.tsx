@@ -5,11 +5,13 @@ import { useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { CandidateBadge } from "@/components/admin/CandidateBadge";
+import { CandidateActions } from "@/components/admin/CandidateActions";
 import { ViolationTimeline } from "@/components/admin/ViolationTimeline";
 import type { LiveAttempt, LiveStatus } from "@/lib/admin-live";
 import type { ViolationEvent } from "@/lib/violation-events";
 
-export function CandidatePanel({ attempt, status, threshold, progress, videoTrack, speakerOn, events, eventsLoading, onClose, onToggleSpeaker, onEventsChanged, returnFocus }: {
+export function CandidatePanel({ examId, attempt, status, threshold, progress, videoTrack, speakerOn, events, eventsLoading, onClose, onToggleSpeaker, onEventsChanged, returnFocus }: {
+  examId: string;
   attempt: LiveAttempt;
   status: LiveStatus;
   threshold: number;
@@ -65,6 +67,7 @@ export function CandidatePanel({ attempt, status, threshold, progress, videoTrac
         <div><dt className="text-sm text-muted">Last seen</dt><dd>{lastSeen}</dd></div>
         <div><dt className="text-sm text-muted">Violations</dt><dd><CandidateBadge merCode={attempt.candidate.mer_code} count={attempt.violation_count} threshold={threshold} /></dd></div>
       </dl>
+      <CandidateActions attempt={attempt} examId={examId} onChanged={onEventsChanged} />
       <h3 className="mt-6 text-lg font-bold">Incident timeline</h3>
       {eventsLoading ? <p className="mt-3 text-muted">Loading incidents…</p> : events.length ? <div className="mt-3"><ViolationTimeline events={events} onChanged={onEventsChanged} /></div> : <p className="mt-3 text-muted">No incidents recorded.</p>}
     </aside>
