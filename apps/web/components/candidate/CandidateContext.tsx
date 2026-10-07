@@ -14,6 +14,7 @@ import {
 } from "react";
 
 import { Button } from "@/components/ui/Button";
+import { useCandidateLiveKit } from "@/components/candidate/LiveKitContext";
 import { routeFor } from "@/lib/candidate-routing";
 import type { ApiErrorPayload, CandidateMe, PaperBody, StateBody } from "@/lib/candidate-types";
 import { getAnswerDraftStore } from "@/lib/indexeddb";
@@ -48,6 +49,7 @@ async function payload(response: Response): Promise<unknown> {
 export function CandidateProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { stop: stopMedia } = useCandidateLiveKit();
   const [state, setState] = useState<StateBody | null>(null);
   const [me, setMe] = useState<CandidateMe | null>(null);
   const [paper, setPaper] = useState<PaperBody | null>(null);
@@ -78,6 +80,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   );
 
   const resetCandidateSession = useCallback(() => {
+    void stopMedia();
     if (activeAttemptId) void getAnswerDraftStore().clearAttempt(activeAttemptId);
     sessionGeneration.current += 1;
     setState(null);
@@ -91,7 +94,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     statePromise.current = null;
     stateLoaded.current = false;
     sessionStorage.removeItem("identityConfirmed");
-  }, [activeAttemptId]);
+  }, [activeAttemptId, stopMedia]);
 
   const refreshState = useCallback(() => {
     if (!statePromise.current) {
@@ -194,6 +197,12 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     pathname,
     checkPassed,
   });
+  const terminalScreen = "screen" in decision ? decision.screen : null;
+  useEffect(() => {
+    if (terminalScreen === "ended" || terminalScreen === "signed_out" || terminalScreen === "please_sign_in") {
+      void stopMedia();
+    }
+  }, [stopMedia, terminalScreen]);
   useEffect(() => {
     if ("redirect" in decision && decision.redirect !== pathname) {
       router.replace(decision.redirect);

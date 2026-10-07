@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, render, renderHook, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -36,8 +37,10 @@ const mocks = vi.hoisted(() => {
     }
   }
   const rooms: Room[] = [];
-  return { createLocalTracks: vi.fn(), rooms, Room };
+  return { createLocalTracks: vi.fn(), pathname: "/check", rooms, Room };
 });
+
+vi.mock("next/navigation", () => ({ usePathname: () => mocks.pathname }));
 
 class FakeMediaTrack extends EventTarget {
   kind: "audio" | "video";
@@ -65,6 +68,7 @@ vi.mock("livekit-client", () => ({
 import { useLiveKit } from "./useLiveKit";
 import { useProctoring } from "./useProctoring";
 import { candidateEventSchema } from "@/lib/proctoring-input";
+import { CandidateLiveKitProvider } from "@/components/candidate/LiveKitContext";
 
 class FakeMediaStream {
   constructor(readonly tracks: MediaStreamTrack[]) {}
@@ -81,6 +85,7 @@ function grantPermissions(granted = true) {
 class FakeMediaDevices extends EventTarget {}
 
 beforeEach(() => {
+  mocks.pathname = "/check";
   mocks.rooms.length = 0;
   mocks.createLocalTracks.mockReset().mockResolvedValue([new FakeLocalTrack("video"), new FakeLocalTrack("audio")]);
   vi.stubGlobal("MediaStream", FakeMediaStream);
@@ -90,6 +95,7 @@ beforeEach(() => {
   Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: new FakeMediaDevices() });
   sessionStorage.clear();
   grantPermissions();
+  Object.defineProperty(HTMLMediaElement.prototype, "play", { configurable: true, value: vi.fn().mockResolvedValue(undefined) });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -102,11 +108,35 @@ describe("useLiveKit", () => {
       video: { resolution: { width: 320, height: 240 }, frameRate: { ideal: 30, max: 30 } },
     });
     const room = mocks.rooms[0]!;
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/livekit/token")).toHaveLength(1);
+    expect(room.connect).toHaveBeenCalledTimes(1);
     expect(room.options.stopLocalTrackOnUnpublish).toBe(false);
     expect(room.localParticipant.publishTrack).toHaveBeenCalledTimes(2);
     expect(room.localParticipant.publishTrack).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ simulcast: false, source: "camera" }));
     expect(room.localParticipant.publishTrack).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ simulcast: false, source: "microphone" }));
     expect(hook.result.current.status).toBe("connected");
+  });
+
+  it("silently reacquires once under Strict Mode on a waiting-room reload", async () => {
+    mocks.pathname = "/waiting";
+    render(<StrictMode><CandidateLiveKitProvider><p>Waiting room</p></CandidateLiveKitProvider></StrictMode>);
+    await waitFor(() => expect(mocks.rooms).toHaveLength(1));
+    await waitFor(() => expect(mocks.rooms[0]!.connect).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/livekit/token")).toHaveLength(1);
+  });
+
+  it("stops every track and disconnects the room on explicit termination", async () => {
+    const hook = renderHook(() => useLiveKit());
+    await act(async () => { await hook.result.current.acquireAndConnect(); });
+    const room = mocks.rooms[0]!;
+    const tracks = [...room.localParticipant.trackPublications.values()].map(({ track }) => track);
+    await act(async () => { await hook.result.current.stop(); });
+    expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
+    expect(room.disconnect).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.status).toBe("stopped");
+    await act(async () => { await hook.result.current.stop(); });
+    expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
+    expect(room.disconnect).toHaveBeenCalledTimes(1);
   });
 
   it("caps Android capture at 15 fps", async () => {

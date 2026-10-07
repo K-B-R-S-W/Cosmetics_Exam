@@ -5,10 +5,12 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CandidateProvider, useCandidate } from "./CandidateContext";
+import { useCandidateLiveKit } from "./LiveKitContext";
 import { CheckScreen } from "./CheckScreen";
 import { ConfirmScreen } from "./ConfirmScreen";
 import { LoginForm } from "./LoginForm";
 import { RulesScreen } from "./RulesScreen";
+import CandidateLayout from "@/app/(candidate)/layout";
 
 const navigation = vi.hoisted(() => ({
   path: "/login",
@@ -16,15 +18,64 @@ const navigation = vi.hoisted(() => ({
   replace: vi.fn<(path: string) => void>(),
 }));
 
+const liveKit = vi.hoisted(() => {
+  class Room {
+    state = "disconnected";
+    connect = vi.fn(async () => { this.state = "connected"; });
+    disconnect = vi.fn(async () => { this.state = "disconnected"; });
+    localParticipant = {
+      trackPublications: new Map<number, { track: FakeLocalTrack }>(),
+      publishTrack: vi.fn(async (track: FakeLocalTrack) => {
+        this.localParticipant.trackPublications.set(this.localParticipant.trackPublications.size, { track });
+      }),
+      unpublishTrack: vi.fn(async () => undefined),
+    };
+    handlers = new Map<string, Set<(...args: unknown[]) => void>>();
+    constructor() { liveKit.rooms.push(this); }
+    on(event: string, handler: (...args: unknown[]) => void) { const handlers = this.handlers.get(event) ?? new Set(); handlers.add(handler); this.handlers.set(event, handlers); }
+    off(event: string, handler: (...args: unknown[]) => void) { this.handlers.get(event)?.delete(handler); }
+  }
+  return { createLocalTracks: vi.fn(), rooms: [] as Room[], Room };
+});
+
 vi.mock("next/navigation", () => ({
   usePathname: () => navigation.path,
   useRouter: () => navigation,
   useSearchParams: () => ({ get: () => null }),
 }));
 
+vi.mock("livekit-client", () => ({
+  ConnectionState: { Disconnected: "disconnected", Connected: "connected" },
+  RoomEvent: { Reconnecting: "reconnecting", Reconnected: "reconnected", Disconnected: "disconnected" },
+  Track: { Kind: { Video: "video", Audio: "audio" }, Source: { Camera: "camera", Microphone: "microphone" } },
+  Room: liveKit.Room,
+  createLocalTracks: liveKit.createLocalTracks,
+}));
+
+class FakeMediaTrack extends EventTarget {
+  kind: "audio" | "video";
+  muted = false;
+  readyState: MediaStreamTrackState = "live";
+  stop = vi.fn(() => { this.readyState = "ended"; });
+  constructor(kind: "audio" | "video") { super(); this.kind = kind; }
+}
+
+class FakeLocalTrack {
+  kind: "audio" | "video";
+  mediaStreamTrack: FakeMediaTrack;
+  stop = vi.fn(() => this.mediaStreamTrack.stop());
+  constructor(kind: "audio" | "video") { this.kind = kind; this.mediaStreamTrack = new FakeMediaTrack(kind); }
+}
+
+class FakeMediaStream {
+  constructor(readonly tracks: MediaStreamTrack[]) {}
+  getTracks() { return this.tracks; }
+}
+
 type CandidateKey = "A" | "B";
 let activeCandidate: CandidateKey | null;
 let attemptStatus: "not_started" | "acknowledged";
+let candidatePhase: "waiting" | "live";
 const fetchMock = vi.fn();
 
 const people = {
@@ -42,11 +93,11 @@ function json(body: unknown, status = 200): Response {
 function stateBody(key: CandidateKey) {
   return {
     server_time: "2026-10-04T10:00:00.000Z",
-    phase: "waiting",
+    phase: candidatePhase,
     exam: {
       id: `exam-${key}`,
       title: people[key].exam,
-      status: "scheduled",
+      status: candidatePhase === "live" ? "live" : "scheduled",
       navigation_mode: "free",
       scheduled_start_at: null,
       started_at: null,
@@ -93,11 +144,16 @@ function CurrentPage() {
   if (navigation.path === "/confirm") return <ConfirmScreen />;
   if (navigation.path === "/rules") return <RulesScreen />;
   if (navigation.path === "/check") return <CheckScreen />;
+  if (navigation.path === "/waiting" || navigation.path === "/exam") return <StateRefreshProbe />;
   return null;
 }
 
 function App() {
   return <CandidateProvider><CurrentPage /></CandidateProvider>;
+}
+
+function LayoutApp() {
+  return <CandidateLayout><CurrentPage /></CandidateLayout>;
 }
 
 function PaperProbe() {
@@ -108,6 +164,21 @@ function PaperProbe() {
 function HeartbeatProbe() {
   const { heartbeatNow } = useCandidate();
   return <button onClick={() => void heartbeatNow().catch(() => null)}>Heartbeat now</button>;
+}
+
+function StateRefreshProbe() {
+  const { refreshState } = useCandidate();
+  return <button onClick={() => void refreshState()}>Refresh state</button>;
+}
+
+function SessionControls() {
+  const candidate = useCandidate();
+  const media = useCandidateLiveKit();
+  return <>
+    <button onClick={() => void media.acquireAndConnect()}>Connect media</button>
+    <button onClick={() => candidate.resetCandidateSession()}>Reset session</button>
+    <button onClick={() => void candidate.refreshState().catch(() => null)}>Refresh session</button>
+  </>;
 }
 
 function enterLogin(key: CandidateKey) {
@@ -127,8 +198,11 @@ async function rerenderAt(view: ReturnType<typeof render>, path: string) {
 }
 
 beforeEach(() => {
+  liveKit.rooms.length = 0;
+  liveKit.createLocalTracks.mockReset().mockResolvedValue([new FakeLocalTrack("video"), new FakeLocalTrack("audio")]);
   activeCandidate = null;
   attemptStatus = "not_started";
+  candidatePhase = "waiting";
   navigation.path = "/login";
   navigation.push.mockReset().mockImplementation((path) => {
     navigation.path = path.split("?", 1)[0]!;
@@ -142,6 +216,16 @@ beforeEach(() => {
     return 1;
   });
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  vi.stubGlobal("MediaStream", FakeMediaStream);
+  Object.defineProperty(HTMLMediaElement.prototype, "play", { configurable: true, value: vi.fn().mockResolvedValue(undefined) });
+  Object.defineProperty(navigator, "permissions", {
+    configurable: true,
+    value: { query: vi.fn().mockResolvedValue({ state: "granted" }) },
+  });
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+  });
   fetchMock.mockReset().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/auth/login") {
@@ -161,6 +245,9 @@ beforeEach(() => {
       activeCandidate = null;
       return json({ ok: true });
     }
+    if (url === "/api/livekit/token") {
+      return json({ token: "token", url: "ws://localhost:7880", room: "exam-A", identity: "candidate-A" });
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -172,6 +259,110 @@ afterEach(() => {
 });
 
 describe("CandidateProvider flow state", () => {
+  it("keeps one LiveKit token and room through the transient check redirect, waiting and exam", async () => {
+    activeCandidate = "A";
+    attemptStatus = "acknowledged";
+    navigation.path = "/check";
+    navigation.push.mockImplementation(() => undefined);
+    const view = render(<LayoutApp />);
+    await screen.findByRole("heading", { name: "Pre-exam check" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow camera and mic" }));
+    await screen.findByText("Camera and microphone are connected.");
+    const room = liveKit.rooms[0]!;
+    const tracks = [...room.localParticipant.trackPublications.values()].map(({ track }) => track);
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/waiting"));
+    expect(room.disconnect).not.toHaveBeenCalled();
+    expect(tracks.every((track) => track.mediaStreamTrack.readyState === "live")).toBe(true);
+
+    navigation.path = "/waiting";
+    view.rerender(<LayoutApp />);
+    candidatePhase = "live";
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh state" }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/exam/state")).toHaveLength(2));
+    navigation.path = "/exam";
+    view.rerender(<LayoutApp />);
+
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect({
+      tokenRequests: fetchMock.mock.calls.filter(([url]) => String(url) === "/api/livekit/token").length,
+      roomConnections: liveKit.rooms.reduce((count, room) => count + room.connect.mock.calls.length, 0),
+    }).toEqual({ tokenRequests: 1, roomConnections: 1 });
+  });
+
+  it("clears a terminal stop when a new login reaches Check and explicitly acquires media", async () => {
+    navigation.path = "/login";
+    const view = render(<LayoutApp />);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    activeCandidate = "A";
+    attemptStatus = "acknowledged";
+    navigation.path = "/check";
+    view.rerender(<LayoutApp />);
+    await screen.findByRole("heading", { name: "Pre-exam check" });
+    fireEvent.click(screen.getByRole("button", { name: "Allow camera and mic" }));
+    await screen.findByText("Camera and microphone are connected.");
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/livekit/token")).toHaveLength(1);
+    expect(liveKit.rooms).toHaveLength(1);
+    expect(liveKit.rooms[0]!.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("resetCandidateSession stops media without silently reacquiring on Waiting", async () => {
+    activeCandidate = "A";
+    attemptStatus = "acknowledged";
+    navigation.path = "/waiting";
+    render(<CandidateLayout><SessionControls /></CandidateLayout>);
+    await screen.findByRole("button", { name: "Connect media" });
+    await waitFor(() => expect(liveKit.rooms).toHaveLength(1));
+    const room = liveKit.rooms[0]!;
+    await waitFor(() => expect(room.connect).toHaveBeenCalledTimes(1));
+    const tracks = [...room.localParticipant.trackPublications.values()].map(({ track }) => track);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset session" }));
+    await waitFor(() => expect(room.disconnect).toHaveBeenCalledTimes(1));
+    expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/livekit/token")).toHaveLength(1);
+  });
+
+  it.each([
+    ["ended", 200, "This exam has ended."],
+    ["session_revoked", 401, "You were signed out"],
+    ["unauthenticated", 401, "Please sign in again"],
+  ])("terminal screen %s stops media and does not reconnect on Exam", async (code, status, heading) => {
+    activeCandidate = "A";
+    attemptStatus = "acknowledged";
+    navigation.path = "/exam";
+    let stateRequests = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/livekit/token") return json({ token: "token", url: "ws://localhost:7880", room: "exam-A", identity: "candidate-A" });
+      if (url === "/api/exam/state") {
+        stateRequests += 1;
+        const base = stateBody("A");
+        if (stateRequests === 1) return json({ ...base, phase: "live", exam: { ...base.exam, status: "live" }, attempt: { ...base.attempt, status: "in_progress" } });
+        if (code === "ended") return json({ ...base, phase: "closed", exam: { ...base.exam, status: "ended" } });
+        return json({ error: { code, message: "Synthetic terminal state" } }, status);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<CandidateLayout><SessionControls /></CandidateLayout>);
+    await screen.findByRole("button", { name: "Connect media" });
+    await waitFor(() => expect(liveKit.rooms).toHaveLength(1));
+    const room = liveKit.rooms[0]!;
+    await waitFor(() => expect(room.connect).toHaveBeenCalledTimes(1));
+    const tracks = [...room.localParticipant.trackPublications.values()].map(({ track }) => track);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }));
+    expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
+    await waitFor(() => expect(room.disconnect).toHaveBeenCalledTimes(1));
+    expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/livekit/token")).toHaveLength(1);
+  });
+
   it.each([
     ["unauthenticated", "Please sign in again"],
     ["session_revoked", "You were signed out"],

@@ -8,6 +8,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -50,13 +51,33 @@ function previewMode(pathname: string): CameraPreviewMode | null {
 export function CandidateLiveKitProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const liveKit = useLiveKit();
+  const terminated = useRef(false);
   const [previewElement, setPreviewElement] = useState<HTMLVideoElement | null>(null);
   const setPreview = useCallback((element: HTMLVideoElement | null) => setPreviewElement(element), []);
   const mode = previewMode(pathname);
-  const { stream, trySilentReacquire } = liveKit;
+  const {
+    acquireAndConnect: connectMedia,
+    stop: stopMedia,
+    stream,
+    trySilentReacquire,
+  } = liveKit;
+
+  const acquireAndConnect = useCallback(() => {
+    terminated.current = false;
+    return connectMedia();
+  }, [connectMedia]);
+
+  const stop = useCallback(() => {
+    terminated.current = true;
+    return stopMedia();
+  }, [stopMedia]);
 
   useEffect(() => {
-    if ((pathname === "/waiting" || pathname === "/exam") && !stream) {
+    if (pathname === "/login") terminated.current = false;
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!terminated.current && (pathname === "/waiting" || pathname === "/exam") && !stream) {
       void trySilentReacquire();
     }
   }, [pathname, stream, trySilentReacquire]);
@@ -69,9 +90,9 @@ export function CandidateLiveKitProvider({ children }: { children: ReactNode }) 
     cameraLost: liveKit.cameraLost,
     microphoneLost: liveKit.microphoneLost,
     connectionLost: liveKit.connectionLost,
-    acquireAndConnect: liveKit.acquireAndConnect,
-    stop: liveKit.stop,
-  }), [liveKit, previewElement]);
+    acquireAndConnect,
+    stop,
+  }), [acquireAndConnect, liveKit, previewElement, stop]);
 
   return (
     <CandidateLiveKitContext.Provider value={value}>
