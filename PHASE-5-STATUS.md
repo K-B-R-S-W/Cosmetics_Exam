@@ -10,6 +10,7 @@ Status: locally implemented and unit-tested. Migration `008_admin_controls.sql` 
 - Extend and broadcast are not idempotent. After a 503 or audit failure, the UI reloads server state before offering another attempt because the database change may already have committed.
 - Kick revokes sessions before best-effort LiveKit removal. The signed-out candidate lifecycle remains the only browser-side terminal media stop.
 - The existing worker remains responsible for submissions after the force-end collection window; the route does not loop over attempts or synthesize answers.
+- Candidate announcements are discovered as safe `{id,sent_at}` references in state, claimed immediately before display, and shown one at a time in Waiting or Exam. The durable claim prevents replay after refresh, reconnect, or a second tab.
 
 ### Database-call profile
 
@@ -24,6 +25,7 @@ Counts include the normal admin authorization (`getUser` plus the cached profile
 - Force-submit: 2 auth + 1 attempt lookup + 1 `submit_attempt` RPC; on a changed row add 1 audit insert + 1 Broadcast = **4–6 calls**.
 - Kick: 2 auth + 1 attempt lookup + 1 session update + 1 LiveKit removal + 1 audit insert + 1 Broadcast = **7 calls**.
 - Broadcast send: 2 auth + 1 `create_broadcast` RPC + 1 audit insert + 1 Broadcast = **5 calls**. History load is 2 auth + 1 select = **3 calls**.
+- Announcement claim: 1 candidate-session authorization query + 1 `claim_broadcast` RPC = **2 database calls**. The heartbeat announcement read is inside the existing `candidate_heartbeat` RPC, so it adds **0 round trips**; `GET /api/exam/state` adds 1 announcement select, run in parallel with its exam select.
 
 ## 5B — Pre-exam check
 

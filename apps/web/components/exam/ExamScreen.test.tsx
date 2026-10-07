@@ -70,6 +70,19 @@ describe("ExamScreen", () => {
     expect(mocks.proctoring).toHaveBeenLastCalledWith(expect.objectContaining({ resumed: true, inProgress: true }));
   });
 
+  it("claims a heartbeat announcement and shows its toast text", async () => {
+    mocks.context.state = { ...state(), announcements: [{ id: "00000000-0000-4000-8000-000000000099", sent_at: "2026-10-04T10:00:00.000Z" }] };
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/claim")) return json({ display: true, announcement: { id: "00000000-0000-4000-8000-000000000099", message: "Bring your answers to the front desk.", sent_at: "2026-10-04T10:00:00.000Z" } });
+      if (url === "/api/answers") return json({ result: "saved", server_time: "2026-10-04T10:00:00.000Z" });
+      throw new Error(`Unexpected request ${url}`);
+    }));
+    render(<ExamScreen />);
+    expect(await screen.findByText('The exam team says: "Bring your answers to the front desk."')).toBeTruthy();
+    expect(fetch).toHaveBeenCalledWith("/api/exam/announcements/00000000-0000-4000-8000-000000000099/claim", expect.anything());
+  });
+
   it("does not mark a waiting-room handoff as resumed", () => {
     mocks.context.hasExamHandoff = vi.fn().mockReturnValue(true);
     render(<ExamScreen />);

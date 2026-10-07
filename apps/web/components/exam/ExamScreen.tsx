@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CandidateErrorScreen, CandidatePaperError, Notice, useCandidate } from "@/components/candidate/CandidateContext";
+import { CandidateAnnouncements } from "@/components/candidate/AnnouncementToast";
 import { useCandidateLiveKit } from "@/components/candidate/LiveKitContext";
 import { CameraBanner } from "@/components/exam/CameraBanner";
 import { QuestionCard, type DraftAnswer } from "@/components/exam/QuestionCard";
@@ -393,6 +394,7 @@ export function ExamScreen() {
 
   return (
     <main className="exam-shell bg-paper">
+      <CandidateAnnouncements announcements={state.announcements} />
       <header className="exam-strip flex min-h-14 items-center justify-between gap-4 border-b border-hairline bg-surface px-5 py-2">
         <div className="exam-strip-title min-w-0"><p className="truncate font-bold" lang={langFor(state.exam.title)}>{state.exam.title}</p>{me ? <p className="truncate text-xs text-muted">{me.candidate.full_name} · {me.candidate.mer_code}</p> : null}</div>
         <p aria-live="off" className="shrink-0 text-sm">{loadedPaper?.navigation_mode === "sequential" && visibleQuestion ? `Question ${visibleQuestion.position + 1} of ${loadedPaper.total_questions}` : `${loadedPaper?.total_questions ?? state.exam.question_count} questions · ${answeredCount} answered`}</p>

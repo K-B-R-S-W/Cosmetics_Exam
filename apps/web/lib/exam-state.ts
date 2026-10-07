@@ -18,6 +18,8 @@ type ExamStateRow = {
   questions: Array<{ count: number }> | { count: number } | null;
 };
 
+type AnnouncementRow = { id: string; sent_at: string };
+
 export function attemptDeadline(endsAt: string | null, extraMinutes: number): string | null {
   if (!endsAt) return null;
   return new Date(new Date(endsAt).getTime() + extraMinutes * 60_000).toISOString();
@@ -47,12 +49,24 @@ export async function buildStateBody(
 ): Promise<StateBody> {
   const supabase = options.supabase ?? createServiceRoleClient();
   const now = options.now ?? new Date();
-  const { data, error } = await supabase
+  const examQuery = supabase
     .from("exams")
     .select("id,title,status,navigation_mode,scheduled_start_at,started_at,ends_at,force_ended_at,questions(count)")
     .eq("id", auth.examId)
     .single();
+  const announcementsQuery = supabase
+    .from("broadcasts")
+    .select("id,sent_at,broadcast_recipients!inner(candidate_id,shown_at)")
+    .eq("exam_id", auth.examId)
+    .eq("broadcast_recipients.candidate_id", auth.candidateId)
+    .is("broadcast_recipients.shown_at", null)
+    .gte("sent_at", new Date(now.getTime() - 10 * 60_000).toISOString())
+    .order("sent_at", { ascending: true })
+    .order("id", { ascending: true })
+    .limit(50);
+  const [{ data, error }, { data: announcementData, error: announcementError }] = await Promise.all([examQuery, announcementsQuery]);
   if (error) throw error;
+  if (announcementError) throw announcementError;
   const exam = data as ExamStateRow;
   const deadline = attemptDeadline(exam.ends_at, auth.extraMinutes ?? 0);
   const forceEnded = exam.force_ended_at !== null;
@@ -80,7 +94,6 @@ export async function buildStateBody(
       deadline,
       submit_reason: auth.submitReason ?? null,
     },
-    // Task 5A.5 adds durable announcement claims. Keep the response shape now.
-    announcements: [],
+    announcements: ((announcementData ?? []) as AnnouncementRow[]).map(({ id, sent_at }) => ({ id, sent_at })),
   };
 }

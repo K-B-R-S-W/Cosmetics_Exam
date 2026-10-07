@@ -1430,6 +1430,54 @@ begin
     '17c: force_end_exam must be service-role only';
 end $$;
 
+-- 18. Announcement discovery returns safe references and durable claims remove them.
+do $$
+declare
+  v_exam uuid;
+  v_candidate uuid;
+  v_attempt uuid;
+  v_session uuid := gen_random_uuid();
+  v_broadcast uuid;
+  v_expired_broadcast uuid;
+  v_claim uuid := gen_random_uuid();
+  v_state jsonb;
+  v_display boolean;
+begin
+  insert into public.exams (title, duration_min, status, scheduled_start_at)
+  values ('Smoke announcement state', 30, 'scheduled', clock_timestamp() + interval '5 minutes')
+  returning id into v_exam;
+  insert into public.candidates (mer_code, full_name, nic_hash)
+  values ('SMOKE-ANNOUNCEMENT', 'Synthetic Announcement', 'synthetic-hash-announcement')
+  returning id into v_candidate;
+  insert into public.exam_candidates (exam_id, candidate_id) values (v_exam, v_candidate);
+  select id into v_attempt from public.attempts where exam_id = v_exam and candidate_id = v_candidate;
+  insert into public.sessions (id, candidate_id, attempt_id) values (v_session, v_candidate, v_attempt);
+
+  select out_broadcast_id into v_broadcast
+    from public.create_broadcast(v_exam, 'Synthetic pending message', 'custom', array[v_candidate]);
+  select out_state into v_state from public.candidate_heartbeat(v_session);
+  assert jsonb_array_length(v_state->'announcements') = 1
+     and v_state->'announcements'->0->>'id' = v_broadcast::text
+     and (v_state->'announcements'->0 ? 'sent_at')
+     and not (v_state->'announcements'->0 ? 'message'),
+    '18a: heartbeat must return one safe announcement reference without message text';
+
+  select out_display into v_display
+    from public.claim_broadcast(v_broadcast, v_candidate, v_claim);
+  assert v_display, '18b: the pending announcement must be claimable';
+  select out_state into v_state from public.candidate_heartbeat(v_session);
+  assert jsonb_array_length(v_state->'announcements') = 0,
+    '18b: a claimed announcement must disappear from heartbeat state';
+
+  select out_broadcast_id into v_expired_broadcast
+    from public.create_broadcast(v_exam, 'Synthetic expired message', 'custom', array[v_candidate]);
+  update public.broadcasts set sent_at = clock_timestamp() - interval '11 minutes'
+   where id = v_expired_broadcast;
+  select out_state into v_state from public.candidate_heartbeat(v_session);
+  assert jsonb_array_length(v_state->'announcements') = 0,
+    '18c: an unclaimed announcement older than ten minutes must be omitted';
+end $$;
+
 select
   'SMOKE TEST PASSED' as result,
   current_setting('app.smoke_generate_paper_ms')::numeric as generate_paper_100_question_ms;
