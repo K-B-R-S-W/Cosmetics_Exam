@@ -1,5 +1,5 @@
 -- =====================================================================
--- 001_smoke_test.sql  —  run AFTER migrations 001 through 007 in the Supabase SQL editor.
+-- 001_smoke_test.sql  —  run AFTER migrations 001 through 010 in the Supabase SQL editor.
 -- Everything runs inside a transaction that is ROLLED BACK, so no data is left behind.
 -- Success = the final result-grid row says "SMOKE TEST PASSED". Any failure raises an error naming the check.
 -- =====================================================================
@@ -1476,6 +1476,119 @@ begin
   select out_state into v_state from public.candidate_heartbeat(v_session);
   assert jsonb_array_length(v_state->'announcements') = 0,
     '18c: an unclaimed announcement older than ten minutes must be omitted';
+end $$;
+
+-- 19. Migration 010: an ordinary exam's own collection deadline applies even
+-- when it has no attempts. This isolated regression calls the authoritative RPC
+-- directly and does not depend on a worker observing this transaction.
+do $$
+declare
+  v_zero_exam uuid := gen_random_uuid();
+  v_result text;
+  v_status text;
+begin
+  insert into public.exams (
+    id, title, started_at, ends_at, duration_min, status
+  ) values (
+    v_zero_exam, 'Isolated zero-attempt future deadline',
+    clock_timestamp(), clock_timestamp() + interval '30 minutes', 30, 'live'
+  );
+
+  select out_result, out_exam_status into v_result, v_status
+    from public.finalize_exam_if_closed(v_zero_exam);
+  assert v_result = 'not_closed' and v_status = 'live'
+     and (select status from public.exams where id = v_zero_exam) = 'live',
+    '19a: zero attempts must not shortcut the ordinary deadline';
+
+  delete from public.exams where id = v_zero_exam;
+end $$;
+
+-- 19b-19e exercise elapsed ordinary deadlines, extensions, open attempts and
+-- the force-end branch. Every row is synthetic and removed inside this block.
+do $$
+declare
+  v_past_zero_exam uuid := gen_random_uuid();
+  v_extended_exam uuid := gen_random_uuid();
+  v_open_exam uuid := gen_random_uuid();
+  v_force_exam uuid := gen_random_uuid();
+  v_candidate uuid := gen_random_uuid();
+  v_attempt uuid;
+  v_result text;
+  v_status text;
+begin
+  insert into public.candidates (id, mer_code, full_name, nic_hash)
+  values (v_candidate, 'MER-SMOKE-010', 'Migration 010 Synthetic Candidate', 'synthetic-hash-010');
+
+  insert into public.exams (
+    id, title, started_at, ends_at, duration_min, status
+  ) values (
+    v_past_zero_exam, 'Zero-attempt elapsed deadline',
+    clock_timestamp() - interval '31 minutes',
+    clock_timestamp() - interval '16 seconds', 30, 'live'
+  );
+  select out_result, out_exam_status into v_result, v_status
+    from public.finalize_exam_if_closed(v_past_zero_exam);
+  assert v_result = 'ended' and v_status = 'ended',
+    '19b: a zero-attempt exam must end normally after its collection deadline';
+
+  insert into public.exams (
+    id, title, started_at, ends_at, duration_min, status
+  ) values (
+    v_extended_exam, 'Closed attempt with extension',
+    clock_timestamp() - interval '31 minutes',
+    clock_timestamp() - interval '16 seconds', 30, 'live'
+  );
+  insert into public.exam_candidates (exam_id, candidate_id) values (v_extended_exam, v_candidate);
+  select id into v_attempt from public.attempts
+   where exam_id = v_extended_exam and candidate_id = v_candidate;
+  update public.attempts
+     set status = 'submitted', submitted_at = clock_timestamp(), submit_reason = 'manual',
+         extra_minutes = 2
+   where id = v_attempt;
+  select out_result, out_exam_status into v_result, v_status
+    from public.finalize_exam_if_closed(v_extended_exam);
+  assert v_result = 'not_closed' and v_status = 'live',
+    '19c: zero open attempts must still honor a closed attempt extension window';
+
+  insert into public.exams (
+    id, title, started_at, ends_at, duration_min, status
+  ) values (
+    v_open_exam, 'Open attempt after base deadline',
+    clock_timestamp() - interval '31 minutes',
+    clock_timestamp() - interval '16 seconds', 30, 'live'
+  );
+  insert into public.exam_candidates (exam_id, candidate_id) values (v_open_exam, v_candidate);
+  select out_result, out_exam_status into v_result, v_status
+    from public.finalize_exam_if_closed(v_open_exam);
+  assert v_result = 'pending_attempts' and v_status = 'live',
+    '19d: an open attempt must prevent ending after the time window closes';
+
+  select id into v_attempt from public.attempts
+   where exam_id = v_open_exam and candidate_id = v_candidate;
+  update public.attempts
+     set status = 'submitted', submitted_at = clock_timestamp(), submit_reason = 'auto'
+   where id = v_attempt;
+  select out_result, out_exam_status into v_result, v_status
+    from public.finalize_exam_if_closed(v_open_exam);
+  assert v_result = 'ended' and v_status = 'ended',
+    '19d: an ordinary exam may end after its last open attempt closes';
+
+  insert into public.exams (
+    id, title, started_at, ends_at, force_ended_at, duration_min, status
+  ) values (
+    v_force_exam, 'Force-ended before ordinary deadline',
+    clock_timestamp() - interval '1 minute',
+    clock_timestamp() + interval '30 minutes',
+    clock_timestamp() - interval '16 seconds', 30, 'ended'
+  );
+  select out_result, out_exam_status into v_result, v_status
+    from public.finalize_exam_if_closed(v_force_exam);
+  assert v_result = 'finalized' and v_status = 'finalized',
+    '19e: force-end must bypass the future ordinary deadline after its collection window';
+
+  delete from public.exams
+   where id in (v_past_zero_exam, v_extended_exam, v_open_exam, v_force_exam);
+  delete from public.candidates where id = v_candidate;
 end $$;
 
 select

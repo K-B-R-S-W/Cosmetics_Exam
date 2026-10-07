@@ -132,7 +132,8 @@ export function createSchedulerSource(client: SupabaseClient): SchedulerSource {
           }
           if (!exam.ends_at || exam.force_ended_at) return false;
           const attempts = exam.attempts || [];
-          return attempts.every((attempt) => atOrBefore(exam.ends_at, cutoff, attempt.extra_minutes));
+          return atOrBefore(exam.ends_at, cutoff)
+            && attempts.every((attempt) => atOrBefore(exam.ends_at, cutoff, attempt.extra_minutes));
         })
         .map(({ id }) => ({ id }));
     },

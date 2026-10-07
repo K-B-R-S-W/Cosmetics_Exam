@@ -84,6 +84,26 @@ describe("Supabase scheduler source", () => {
     ]);
   });
 
+  it("always applies the ordinary exam deadline when selecting lifecycle work", async () => {
+    const lifecycle = query({
+      data: [
+        { id: "zero-inside-window", status: "live", ends_at: "2030-01-01T00:01:00Z", force_ended_at: null, attempts: [] },
+        { id: "zero-past-window", status: "live", ends_at: "2030-01-01T00:00:44Z", force_ended_at: null, attempts: [] },
+        { id: "closed-attempt-with-extension", status: "live", ends_at: "2030-01-01T00:00:00Z", force_ended_at: null, attempts: [{ extra_minutes: 2 }] },
+        { id: "open-attempt-past-window", status: "live", ends_at: "2030-01-01T00:00:00Z", force_ended_at: null, attempts: [{ extra_minutes: 0 }] },
+        { id: "force-ended-before-ordinary-end", status: "ended", ends_at: "2030-01-01T01:00:00Z", force_ended_at: "2030-01-01T00:00:30Z", attempts: [] },
+      ],
+      error: null,
+    });
+    const source = createSchedulerSource({ from: vi.fn(() => lifecycle) } as never);
+
+    await expect(source.listLifecycleExams(new Date("2030-01-01T00:01:00Z"))).resolves.toEqual([
+      { id: "zero-past-window" },
+      { id: "open-attempt-past-window" },
+      { id: "force-ended-before-ordinary-end" },
+    ]);
+  });
+
   it("does not select ended exams as scheduled starts", async () => {
     const scheduled = query({ data: [], error: null });
     const source = createSchedulerSource({ from: vi.fn(() => scheduled) } as never);

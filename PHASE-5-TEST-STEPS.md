@@ -11,13 +11,14 @@ These steps separate local automated coverage from behavior that needs the devel
 ## Part A — 5A admin controls
 
 1. Press **Start now**. Confirm status becomes Live, `started_at` and `ends_at` use the database clock, candidates move from Waiting by polling/Broadcast, and one `start` audit exists.
-2. Retry the same Start request body. Confirm `already_started: true`, unchanged timestamps, and no second audit or Broadcast.
-3. Extend the whole exam, then one candidate. Confirm timers update and the candidate-specific deadline includes `extra_minutes`.
-4. Simulate a 503 after an Extend or announcement commit. Confirm the UI reloads current state before allowing a retry; these actions are not idempotent.
-5. Send all-candidate and selected-candidate announcements. Confirm exact recipients see one top-right toast for 5 seconds and history is newest-first. Send two announcements quickly and confirm they appear one after the other with a one-second empty gap. Send an announcement, then press **Start** so the candidate moves from Waiting to Exam while it is showing; confirm it stays on screen for its full 5 seconds. Refresh during a toast and confirm it does not return. Confirm a candidate omitted from a custom audience sees nothing.
-6. Force-submit one candidate using the confirmation dialog. Confirm partial saved answers remain and the candidate reaches Done.
-7. Kick one candidate. Confirm active sessions are revoked before LiveKit removal, the browser reaches the signed-out screen within the heartbeat interval, media stops once, saved answers remain, and signing in again resumes.
-8. Force-end a live exam. Confirm the screen locks immediately, the 15-second collection window remains, and the worker submits remaining attempts as `forced` without synthetic answers. Wait for the worker to finalize the exam, retry force-end, and confirm 200 `already_ended: true` with no duplicate audit or Broadcast. To simulate a missing audit in your own SQL editor, delete the `force_end` `admin_actions` row for that exam, retry, and confirm exactly one new row appears.
+2. Start with nobody in Waiting and confirm the exam stays Live; for the zero-attempt regression rehearsal, also confirm it remains Live through at least two worker ticks and does not end before `ends_at + 15 seconds`.
+3. Retry the same Start request body. Confirm `already_started: true`, unchanged timestamps, and no second audit or Broadcast.
+4. Extend the whole exam, then one candidate. Confirm timers update and the candidate-specific deadline includes `extra_minutes`.
+5. Simulate a 503 after an Extend or announcement commit. Confirm the UI reloads current state before allowing a retry; these actions are not idempotent.
+6. Send all-candidate and selected-candidate announcements. Confirm exact recipients see one top-right toast for 5 seconds and history is newest-first. Send two announcements quickly and confirm they appear one after the other with a one-second empty gap. Send an announcement, then press **Start** so the candidate moves from Waiting to Exam while it is showing; confirm it stays on screen for its full 5 seconds. Refresh during a toast and confirm it does not return. Confirm a candidate omitted from a custom audience sees nothing.
+7. Force-submit one candidate using the confirmation dialog. Confirm partial saved answers remain and the candidate reaches Done.
+8. Kick one candidate. Confirm active sessions are revoked before LiveKit removal, the browser reaches the signed-out screen within the heartbeat interval, media stops once, saved answers remain, and signing in again resumes.
+9. Force-end a live exam. Confirm the screen locks immediately, the 15-second collection window remains, and the worker submits remaining attempts as `forced` without synthetic answers. Wait for the worker to finalize the exam, retry force-end, and confirm 200 `already_ended: true` with no duplicate audit or Broadcast. To simulate a missing audit in your own SQL editor, delete the `force_end` `admin_actions` row for that exam, retry, and confirm exactly one new row appears.
 
 ## Part B — 5B pre-exam check
 
