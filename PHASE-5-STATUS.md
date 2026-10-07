@@ -37,7 +37,21 @@ Status: locally implemented and unit-tested; real Chrome/device behavior remains
 
 ## 5C — Super-admin health and alerts
 
-Status: not implemented yet.
+Status: locally implemented and unit-tested; no hosted monitor or live service outage has been verified.
+
+- `/admin/health` and `/api/admin/health` require a super admin. The page refreshes every 15 seconds and reports Supabase latency, LiveKit latency/room count, worker freshness, Gemini key state read only from `api_key_state`, and active alerts.
+- A failed Supabase or LiveKit check, or worker heartbeat age over 90 seconds, makes the detailed route non-200 while preserving the safe component-status body. Cooling or disabled Gemini keys are displayed but do not make the route non-200.
+- The public `/api/health` remains minimal and returns 503 when Supabase is unavailable or the worker row is down, missing, or older than 90 seconds. It exposes no internal detail.
+- The top-bar chip is super-admin-only, loads active alerts during the admin layout request, authenticates its Realtime channel, and refreshes its count on alert changes. Resolving is idempotent and writes one `alert_resolve` audit row only on the first change.
+- UptimeRobot configuration is a deployment/manual step and was not performed. Snapshot cleanup remains Phase 7.7 and is not part of this build.
+
+### 5C database-call profile
+
+- Admin layout full load, super admin: cached admin authorization costs at most 1 Auth `getUser` plus 1 `admin_profiles` query, followed by 1 active-alert select = **3 calls**. A plain admin makes no alert query.
+- Detailed health poll: 2 authorization calls + 3 parallel selects (`system_health`, `api_key_state`, `alerts`) + 1 LiveKit request = **6 calls per poll**. At the fixed 15-second interval, one open page makes **20 Auth/Data API calls plus 4 LiveKit calls per minute**.
+- Alert Realtime change: **1 authenticated alerts select** to reconcile the chip; no polling when no event arrives.
+- Resolve alert, first change: 2 authorization calls + 1 conditional alert update + 1 audit insert = **4 calls**. A safe repeat uses the update plus 1 lookup and no audit, also **4 calls**.
+- Public health: **1 `system_health` select per request**.
 
 ## Live verification
 

@@ -4,6 +4,8 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 
 import { SignOutButton } from "@/components/admin/SignOutButton";
+import { AlertChip } from "@/components/admin/AlertChip";
+import type { HealthAlert } from "@/lib/admin-health";
 import type { AdminContext } from "@/lib/auth";
 
 function pageName(pathname: string): string {
@@ -15,7 +17,7 @@ function pageName(pathname: string): string {
   return "Administration";
 }
 
-export function AdminHeader({ admin }: { admin: AdminContext }) {
+export function AdminHeader({ admin, initialAlerts = [] }: { admin: AdminContext; initialAlerts?: HealthAlert[] }) {
   const pathname = usePathname();
 
   return (
@@ -32,7 +34,7 @@ export function AdminHeader({ admin }: { admin: AdminContext }) {
       </div>
       <h1 className="text-md font-bold text-ink">{pageName(pathname)}</h1>
       <div className="ml-auto flex items-center gap-5">
-        <span className="min-w-20" aria-hidden="true" />
+        {admin.role === "super_admin" ? <AlertChip initialAlerts={initialAlerts} /> : <span className="min-w-20" aria-hidden="true" />}
         <div className="text-right text-sm">
           <p className="font-bold text-ink">{admin.name}</p>
           <p className="text-muted">

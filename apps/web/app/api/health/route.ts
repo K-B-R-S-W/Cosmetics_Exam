@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { logger } from "@/lib/logger";
+import { workerHealth } from "@/lib/admin-health";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -14,19 +15,18 @@ export async function GET(): Promise<NextResponse> {
 
   try {
     const supabase = createServiceRoleClient();
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("system_health")
-      .select("component")
-      .limit(1);
+      .select("status,last_heartbeat_at")
+      .eq("component", "worker")
+      .maybeSingle();
 
     if (error) {
       throw new Error("supabase_health_query_failed");
     }
 
-    return NextResponse.json(
-      { ok: true, time: new Date().toISOString() },
-      { status: 200, headers: NO_STORE_HEADERS },
-    );
+    const worker = workerHealth(data);
+    return NextResponse.json({ ok: worker.ok, time: new Date().toISOString() }, { status: worker.ok ? 200 : 503, headers: NO_STORE_HEADERS });
   } catch {
     logger.error("health_check_failed", {
       route: "/api/health",

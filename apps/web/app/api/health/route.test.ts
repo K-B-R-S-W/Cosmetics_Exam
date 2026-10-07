@@ -10,14 +10,15 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import { GET } from "./route";
 
-function mockHealthQuery(error: unknown) {
-  const limit = vi.fn().mockResolvedValue({ error });
-  const select = vi.fn().mockReturnValue({ limit });
+function mockHealthQuery(error: unknown, data: unknown = { status: "ok", last_heartbeat_at: new Date().toISOString() }) {
+  const maybeSingle = vi.fn().mockResolvedValue({ data, error });
+  const eq = vi.fn().mockReturnValue({ maybeSingle });
+  const select = vi.fn().mockReturnValue({ eq });
   const from = vi.fn().mockReturnValue({ select });
 
   mocks.createServiceRoleClient.mockReturnValue({ from });
 
-  return { from, select, limit };
+  return { from, select, eq, maybeSingle };
 }
 
 describe("GET /api/health", () => {
@@ -37,8 +38,15 @@ describe("GET /api/health", () => {
     expect(body.ok).toBe(true);
     expect(Number.isNaN(Date.parse(body.time))).toBe(false);
     expect(query.from).toHaveBeenCalledWith("system_health");
-    expect(query.select).toHaveBeenCalledWith("component");
-    expect(query.limit).toHaveBeenCalledWith(1);
+    expect(query.select).toHaveBeenCalledWith("status,last_heartbeat_at");
+    expect(query.eq).toHaveBeenCalledWith("component", "worker");
+  });
+
+  it("returns 503 without internals when the worker heartbeat is stale", async () => {
+    mockHealthQuery(null, { status: "ok", last_heartbeat_at: new Date(Date.now() - 91_000).toISOString() });
+    const response = await GET();
+    expect(response.status).toBe(503);
+    expect((await response.json()).ok).toBe(false);
   });
 
   it("returns no internal detail when Supabase fails", async () => {

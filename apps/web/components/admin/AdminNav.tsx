@@ -7,7 +7,7 @@ const NAV_ITEMS = [
   { label: "Candidates", href: "/admin/candidates", superAdminOnly: false },
   { label: "Live", href: "/admin/live", superAdminOnly: false },
   { label: "Results", href: null, superAdminOnly: false },
-  { label: "Health", href: null, superAdminOnly: true },
+  { label: "Health", href: "/admin/health", superAdminOnly: true },
 ] as const;
 
 export function AdminNav({ role }: { role: AdminRole }) {

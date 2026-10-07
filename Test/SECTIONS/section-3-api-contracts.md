@@ -145,6 +145,12 @@ New or changed files compared with the plan are marked **NEW**.
 | 43 | `POST, DELETE /api/admin/question-images` **NEW** | admin | 1E.2 | private Storage upload/delete |
 | 44 | `POST /api/exam/announcements/[id]/claim` **NEW** | candidate | 5A.5 | `rpc claim_broadcast` |
 
+### 2.2 Phase 5 health contracts
+
+- `GET /api/admin/health` performs cached super-admin authorization, reads `system_health`, `api_key_state` and unresolved `alerts`, and asks LiveKit for the room list. It never reads Gemini key text or Gemini environment variables. It returns `checked_at`, word-ready component states with latency, worker heartbeat age, key states, and active alerts. Worker age over 90 seconds or an unavailable LiveKit service returns HTTP 503 with the same safe status body; Gemini cooldown alone does not.
+- `POST /api/admin/alerts/[id]/resolve` has an empty body and conditionally sets `resolved_at`. It returns `200 { resolved: true, already_resolved: false }`; a safe repeat returns `already_resolved: true` without a second audit row. It requires same-origin and super-admin authorization.
+- Public `GET /api/health` returns only `{ ok, time }`. It returns 503 when its database query fails or the worker is down/missing/stale by more than 90 seconds. No component, key, alert, credential or database error detail is public.
+
 ### 2.1 Phase 3 write profiles
 
 - `POST /api/events`: (1) candidate-session authorization query; (2) one `record_candidate_event` RPC. A reserved JPEG then causes one private Storage upload, not another table call. Only a failed upload adds one `mark_violation_snapshot_failed` RPC. The event insert and `bump_violation_count` trigger update are inside call 2.

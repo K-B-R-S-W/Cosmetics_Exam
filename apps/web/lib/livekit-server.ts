@@ -112,3 +112,15 @@ export async function removeCandidateParticipant(examId: string, attemptId: stri
     return false;
   }
 }
+
+export async function checkLiveKitHealth(): Promise<{ ok: boolean; latency_ms: number; room_count: number | null }> {
+  const startedAt = performance.now();
+  try {
+    const configuration = readLiveKitConfiguration();
+    const rooms = new RoomServiceClient(configuration.httpUrl, configuration.apiKey, configuration.apiSecret);
+    const result = await rooms.listRooms();
+    return { ok: true, latency_ms: Math.round(performance.now() - startedAt), room_count: result.length };
+  } catch {
+    return { ok: false, latency_ms: Math.round(performance.now() - startedAt), room_count: null };
+  }
+}
