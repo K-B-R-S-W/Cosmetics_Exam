@@ -48,16 +48,6 @@ async function flush() {
 }
 
 describe("WaitingRoom", () => {
-  it("claims and shows announcements while waiting", async () => {
-    currentState = { ...state("waiting", null), announcements: [{ id: "00000000-0000-4000-8000-000000000099", sent_at: "2026-10-04T10:00:00.000Z" }] };
-    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ display: true, announcement: { id: currentState.announcements[0]!.id, message: "Waiting room message", sent_at: currentState.announcements[0]!.sent_at } }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    vi.stubGlobal("fetch", fetcher);
-    render(<WaitingRoom />);
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(screen.getByText('The exam team says: "Waiting room message"')).toBeTruthy();
-    expect(fetcher).toHaveBeenCalledTimes(1);
-  });
-
   it("never shows a negative countdown at 0:00 and leaves polling to the provider heartbeat", async () => {
     currentState = state("waiting", "2026-10-04T10:00:00.000Z");
     render(<WaitingRoom />);

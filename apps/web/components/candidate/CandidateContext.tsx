@@ -14,12 +14,14 @@ import {
 } from "react";
 
 import { Button } from "@/components/ui/Button";
+import { AnnouncementToast } from "@/components/candidate/AnnouncementToast";
 import { useCandidateLiveKit } from "@/components/candidate/LiveKitContext";
 import { useDeviceCheck } from "@/components/candidate/DeviceCheckContext";
 import { routeFor } from "@/lib/candidate-routing";
 import type { ApiErrorPayload, CandidateMe, PaperBody, StateBody } from "@/lib/candidate-types";
 import { getAnswerDraftStore } from "@/lib/indexeddb";
 import { useHeartbeat } from "@/hooks/useHeartbeat";
+import { useAnnouncements } from "@/hooks/useAnnouncements";
 
 export class CandidatePaperError extends Error {
   constructor(readonly code: string, readonly status: number) {
@@ -67,6 +69,11 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   const examHandoff = useRef(false);
   const sessionGeneration = useRef(0);
   const activeAttemptId = state?.attempt.id;
+  const { current: announcement, reset: resetAnnouncements } = useAnnouncements(state?.announcements ?? [], {
+    enabled: pathname === "/waiting" || pathname === "/exam",
+    identityKey: activeAttemptId ?? null,
+    resetKey: 0,
+  });
   const applyHeartbeatState = useCallback((next: StateBody) => {
     setError(null);
     setState(next);
@@ -91,6 +98,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     void releaseDeviceCheck();
     if (activeAttemptId) void getAnswerDraftStore().clearAttempt(activeAttemptId);
     sessionGeneration.current += 1;
+    resetAnnouncements();
     setState(null);
     setMe(null);
     setPaper(null);
@@ -103,7 +111,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     stateLoaded.current = false;
     examHandoff.current = false;
     sessionStorage.removeItem("identityConfirmed");
-  }, [activeAttemptId, releaseDeviceCheck, stopMedia]);
+  }, [activeAttemptId, releaseDeviceCheck, resetAnnouncements, stopMedia]);
 
   const refreshState = useCallback(() => {
     if (!statePromise.current) {
@@ -259,21 +267,22 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     ],
   );
 
+  let content: ReactNode;
   if (pathname !== "/login" && !loaded) {
-    return <CandidateFrame><p className="text-muted">Loading…</p></CandidateFrame>;
-  }
-  if ("screen" in decision) {
-    const content = {
+    content = <CandidateFrame><p className="text-muted">Loading…</p></CandidateFrame>;
+  } else if ("screen" in decision) {
+    const screenContent = {
       ended: ["This exam has ended.", "The exam is closed. You can sign out."],
       signed_out: ["You were signed out", "This account was opened on another device, or the exam team ended your session. Your saved answers are safe. Sign in again to continue, or ask the exam team for help."],
       please_sign_in: ["Please sign in again", "Your session has ended. Your saved answers are safe."],
     }[decision.screen];
-    return <CandidateErrorScreen title={content[0]} body={content[1]} signOut={decision.screen === "ended"} resetSession={resetCandidateSession} />;
+    content = <CandidateErrorScreen title={screenContent[0]} body={screenContent[1]} signOut={decision.screen === "ended"} resetSession={resetCandidateSession} />;
+  } else if ("redirect" in decision) {
+    content = <CandidateFrame><p className="text-muted">Loading…</p></CandidateFrame>;
+  } else {
+    content = <CandidateContext.Provider value={value}>{children}</CandidateContext.Provider>;
   }
-  if ("redirect" in decision) {
-    return <CandidateFrame><p className="text-muted">Loading…</p></CandidateFrame>;
-  }
-  return <CandidateContext.Provider value={value}>{children}</CandidateContext.Provider>;
+  return <><AnnouncementToast announcement={announcement} />{content}</>;
 }
 
 export function useCandidate(): CandidateContextValue {

@@ -8,7 +8,7 @@ import { rpcRow } from "@/lib/proctoring-contract";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
 const idSchema = z.uuid();
-const claimSchema = z.object({
+const claimSchema = z.strictObject({
   claim_token: z.uuid().refine((value) => value[14] === "4", "Use a UUID v4 claim token."),
 });
 type ClaimRow = { out_display: boolean; out_message: string | null; out_sent_at: string | null };

@@ -53,11 +53,11 @@ describe("POST /api/exam/announcements/[id]/claim", () => {
     expect(mocks.rpc).not.toHaveBeenCalled();
   });
 
-  it("strips unknown body keys", async () => {
-    mocks.rpc.mockResolvedValue({ data: [{ out_display: false, out_message: null, out_sent_at: null }], error: null });
+  it("rejects unknown body keys before calling the RPC", async () => {
     const { POST } = await import("./route");
     const response = await POST(request({ claim_token: token, ignored: "value" }), context);
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(400);
+    expect(mocks.rpc).not.toHaveBeenCalled();
   });
 
   it("returns the candidate auth error", async () => {

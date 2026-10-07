@@ -78,6 +78,7 @@ let activeCandidate: CandidateKey | null;
 let attemptStatus: "not_started" | "acknowledged";
 let candidatePhase: "waiting" | "live";
 let candidateControls: ReturnType<typeof useCandidate> | null;
+let candidateAnnouncements: Array<{ id: string; sent_at: string }>;
 const fetchMock = vi.fn();
 let fullscreenElement: Element | null;
 let wakeLockRelease: ReturnType<typeof vi.fn>;
@@ -117,7 +118,7 @@ function stateBody(key: CandidateKey) {
       deadline: null,
       submit_reason: null,
     },
-    announcements: [],
+    announcements: candidateAnnouncements,
   };
 }
 
@@ -216,6 +217,7 @@ beforeEach(() => {
   attemptStatus = "not_started";
   candidatePhase = "waiting";
   candidateControls = null;
+  candidateAnnouncements = [];
   navigation.path = "/login";
   navigation.push.mockReset().mockImplementation((path) => {
     navigation.path = path.split("?", 1)[0]!;
@@ -275,10 +277,88 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("CandidateProvider flow state", () => {
+  it("keeps a visible announcement mounted for its full duration across Waiting to Exam", async () => {
+    vi.useFakeTimers();
+    activeCandidate = "A";
+    attemptStatus = "acknowledged";
+    navigation.path = "/waiting";
+    candidateAnnouncements = [{ id: "00000000-0000-4000-8000-000000000090", sent_at: "2026-10-07T10:00:00.000Z" }];
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/exam/state") return json(stateBody("A"));
+      if (url.endsWith("/claim")) return json({ display: true, announcement: { ...candidateAnnouncements[0], message: "Stay visible" } });
+      if (url === "/api/time") return json({ server_time_ms: Date.now() });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const view = render(<App />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByText('The exam team says: "Stay visible"')).toBeTruthy();
+    navigation.path = "/exam";
+    view.rerender(<App />);
+    await act(() => vi.advanceTimersByTimeAsync(4_999));
+    expect(screen.getByText('The exam team says: "Stay visible"')).toBeTruthy();
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(screen.queryByText(/Stay visible/)).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("keeps an in-flight announcement claim alive across Waiting to Exam", async () => {
+    activeCandidate = "A";
+    attemptStatus = "acknowledged";
+    navigation.path = "/waiting";
+    candidateAnnouncements = [{ id: "00000000-0000-4000-8000-000000000091", sent_at: "2026-10-07T10:00:00.000Z" }];
+    let resolveClaim!: (response: Response) => void;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/exam/state") return json(stateBody("A"));
+      if (url.endsWith("/claim")) return new Promise<Response>((resolve) => { resolveClaim = resolve; });
+      if (url === "/api/time") return json({ server_time_ms: Date.now() });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const view = render(<App />);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/claim"))).toBe(true));
+    navigation.path = "/exam";
+    view.rerender(<App />);
+    await act(async () => { resolveClaim(json({ display: true, announcement: { ...candidateAnnouncements[0], message: "Arrived after navigation" } })); });
+    expect(await screen.findByText('The exam team says: "Arrived after navigation"')).toBeTruthy();
+  });
+
+  it("resetCandidateSession clears announcement state and ignores a late claim response", async () => {
+    activeCandidate = "A";
+    attemptStatus = "acknowledged";
+    navigation.path = "/waiting";
+    candidateAnnouncements = [{ id: "00000000-0000-4000-8000-000000000093", sent_at: "2026-10-07T10:00:00.000Z" }];
+    let resolveClaim!: (response: Response) => void;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/exam/state") return json(stateBody("A"));
+      if (url.endsWith("/claim")) return new Promise<Response>((resolve) => { resolveClaim = resolve; });
+      if (url === "/api/livekit/token") return json({ token: "token", url: "ws://localhost:7880", room: "exam-A", identity: "candidate-A" });
+      if (url === "/api/time") return json({ server_time_ms: Date.now() });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<CandidateLayout><SessionControls /></CandidateLayout>);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/claim"))).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Reset session" }));
+    await act(async () => { resolveClaim(json({ display: true, announcement: { ...candidateAnnouncements[0], message: "Must be discarded" } })); });
+    expect(screen.queryByText(/Must be discarded/)).toBeNull();
+  });
+
+  it.each(["/confirm", "/rules", "/check", "/done"])("does not claim announcements on %s", async (path) => {
+    activeCandidate = "A";
+    attemptStatus = "acknowledged";
+    navigation.path = path;
+    candidateAnnouncements = [{ id: "00000000-0000-4000-8000-000000000092", sent_at: "2026-10-07T10:00:00.000Z" }];
+    render(<CandidateProvider><div>Route content</div></CandidateProvider>);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url) === "/api/exam/state")).toBe(true));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/claim"))).toBe(false);
+  });
+
   it("keeps one LiveKit token and room through the transient check redirect, waiting and exam", async () => {
     activeCandidate = "A";
     attemptStatus = "acknowledged";

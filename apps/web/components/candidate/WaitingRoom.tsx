@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CandidateErrorScreen, CandidateFrame, CandidatePaperError, Notice, useCandidate } from "@/components/candidate/CandidateContext";
-import { CandidateAnnouncements } from "@/components/candidate/AnnouncementToast";
 import { useCandidateLiveKit } from "@/components/candidate/LiveKitContext";
 import { Button } from "@/components/ui/Button";
 import { CameraBanner } from "@/components/exam/CameraBanner";
@@ -166,7 +165,6 @@ export function WaitingRoom() {
 
   return (
     <CandidateFrame wide>
-      <CandidateAnnouncements announcements={state.announcements} />
       <h1 tabIndex={-1} className="text-title font-bold" lang={langFor(state.exam.title)}>{state.exam.title}</h1>
       {connectionLost ? <div className="mt-5"><Notice warning>Connection lost. Reconnecting…</Notice></div> : null}
       <div className="mt-5"><CameraBanner cameraLost={media.cameraLost} microphoneLost={media.microphoneLost} connectionLost={media.connectionLost} /></div>

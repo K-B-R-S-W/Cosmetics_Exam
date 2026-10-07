@@ -25,7 +25,7 @@ Counts include the normal admin authorization (`getUser` plus the cached profile
 - Force-submit: 2 auth + 1 attempt lookup + 1 `submit_attempt` RPC; on a changed row add 1 audit insert + 1 Broadcast = **4–6 calls**.
 - Kick: 2 auth + 1 attempt lookup + 1 session update + 1 LiveKit removal + 1 audit insert + 1 Broadcast = **7 calls**.
 - Broadcast send: 2 auth + 1 `create_broadcast` RPC + 1 audit insert + 1 Broadcast = **5 calls**. History load is 2 auth + 1 select = **3 calls**.
-- Announcement claim: 1 candidate-session authorization query + 1 `claim_broadcast` RPC = **2 database calls**. The heartbeat announcement read is inside the existing `candidate_heartbeat` RPC, so it adds **0 round trips**; `GET /api/exam/state` adds 1 announcement select, run in parallel with its exam select.
+- Announcement claim: 1 candidate-session authorization query + 1 `claim_broadcast` RPC = **2 database calls per attempt**. Transient network/5xx failures use bounded 1/2/4-second backoff, capped at 4 attempts per announcement per heartbeat cycle with one durable claim token; exhaustion releases the queue and a later heartbeat may retry with that stored token. The heartbeat announcement read is inside the existing `candidate_heartbeat` RPC, so it adds **0 round trips**; `GET /api/exam/state` adds 1 announcement select, run in parallel with its exam select.
 
 ## 5B — Pre-exam check
 
