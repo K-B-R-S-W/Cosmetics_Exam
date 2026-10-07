@@ -37,6 +37,8 @@ interface CandidateContextValue {
   heartbeatNow(): Promise<StateBody | null>;
   loadMe(): Promise<CandidateMe>;
   loadPaper(force?: boolean): Promise<PaperBody>;
+  markExamHandoff(): void;
+  hasExamHandoff(): boolean;
   resetCandidateSession(): void;
 }
 
@@ -60,6 +62,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   const paperPromise = useRef<Promise<PaperBody> | null>(null);
   const statePromise = useRef<Promise<StateBody | null> | null>(null);
   const stateLoaded = useRef(false);
+  const examHandoff = useRef(false);
   const sessionGeneration = useRef(0);
   const activeAttemptId = state?.attempt.id;
   const applyHeartbeatState = useCallback((next: StateBody) => {
@@ -78,6 +81,8 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     applyHeartbeatAuthError,
     pathname === "/waiting" || pathname === "/exam",
   );
+  const markExamHandoff = useCallback(() => { examHandoff.current = true; }, []);
+  const hasExamHandoff = useCallback(() => examHandoff.current, []);
 
   const resetCandidateSession = useCallback(() => {
     void stopMedia();
@@ -93,6 +98,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     paperPromise.current = null;
     statePromise.current = null;
     stateLoaded.current = false;
+    examHandoff.current = false;
     sessionStorage.removeItem("identityConfirmed");
   }, [activeAttemptId, stopMedia]);
 
@@ -230,6 +236,8 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
       heartbeatNow,
       loadMe,
       loadPaper,
+      markExamHandoff,
+      hasExamHandoff,
       resetCandidateSession,
     }),
     [
@@ -241,6 +249,8 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
       heartbeatNow,
       loadMe,
       loadPaper,
+      markExamHandoff,
+      hasExamHandoff,
       resetCandidateSession,
     ],
   );

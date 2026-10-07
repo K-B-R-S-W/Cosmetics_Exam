@@ -19,7 +19,7 @@ const ANNOUNCE_AT_SECONDS = [600, 300, 120, 60];
 
 export function WaitingRoom() {
   const router = useRouter();
-  const { state, refreshState, heartbeatNow, loadPaper } = useCandidate();
+  const { state, refreshState, heartbeatNow, loadPaper, markExamHandoff } = useCandidate();
   const media = useCandidateLiveKit();
   const now = useServerClock();
   const [connectionLost, setConnectionLost] = useState(false);
@@ -104,6 +104,7 @@ export function WaitingRoom() {
       await refreshState();
       resetFailures();
       if (retryVisibleTimer.current !== null) window.clearTimeout(retryVisibleTimer.current);
+      markExamHandoff();
       router.push("/exam");
     } catch (error) {
       handoffActive.current = false;
@@ -138,7 +139,7 @@ export function WaitingRoom() {
         }
       }
     }
-  }, [loadPaper, recordFailure, refreshState, resetFailures, router]);
+  }, [loadPaper, markExamHandoff, recordFailure, refreshState, resetFailures, router]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {

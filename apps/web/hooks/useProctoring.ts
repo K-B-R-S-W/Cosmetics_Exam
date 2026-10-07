@@ -23,6 +23,7 @@ export function capEventQueue(queue: QueuedEvent[]): QueuedEvent[] {
 type Options = {
   enabled: boolean;
   inProgress: boolean;
+  resumed?: boolean;
   video?: HTMLVideoElement | null;
   mediaTracks?: Array<{ kind: "audio" | "video"; track: MediaStreamTrack; source: "track" | "livekit" }>;
   liveKitDisconnected?: boolean;
@@ -48,7 +49,7 @@ export function candidateEventBody(event: QueuedEvent, now: number) {
   };
 }
 
-export function useProctoring({ enabled, inProgress, video = null, mediaTracks = noMediaTracks, liveKitDisconnected = false, cameraUnavailable = false, microphoneUnavailable = false, now = systemNow }: Options) {
+export function useProctoring({ enabled, inProgress, resumed = false, video = null, mediaTracks = noMediaTracks, liveKitDisconnected = false, cameraUnavailable = false, microphoneUnavailable = false, now = systemNow }: Options) {
   const [fullscreenLost, setFullscreenLost] = useState(false);
   const [attentionWarning, setAttentionWarning] = useState(false);
   const [pasteBlocked, setPasteBlocked] = useState(false);
@@ -63,6 +64,7 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
   const drainRef = useRef<() => Promise<void>>(async () => undefined);
   const lastInstant = useRef(new Map<ClientEventType, number>());
   const mediaLossSources = useRef(new Map<ClientEventType, Set<"track" | "livekit">>());
+  const reloadRecorded = useRef(false);
 
   const persist = useCallback(() => {
     try { sessionStorage.setItem(storageKey, JSON.stringify(queue.current)); } catch { /* best effort */ }
@@ -284,7 +286,11 @@ export function useProctoring({ enabled, inProgress, video = null, mediaTracks =
     };
   }, [cameraUnavailable, enabled, microphoneUnavailable, setMediaLoss]);
 
-  useEffect(() => { if (enabled && inProgress) instant("RELOAD"); }, [enabled, inProgress, instant]);
+  useEffect(() => {
+    if (reloadRecorded.current || !enabled || !inProgress || !resumed) return;
+    reloadRecorded.current = true;
+    instant("RELOAD");
+  }, [enabled, inProgress, instant, resumed]);
   useEffect(() => {
     if (enabled) return;
     if (active.current) closeSignal(active.current.type, true);

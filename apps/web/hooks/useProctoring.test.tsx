@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
+import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { candidateEventSchema } from "@/lib/proctoring-input";
 import { candidateEventBody, capEventQueue, type QueuedEvent, useProctoring } from "./useProctoring";
@@ -60,11 +61,52 @@ describe("useProctoring", () => {
     expect(hook.result.current.pendingCount()).toBe(0);
   });
 
-  it("logs one reload when mounted in progress", async () => {
-    renderHook(() => useProctoring({ enabled: true, inProgress: true, mediaTracks: [] }));
+  it("logs one snapshot-free reload when a fresh mount resumes an in-progress attempt", async () => {
+    renderHook(() => useProctoring({ enabled: true, inProgress: true, resumed: true, mediaTracks: [] }));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
-    const bodies = vi.mocked(fetch).mock.calls.map((call) => JSON.parse(String(call[1]?.body)) as { type: string });
-    expect(bodies.filter((body) => body.type === "RELOAD")).toHaveLength(1);
+    const bodies = vi.mocked(fetch).mock.calls.map((call) => JSON.parse(String(call[1]?.body)) as { type: string; snapshot_jpeg_base64: string | null });
+    expect(bodies.filter((body) => body.type === "RELOAD")).toEqual([
+      expect.objectContaining({ type: "RELOAD", snapshot_jpeg_base64: null }),
+    ]);
+  });
+
+  it("does not log reload when first entry becomes in progress after mount", async () => {
+    const hook = renderHook(({ inProgress }) => useProctoring({ enabled: true, inProgress, resumed: false, mediaTracks: [] }), {
+      initialProps: { inProgress: false },
+    });
+    hook.rerender({ inProgress: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
+    const reloads = vi.mocked(fetch).mock.calls
+      .map((call) => JSON.parse(String(call[1]?.body)) as { type: string })
+      .filter(({ type }) => type === "RELOAD");
+    expect(reloads).toHaveLength(0);
+  });
+
+  it.each([
+    [false, 0],
+    [true, 1],
+  ])("is Strict Mode safe when resumed is %s", async (resumed, expected) => {
+    const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
+    renderHook(() => useProctoring({ enabled: true, inProgress: true, resumed, mediaTracks: [] }), { wrapper });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
+    const reloads = vi.mocked(fetch).mock.calls
+      .map((call) => JSON.parse(String(call[1]?.body)) as { type: string })
+      .filter(({ type }) => type === "RELOAD");
+    expect(reloads).toHaveLength(expected);
+  });
+
+  it("does not log another reload after state refreshes and rerenders", async () => {
+    const hook = renderHook(({ inProgress }) => useProctoring({ enabled: true, inProgress, resumed: true, mediaTracks: [] }), {
+      initialProps: { inProgress: true },
+    });
+    hook.rerender({ inProgress: true });
+    hook.rerender({ inProgress: false });
+    hook.rerender({ inProgress: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
+    const reloads = vi.mocked(fetch).mock.calls
+      .map((call) => JSON.parse(String(call[1]?.body)) as { type: string })
+      .filter(({ type }) => type === "RELOAD");
+    expect(reloads).toHaveLength(1);
   });
 
   it("shows and clears the inline paste notice while blocking paste", async () => {

@@ -7,13 +7,16 @@ import { answerInputSchema, nextInputSchema } from "@/lib/candidate-answer-schem
 import type { PaperBody, StateBody } from "@/lib/candidate-types";
 import { getAnswerDraftStore } from "@/lib/indexeddb";
 
-const mocks = vi.hoisted(() => ({ push: vi.fn(), context: {} as Record<string, unknown> }));
+const mocks = vi.hoisted(() => ({ push: vi.fn(), context: {} as Record<string, unknown>, proctoring: vi.fn() }));
 const CONTRACT_QUESTION_ONE = "00000000-0000-4000-8000-000000000011";
 const CONTRACT_QUESTION_TWO = "00000000-0000-4000-8000-000000000012";
 const CONTRACT_OPTION_ONE = "00000000-0000-4000-8000-000000000021";
 const CONTRACT_OPTION_TWO = "00000000-0000-4000-8000-000000000022";
 vi.mock("next/navigation", () => ({ useRouter: () => mocks }));
-vi.mock("@/hooks/useProctoring", () => ({ useProctoring: () => ({ fullscreenLost: false, flush: vi.fn().mockResolvedValue(undefined), sendInstant: vi.fn(), pendingCount: () => 0 }) }));
+vi.mock("@/hooks/useProctoring", () => ({ useProctoring: (options: unknown) => {
+  mocks.proctoring(options);
+  return { fullscreenLost: false, flush: vi.fn().mockResolvedValue(undefined), sendInstant: vi.fn(), pendingCount: () => 0 };
+} }));
 vi.mock("@/lib/time", () => ({ refineServerClock: vi.fn(), useServerClock: () => () => Date.parse("2026-10-04T10:00:00.000Z") }));
 vi.mock("@/components/candidate/CandidateContext", () => {
   class CandidatePaperError extends Error {
@@ -48,8 +51,9 @@ function json(body: unknown, status = 200) {
 
 beforeEach(() => {
   mocks.push.mockReset();
+  mocks.proctoring.mockReset();
   const value = paper();
-  mocks.context = { state: state(), me: { candidate: { full_name: "Candidate", mer_code: "TEST" } }, paper: value, loadMe: vi.fn(), loadPaper: vi.fn().mockResolvedValue(value), refreshState: vi.fn().mockResolvedValue(state()), heartbeatNow: vi.fn().mockResolvedValue(state()) };
+  mocks.context = { state: state(), me: { candidate: { full_name: "Candidate", mer_code: "TEST" } }, paper: value, loadMe: vi.fn(), loadPaper: vi.fn().mockResolvedValue(value), refreshState: vi.fn().mockResolvedValue(state()), heartbeatNow: vi.fn().mockResolvedValue(state()), hasExamHandoff: vi.fn().mockReturnValue(false) };
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/api/answers") return json({ result: "saved", server_time: "2026-10-04T10:00:00.000Z" });
@@ -61,6 +65,38 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("ExamScreen", () => {
+  it("marks a fresh in-progress page load as resumed", () => {
+    render(<ExamScreen />);
+    expect(mocks.proctoring).toHaveBeenLastCalledWith(expect.objectContaining({ resumed: true, inProgress: true }));
+  });
+
+  it("does not mark a waiting-room handoff as resumed", () => {
+    mocks.context.hasExamHandoff = vi.fn().mockReturnValue(true);
+    render(<ExamScreen />);
+    expect(mocks.proctoring).toHaveBeenLastCalledWith(expect.objectContaining({ resumed: false, inProgress: true }));
+  });
+
+  it("captures a late join as non-resumed before the paper changes status", async () => {
+    const value = paper();
+    mocks.context.state = state("acknowledged");
+    mocks.context.paper = null;
+    mocks.context.loadPaper = vi.fn().mockResolvedValue(value);
+    const view = render(<ExamScreen />);
+    await waitFor(() => expect(mocks.context.loadPaper).toHaveBeenCalled());
+    mocks.context.state = state("in_progress");
+    mocks.context.paper = value;
+    view.rerender(<ExamScreen />);
+    expect(mocks.proctoring).toHaveBeenLastCalledWith(expect.objectContaining({ resumed: false, inProgress: true }));
+  });
+
+  it("keeps the initial resumed decision across state refreshes and rerenders", () => {
+    const view = render(<ExamScreen />);
+    mocks.context.hasExamHandoff = vi.fn().mockReturnValue(true);
+    mocks.context.state = { ...state(), server_time: "2026-10-04T10:00:10.000Z" };
+    view.rerender(<ExamScreen />);
+    expect(mocks.proctoring).toHaveBeenLastCalledWith(expect.objectContaining({ resumed: true, inProgress: true }));
+  });
+
   it("saves free-mode answers, navigates locally, and ignores current_position", async () => {
     const value = { ...paper(), current_position: 99 };
     mocks.context.paper = value;

@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StateBody } from "@/lib/candidate-types";
 
-const mocks = vi.hoisted(() => ({ push: vi.fn(), refreshState: vi.fn(), heartbeatNow: vi.fn(), loadPaper: vi.fn(), now: 0 }));
+const mocks = vi.hoisted(() => ({ push: vi.fn(), refreshState: vi.fn(), heartbeatNow: vi.fn(), loadPaper: vi.fn(), markExamHandoff: vi.fn(), now: 0 }));
 let currentState: StateBody;
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("@/lib/broadcast", () => ({ useExamBroadcast: vi.fn() }));
@@ -18,7 +18,7 @@ vi.mock("@/components/candidate/CandidateContext", () => {
   }
   return {
     CandidatePaperError,
-    useCandidate: () => ({ state: currentState, refreshState: mocks.refreshState, heartbeatNow: mocks.heartbeatNow, loadPaper: mocks.loadPaper }),
+    useCandidate: () => ({ state: currentState, refreshState: mocks.refreshState, heartbeatNow: mocks.heartbeatNow, loadPaper: mocks.loadPaper, markExamHandoff: mocks.markExamHandoff }),
     CandidateFrame: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
     CandidateErrorScreen: ({ title }: { title: string }) => <main><h1>{title}</h1><button>Sign out</button></main>,
     Notice: ({ children }: { children: React.ReactNode }) => <div role="status">{children}</div>,
@@ -38,6 +38,7 @@ beforeEach(() => {
   mocks.refreshState.mockReset().mockImplementation(async () => currentState);
   mocks.heartbeatNow.mockReset().mockImplementation(async () => currentState);
   mocks.loadPaper.mockReset().mockResolvedValue({});
+  mocks.markExamHandoff.mockReset();
   vi.useFakeTimers();
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
@@ -63,7 +64,10 @@ describe("WaitingRoom", () => {
     await flush();
     expect(mocks.loadPaper).toHaveBeenCalledTimes(1);
     expect(mocks.refreshState).toHaveBeenCalled();
+    expect(mocks.markExamHandoff).toHaveBeenCalledTimes(1);
     expect(mocks.push).toHaveBeenCalledWith("/exam");
+    expect(mocks.refreshState.mock.invocationCallOrder[0]).toBeLessThan(mocks.markExamHandoff.mock.invocationCallOrder[0]!);
+    expect(mocks.markExamHandoff.mock.invocationCallOrder[0]).toBeLessThan(mocks.push.mock.invocationCallOrder[0]!);
   });
 
   it("takes the mocked 60 ms paper-plus-refresh path before /exam is usable", async () => {
@@ -141,6 +145,17 @@ describe("WaitingRoom", () => {
     await act(() => vi.advanceTimersByTimeAsync(20_000));
     expect(mocks.loadPaper).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("This is taking longer than expected. Tell the exam team if this continues.")).toBeNull();
+    expect(mocks.markExamHandoff).not.toHaveBeenCalled();
+  });
+
+  it("does not mark the closed in-progress fallback as a first-entry handoff", async () => {
+    currentState = state("live", null, "in_progress");
+    mocks.loadPaper.mockRejectedValue(new CandidatePaperError("exam_closed", 409));
+    mocks.refreshState.mockResolvedValue(state("closed", null, "in_progress"));
+    render(<WaitingRoom />);
+    await flush();
+    expect(mocks.push).toHaveBeenCalledWith("/exam");
+    expect(mocks.markExamHandoff).not.toHaveBeenCalled();
   });
 
   it("immediately notices and retries unexpected exam_not_live phases", async () => {

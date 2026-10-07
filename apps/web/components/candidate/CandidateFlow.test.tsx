@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { StrictMode } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CandidateProvider, useCandidate } from "./CandidateContext";
@@ -76,6 +76,7 @@ type CandidateKey = "A" | "B";
 let activeCandidate: CandidateKey | null;
 let attemptStatus: "not_started" | "acknowledged";
 let candidatePhase: "waiting" | "live";
+let candidateControls: ReturnType<typeof useCandidate> | null;
 const fetchMock = vi.fn();
 
 const people = {
@@ -173,6 +174,10 @@ function StateRefreshProbe() {
 
 function SessionControls() {
   const candidate = useCandidate();
+  useEffect(() => {
+    candidateControls = candidate;
+    return () => { if (candidateControls === candidate) candidateControls = null; };
+  }, [candidate]);
   const media = useCandidateLiveKit();
   return <>
     <button onClick={() => void media.acquireAndConnect()}>Connect media</button>
@@ -203,6 +208,7 @@ beforeEach(() => {
   activeCandidate = null;
   attemptStatus = "not_started";
   candidatePhase = "waiting";
+  candidateControls = null;
   navigation.path = "/login";
   navigation.push.mockReset().mockImplementation((path) => {
     navigation.path = path.split("?", 1)[0]!;
@@ -325,6 +331,19 @@ describe("CandidateProvider flow state", () => {
     expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
     await new Promise((resolve) => window.setTimeout(resolve, 0));
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/livekit/token")).toHaveLength(1);
+  });
+
+  it("clears the in-memory exam handoff marker when the candidate session resets", async () => {
+    activeCandidate = "A";
+    attemptStatus = "acknowledged";
+    navigation.path = "/waiting";
+    render(<CandidateLayout><SessionControls /></CandidateLayout>);
+    await screen.findByRole("button", { name: "Reset session" });
+    act(() => candidateControls?.markExamHandoff());
+    expect(candidateControls?.hasExamHandoff()).toBe(true);
+    const controls = candidateControls;
+    act(() => controls?.resetCandidateSession());
+    expect(controls?.hasExamHandoff()).toBe(false);
   });
 
   it.each([

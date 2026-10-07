@@ -85,7 +85,7 @@ export function isTransientPaperFailure(error: unknown): boolean {
 
 export function ExamScreen() {
   const router = useRouter();
-  const { state, me, paper, loadMe, loadPaper, refreshState, heartbeatNow } = useCandidate();
+  const { state, me, paper, loadMe, loadPaper, refreshState, heartbeatNow, hasExamHandoff } = useCandidate();
   const media = useCandidateLiveKit();
   const [loadedPaper, setLoadedPaper] = useState<PaperBody | null>(paper);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -113,6 +113,13 @@ export function ExamScreen() {
   const submitRetry = useRef<number | null>(null);
   const submitAttemptRef = useRef<(reason: "manual" | "auto") => Promise<void>>(async () => undefined);
   const advanceRef = useRef<(allowBlank?: boolean) => Promise<void>>(async () => undefined);
+  const resumed = useRef<boolean | null>(null);
+  /* eslint-disable react-hooks/refs -- One-time mount classification; the marker is non-consuming and this ref never drives a later update. */
+  if (resumed.current === null && state) {
+    resumed.current = state.attempt.status === "in_progress" && !(hasExamHandoff?.() ?? false);
+  }
+  const resumedOnMount = resumed.current ?? false;
+  /* eslint-enable react-hooks/refs */
   const { recordFailure, resetFailures, showTakingLonger } = usePaperRetryTracker();
 
   const questions = useMemo(() => loadedPaper?.questions ?? [], [loadedPaper]);
@@ -144,6 +151,7 @@ export function ExamScreen() {
   const proctoring = useProctoring({
     enabled: Boolean(loadedPaper) && !locked,
     inProgress: state?.attempt.status === "in_progress",
+    resumed: resumedOnMount,
     video: media.previewElement,
     mediaTracks: media.mediaTracks,
     liveKitDisconnected: media.connectionLost,
