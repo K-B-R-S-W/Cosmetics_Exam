@@ -15,6 +15,7 @@ import {
 
 import { Button } from "@/components/ui/Button";
 import { useCandidateLiveKit } from "@/components/candidate/LiveKitContext";
+import { useDeviceCheck } from "@/components/candidate/DeviceCheckContext";
 import { routeFor } from "@/lib/candidate-routing";
 import type { ApiErrorPayload, CandidateMe, PaperBody, StateBody } from "@/lib/candidate-types";
 import { getAnswerDraftStore } from "@/lib/indexeddb";
@@ -52,6 +53,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { stop: stopMedia } = useCandidateLiveKit();
+  const { releaseDeviceCheck } = useDeviceCheck();
   const [state, setState] = useState<StateBody | null>(null);
   const [me, setMe] = useState<CandidateMe | null>(null);
   const [paper, setPaper] = useState<PaperBody | null>(null);
@@ -86,6 +88,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
 
   const resetCandidateSession = useCallback(() => {
     void stopMedia();
+    void releaseDeviceCheck();
     if (activeAttemptId) void getAnswerDraftStore().clearAttempt(activeAttemptId);
     sessionGeneration.current += 1;
     setState(null);
@@ -100,7 +103,7 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
     stateLoaded.current = false;
     examHandoff.current = false;
     sessionStorage.removeItem("identityConfirmed");
-  }, [activeAttemptId, stopMedia]);
+  }, [activeAttemptId, releaseDeviceCheck, stopMedia]);
 
   const refreshState = useCallback(() => {
     if (!statePromise.current) {
@@ -207,8 +210,9 @@ export function CandidateProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (terminalScreen === "ended" || terminalScreen === "signed_out" || terminalScreen === "please_sign_in") {
       void stopMedia();
+      void releaseDeviceCheck();
     }
-  }, [stopMedia, terminalScreen]);
+  }, [releaseDeviceCheck, stopMedia, terminalScreen]);
   useEffect(() => {
     if ("redirect" in decision && decision.redirect !== pathname) {
       router.replace(decision.redirect);

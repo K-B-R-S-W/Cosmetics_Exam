@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CandidateProvider, useCandidate } from "./CandidateContext";
 import { useCandidateLiveKit } from "./LiveKitContext";
+import { useDeviceCheck } from "./DeviceCheckContext";
 import { CheckScreen } from "./CheckScreen";
 import { ConfirmScreen } from "./ConfirmScreen";
 import { LoginForm } from "./LoginForm";
@@ -78,6 +79,8 @@ let attemptStatus: "not_started" | "acknowledged";
 let candidatePhase: "waiting" | "live";
 let candidateControls: ReturnType<typeof useCandidate> | null;
 const fetchMock = vi.fn();
+let fullscreenElement: Element | null;
+let wakeLockRelease: ReturnType<typeof vi.fn>;
 
 const people = {
   A: { name: "Candidate A", mer: "TEST-A", exam: "Exam A" },
@@ -179,8 +182,10 @@ function SessionControls() {
     return () => { if (candidateControls === candidate) candidateControls = null; };
   }, [candidate]);
   const media = useCandidateLiveKit();
+  const device = useDeviceCheck();
   return <>
     <button onClick={() => void media.acquireAndConnect()}>Connect media</button>
+    <button onClick={() => void device.requestWakeLock()}>Acquire wake lock</button>
     <button onClick={() => candidate.resetCandidateSession()}>Reset session</button>
     <button onClick={() => void candidate.refreshState().catch(() => null)}>Refresh session</button>
   </>;
@@ -203,6 +208,8 @@ async function rerenderAt(view: ReturnType<typeof render>, path: string) {
 }
 
 beforeEach(() => {
+  fullscreenElement = null;
+  wakeLockRelease = vi.fn().mockResolvedValue(undefined);
   liveKit.rooms.length = 0;
   liveKit.createLocalTracks.mockReset().mockResolvedValue([new FakeLocalTrack("video"), new FakeLocalTrack("audio")]);
   activeCandidate = null;
@@ -228,6 +235,12 @@ beforeEach(() => {
     configurable: true,
     value: { query: vi.fn().mockResolvedValue({ state: "granted" }) },
   });
+  Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request: vi.fn().mockResolvedValue({ released: false, release: wakeLockRelease }) } });
+  Object.defineProperty(navigator, "userAgent", { configurable: true, value: "Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36" });
+  Object.defineProperty(navigator, "maxTouchPoints", { configurable: true, value: 0 });
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => fullscreenElement });
+  Object.defineProperty(document.documentElement, "requestFullscreen", { configurable: true, value: vi.fn(async () => { fullscreenElement = document.documentElement; document.dispatchEvent(new Event("fullscreenchange")); }) });
+  Object.defineProperty(window.screen, "orientation", { configurable: true, value: { type: "landscape-primary", lock: vi.fn().mockResolvedValue(undefined) } });
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
     value: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
@@ -254,6 +267,7 @@ beforeEach(() => {
     if (url === "/api/livekit/token") {
       return json({ token: "token", url: "ws://localhost:7880", room: "exam-A", identity: "candidate-A" });
     }
+    if (url === "/api/time") return json({ server_time_ms: Date.now() });
     throw new Error(`Unexpected request: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -271,14 +285,17 @@ describe("CandidateProvider flow state", () => {
     navigation.path = "/check";
     navigation.push.mockImplementation(() => undefined);
     const view = render(<LayoutApp />);
-    await screen.findByRole("heading", { name: "Pre-exam check" });
+    await screen.findByRole("heading", { name: "Check your setup" });
 
     fireEvent.click(screen.getByRole("button", { name: "Allow camera and mic" }));
-    await screen.findByText("Camera and microphone are connected.");
+    await screen.findByText("Camera preview and microphone are ready.");
     const room = liveKit.rooms[0]!;
     const tracks = [...room.localParticipant.trackPublications.values()].map(({ track }) => track);
+    fireEvent.click(screen.getByRole("button", { name: "Enter fullscreen" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/waiting"));
+    expect(wakeLockRelease).not.toHaveBeenCalled();
     expect(room.disconnect).not.toHaveBeenCalled();
     expect(tracks.every((track) => track.mediaStreamTrack.readyState === "live")).toBe(true);
 
@@ -286,7 +303,7 @@ describe("CandidateProvider flow state", () => {
     view.rerender(<LayoutApp />);
     candidatePhase = "live";
     fireEvent.click(await screen.findByRole("button", { name: "Refresh state" }));
-    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/exam/state")).toHaveLength(2));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/exam/state")).toHaveLength(3));
     navigation.path = "/exam";
     view.rerender(<LayoutApp />);
 
@@ -306,9 +323,9 @@ describe("CandidateProvider flow state", () => {
     attemptStatus = "acknowledged";
     navigation.path = "/check";
     view.rerender(<LayoutApp />);
-    await screen.findByRole("heading", { name: "Pre-exam check" });
+    await screen.findByRole("heading", { name: "Check your setup" });
     fireEvent.click(screen.getByRole("button", { name: "Allow camera and mic" }));
-    await screen.findByText("Camera and microphone are connected.");
+    await screen.findByText("Camera preview and microphone are ready.");
 
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/livekit/token")).toHaveLength(1);
     expect(liveKit.rooms).toHaveLength(1);
@@ -326,8 +343,11 @@ describe("CandidateProvider flow state", () => {
     await waitFor(() => expect(room.connect).toHaveBeenCalledTimes(1));
     const tracks = [...room.localParticipant.trackPublications.values()].map(({ track }) => track);
 
+    fireEvent.click(screen.getByRole("button", { name: "Acquire wake lock" }));
+    await act(async () => { await Promise.resolve(); });
     fireEvent.click(screen.getByRole("button", { name: "Reset session" }));
     await waitFor(() => expect(room.disconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(wakeLockRelease).toHaveBeenCalledOnce());
     expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
     await new Promise((resolve) => window.setTimeout(resolve, 0));
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/livekit/token")).toHaveLength(1);
@@ -374,9 +394,12 @@ describe("CandidateProvider flow state", () => {
     await waitFor(() => expect(room.connect).toHaveBeenCalledTimes(1));
     const tracks = [...room.localParticipant.trackPublications.values()].map(({ track }) => track);
 
+    fireEvent.click(screen.getByRole("button", { name: "Acquire wake lock" }));
+    await act(async () => { await Promise.resolve(); });
     fireEvent.click(screen.getByRole("button", { name: "Refresh session" }));
     expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
     await waitFor(() => expect(room.disconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(wakeLockRelease).toHaveBeenCalledOnce());
     expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
     await new Promise((resolve) => window.setTimeout(resolve, 0));
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/livekit/token")).toHaveLength(1);
@@ -410,7 +433,7 @@ describe("CandidateProvider flow state", () => {
     await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/check"));
     await rerenderAt(view, "/check");
 
-    expect(screen.getByRole("heading", { name: "Pre-exam check" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Check your setup" })).toBeTruthy();
     expect(navigation.replace).not.toHaveBeenCalledWith("/confirm");
   });
 

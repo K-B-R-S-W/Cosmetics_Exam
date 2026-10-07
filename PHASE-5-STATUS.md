@@ -27,7 +27,13 @@ Counts include the normal admin authorization (`getUser` plus the cached profile
 
 ## 5B — Pre-exam check
 
-Status: not implemented yet.
+Status: locally implemented and unit-tested; real Chrome/device behavior remains unverified.
+
+- The staged Check page verifies Chrome, live camera plus an unmuted live microphone track, fullscreen, server connectivity and display conditions. A second screen warns but does not block; Android Desktop site blocks.
+- Camera/microphone, fullscreen and wake-lock requests originate only from Check. Continue verifies fullscreen again at click time. Waiting and Exam keep the existing blocking fullscreen overlay if fullscreen is later lost.
+- `DeviceCheckProvider` sits outside `CandidateProvider`, so route-guard loading and transient redirect frames retain the wake lock. Session reset and terminal candidate screens release it; Done also releases it before logout.
+- Wake Lock rejection is intentionally silent and non-blocking. A wanted lock is requested again when the document becomes visible.
+- Device verification is still required for UA Client Hints, Android Desktop site, fullscreen/orientation behavior, wake-lock reacquisition and real camera/microphone state.
 
 ## 5C — Super-admin health and alerts
 

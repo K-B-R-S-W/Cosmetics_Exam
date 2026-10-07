@@ -5,6 +5,7 @@
 ### Phase 4 media integration
 
 - The candidate route-group provider owns one camera/microphone stream and one LiveKit room across Check → Waiting → Exam. Done stops the media exactly once before logout. A provider failure never blocks the candidate screens.
+- The route-group also owns the requested screen wake lock outside `CandidateProvider`, so loading and redirect frames do not release it. Check is the only page that prompts; session termination releases the lock, while visibility recovery silently re-requests a previously wanted lock.
 - The camera preview remains mounted, playing, visible and non-zero-size on Waiting and Exam because snapshot capture reads that same video element. It is mirrored and has an accessible name.
 - Candidate publishing uses one 320x240 camera layer with no simulcast. Android is capped at 15 fps; other Chrome clients request 30 fps.
 - `stopLocalTrackOnUnpublish` is false. A terminal LiveKit disconnect keeps the app-owned device tracks live, records non-counting `CAMERA_LOST`/`MIC_LOST` episodes with `meta.source = 'livekit'`, and republishes those same tracks after the app-level reconnect.

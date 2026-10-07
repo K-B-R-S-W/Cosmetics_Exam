@@ -16,7 +16,7 @@ const heartbeat = vi.hoisted(() => ({ emit: null as null | ((state: StateBody) =
 const media = vi.hoisted(() => ({
   status: "connected",
   stream: null,
-  mediaTracks: [],
+  mediaTracks: [] as Array<{ kind: "audio" | "video"; source: "track"; track: MediaStreamTrack }>,
   cameraLost: false,
   microphoneLost: false,
   connectionLost: false,
@@ -49,6 +49,7 @@ import { ExamScreen } from "@/components/exam/ExamScreen";
 
 let paperLoaded = false;
 let serverState: StateBody;
+let fullscreenElement: Element | null;
 
 function candidateState(phase: "waiting" | "live", status: "acknowledged" | "in_progress"): StateBody {
   return {
@@ -98,12 +99,19 @@ function json(body: unknown, status = 200): Promise<Response> {
 }
 
 beforeEach(() => {
+  fullscreenElement = null;
   navigation.path = "/waiting";
   navigation.push.mockReset();
   navigation.replace.mockReset();
   heartbeat.emit = null;
   media.trySilentReacquire.mockClear();
+  media.acquireAndConnect.mockClear();
   media.stop.mockClear();
+  const video = new EventTarget() as MediaStreamTrack;
+  Object.assign(video, { readyState: "live", muted: false });
+  const audio = new EventTarget() as MediaStreamTrack;
+  Object.assign(audio, { readyState: "live", muted: false });
+  media.mediaTracks = [{ kind: "video", source: "track", track: video }, { kind: "audio", source: "track", track: audio }];
   sessionStorage.clear();
   paperLoaded = false;
   serverState = candidateState("waiting", "acknowledged");
@@ -116,11 +124,18 @@ beforeEach(() => {
     }
     if (url === "/api/auth/me") return json({ candidate: { mer_code: "TEST-1", full_name: "Synthetic Candidate", outlet: null }, exam: { id: "exam-1", title: "Synthetic Exam", instructions: null, scheduled_start_at: null, duration_min: 60, navigation_mode: "free", question_count: 1, status: "live" }, attempt: { id: "attempt-1", status: paperLoaded ? "in_progress" : "acknowledged" }, rules: { snapshot_retention_days: 14 } });
     if (url === "/api/events") return json({ id: "event-1" });
+    if (url === "/api/time") return json({ server_time_ms: Date.now() });
     throw new Error(`Unexpected request: ${url}`);
   }));
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   Object.defineProperty(HTMLMediaElement.prototype, "play", { configurable: true, value: vi.fn().mockResolvedValue(undefined) });
+  Object.defineProperty(navigator, "userAgent", { configurable: true, value: "Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36" });
+  Object.defineProperty(navigator, "maxTouchPoints", { configurable: true, value: 0 });
+  Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request: vi.fn().mockResolvedValue({ released: false, release: vi.fn().mockResolvedValue(undefined) }) } });
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => fullscreenElement });
+  Object.defineProperty(document.documentElement, "requestFullscreen", { configurable: true, value: vi.fn(async () => { fullscreenElement = document.documentElement; document.dispatchEvent(new Event("fullscreenchange")); }) });
+  Object.defineProperty(window.screen, "orientation", { configurable: true, value: { type: "landscape-primary", lock: vi.fn().mockResolvedValue(undefined) } });
 });
 
 afterEach(() => {
@@ -155,8 +170,12 @@ describe("candidate exam handoff", () => {
 
     navigation.path = "/check";
     view.rerender(<CandidateLayout><Page /></CandidateLayout>);
-    await screen.findByRole("heading", { name: "Pre-exam check" });
+    await screen.findByRole("heading", { name: "Check your setup" });
     navigation.push.mockClear();
+    screen.getByRole("button", { name: "Allow camera and mic" }).click();
+    await waitFor(() => expect(media.acquireAndConnect).toHaveBeenCalled());
+    screen.getByRole("button", { name: "Enter fullscreen" }).click();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(false));
     screen.getByRole("button", { name: "Continue" }).click();
     await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/exam"));
 
