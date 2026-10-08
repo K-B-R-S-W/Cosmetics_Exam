@@ -17,6 +17,11 @@ describe("routeFor", () => {
     expect(routeFor({ state: null, error: "session_revoked", pathname: "/exam", checkPassed: false })).toEqual({ screen: "signed_out" });
     expect(routeFor({ state: null, error: "unauthenticated", pathname: "/exam", checkPassed: false })).toEqual({ screen: "please_sign_in" });
   });
+  it("keeps the stored completion screen after Done revokes its own session", () => {
+    expect(routeFor({ state: state("submitted", "submitted"), error: "session_revoked", pathname: "/done", checkPassed: true })).toEqual({ allow: true });
+    expect(routeFor({ state: null, error: "unauthenticated", pathname: "/done", checkPassed: true })).toEqual({ allow: true });
+    expect(routeFor({ state: state("in_progress", "live"), error: "session_revoked", pathname: "/exam", checkPassed: true })).toEqual({ screen: "signed_out" });
+  });
   it("keeps not-started candidates in confirm and rules", () => {
     expect(routeFor({ state: state("not_started", "waiting"), pathname: "/rules", checkPassed: false })).toEqual({ allow: true });
     expect(routeFor({ state: state("not_started", "live"), pathname: "/check", checkPassed: false })).toEqual({ redirect: "/confirm" });

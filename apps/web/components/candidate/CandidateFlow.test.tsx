@@ -486,15 +486,17 @@ describe("CandidateProvider flow state", () => {
   });
 
   it.each([
-    ["unauthenticated", "Please sign in again"],
-    ["session_revoked", "You were signed out"],
-  ])("renders the %s screen after a Strict Mode state failure", async (code, heading) => {
+    ["unauthenticated"],
+    ["session_revoked"],
+  ])("keeps the Done content after a Strict Mode %s state failure", async (code) => {
     navigation.path = "/done";
     fetchMock.mockResolvedValue(json({ error: { code, message: "Synthetic auth failure" } }, 401));
 
     render(<StrictMode><CandidateProvider><div>Done page</div></CandidateProvider></StrictMode>);
 
-    expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
+    expect(await screen.findByText("Done page")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Please sign in again" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "You were signed out" })).toBeNull();
     expect(screen.queryByText("Loading…")).toBeNull();
   });
 

@@ -16,6 +16,9 @@ export function routeFor({
   pathname: string;
   checkPassed: boolean;
 }): CandidateRouteDecision {
+  if (pathname === "/done" && (error === "session_revoked" || error === "unauthenticated")) {
+    return { allow: true };
+  }
   if (error === "session_revoked") return { screen: "signed_out" };
   if (error === "unauthenticated") return { screen: "please_sign_in" };
   if (!state) return { allow: true };
