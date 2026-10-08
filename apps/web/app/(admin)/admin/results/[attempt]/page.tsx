@@ -9,5 +9,5 @@ export default async function AttemptResultsPage({ params }: { params: Promise<{
   const { attempt } = await params;
   const review = await loadAttemptReview(createServiceRoleClient(), attempt);
   if (!review) notFound();
-  return <main><p className="text-muted">Results</p><h1 className="text-title font-bold">{review.candidate.mer_code} — {review.candidate.full_name}</h1><AttemptReview attemptId={attempt} items={review.items} /></main>;
+  return <main><p className="text-muted">Results</p><h1 className="text-title font-bold">{review.candidate.mer_code} — {review.candidate.full_name}</h1><AttemptReview attemptId={attempt} items={review.items} questionNumbers={review.question_numbers} /></main>;
 }

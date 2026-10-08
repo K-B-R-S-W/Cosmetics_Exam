@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { gradingHtmlToText } from "./html-to-text";
+import { questionNumbers } from "./question-numbers";
 
 export type AttemptReviewItem = {
   question_id: string;
@@ -23,11 +24,12 @@ export type AttemptReviewData = {
   attemptId: string;
   status: string;
   candidate: { mer_code: string; full_name: string };
+  question_numbers: number[];
   items: AttemptReviewItem[];
 };
 
 type SafeLogger = (event: string, context: { error_code: string }) => void;
-type QuestionRow = { id: string; type: "mcq" | "written"; body_html: string; marks: number };
+type QuestionRow = { id: string; position: number; type: "mcq" | "written"; body_html: string; marks: number };
 type PaperRow = { question_id: string; position: number; questions: QuestionRow | QuestionRow[] | null };
 type KeyRow = { question_id: string; correct_option_id: string | null; model_answer: string | null };
 type AnswerRow = { question_id: string; answer_text: string | null; selected_option_id: string | null };
@@ -66,7 +68,7 @@ export async function loadAttemptReview(
   if (!attemptResult.data) return null;
 
   const paperResult = await client.from("attempt_questions")
-    .select("question_id,position,questions!inner(id,type,body_html,marks)")
+    .select("question_id,position,questions!inner(id,position,type,body_html,marks)")
     .eq("attempt_id", attemptId)
     .order("position");
   if (paperResult.error) fail("paper", logger);
@@ -103,6 +105,7 @@ export async function loadAttemptReview(
     attemptId,
     status: attemptResult.data.status,
     candidate,
+    question_numbers: questionNumbers(paper.map((row) => row.question_id), new Map(paper.map((row) => [row.question_id, Number(row.question.position)]))),
     items: paper.map((row) => {
       const question = row.question;
       const key = keys.get(row.question_id);
