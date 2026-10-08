@@ -130,7 +130,9 @@ On EC2 the instance only sees its private address. `use_external_ip: true` makes
 
 ## 5. The worker service
 
-Task 2F.5 implements the restart-safe 10-second exam lifecycle scheduler. Phase 3 adds a separate 30-second proctoring lane with its own non-overlap guard, so a slow disconnect pass cannot skip a lifecycle tick. The proctoring lane calls `record_disconnects`, `resolve_disconnects`, and `reverse_recent_disconnects`; each call is isolated and neither lane broadcasts. The single-instance guard (6A.1) and 30-second database heartbeat (6A.6) remain separate deployment work. **Do not deploy or run the worker against production until both are implemented and the guard/crash tests in §13 pass.**
+Task 2F.5 implements the restart-safe 10-second exam lifecycle scheduler. Phase 3 adds a separate 30-second proctoring lane with its own non-overlap guard, so a slow disconnect pass cannot skip a lifecycle tick. The proctoring lane calls `record_disconnects`, `resolve_disconnects`, and `reverse_recent_disconnects`; each call is isolated and neither lane broadcasts. The single-instance guard (6A.1) and 30-second database heartbeat (6A.6) are locally implemented; production use still requires the guard/crash/takeover checks in §13.
+
+Phase 6 adds a fourth independent grading lane with its own guard and adaptive timer: 30 seconds while idle and 2 seconds while jobs remain, with at most one in-flight call per usable slot and three total. Its key check runs at most every five minutes inside that lane. A slow grading/key call never delays lifecycle, proctoring or health. The explicit `npm run dry-run` and `npm run test:prompt` commands are operator-only and never run at worker startup.
 
 The scheduler logs only state changes and errors, never one routine line per 10-second tick. An unready scheduled exam stays scheduled; its error log contains only the exam ID and missing category names. One failed lifecycle RPC is isolated and does not prevent the other exams or attempts in that tick from being processed.
 
@@ -208,7 +210,7 @@ During setup, insert a harmless test alert and confirm it appears and resolves i
 ## 7. Supabase and Vercel settings
 
 **Supabase**
-- Migrations 001 through 005 are applied to the development project. Migration 006 is pending review and manual execution. For a fresh project, run `001_initial.sql` through `006_exam_scheduler.sql` in order, then run `001_smoke_test.sql`; for an existing project, apply only the reviewed unapplied deltas in order. Never let the application or worker apply them automatically.
+- Apply reviewed migrations in numeric order and use the phase status files to determine which deltas are still unapplied. For Phase 6, migration 011 is reported applied and migration 012 is written but not yet applied. Never let the application or worker apply migrations automatically.
 - Confirm both private buckets exist: `snapshots` and `question-images`. Verify the **4 MiB**/MIME restrictions and candidate image authorization path. The lower cap leaves multipart overhead below Vercel Functions' 4.5 MB payload ceiling.
 - Create the admin users and the `admin_profiles` rows (task 1A.6).
 - **Free projects pause after inactivity** *(verify)*. Open the dashboard the week before and again the day before the exam. Rehearsal days count as activity, but do not rely on that.

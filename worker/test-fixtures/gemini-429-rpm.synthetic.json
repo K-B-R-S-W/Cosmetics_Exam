@@ -1,0 +1,4 @@
+{
+  "synthetic": true,
+  "error": { "code": 429, "message": "Synthetic per-minute quota exceeded", "status": "RESOURCE_EXHAUSTED" }
+}

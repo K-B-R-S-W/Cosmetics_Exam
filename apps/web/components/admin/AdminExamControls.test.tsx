@@ -24,4 +24,11 @@ describe("AdminExamControls", () => {
     fireEvent.click(screen.getByRole("button", { name: "End exam" }));
     expect(screen.getByRole("button", { name: "Keep exam running" })).toBe(document.activeElement);
   });
+  it("shows the estimated Gemini calls returned by grade start", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ estimated_calls: 7 }), { status: 202 })));
+    render(<AdminExamControls exam={{ ...exam, status: "finalized" }} onChanged={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Start grading" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Start grading" })[1]!);
+    expect(await screen.findByText(/Estimated Gemini calls: 7/u)).toBeTruthy();
+  });
 });

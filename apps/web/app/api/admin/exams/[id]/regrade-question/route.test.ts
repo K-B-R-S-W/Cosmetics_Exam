@@ -1,0 +1,10 @@
+import { beforeEach, expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({ auth: vi.fn(), origin: vi.fn(), rpc: vi.fn() }));
+vi.mock("server-only", () => ({}));
+vi.mock("@/lib/auth", async (original) => ({ ...(await original<typeof import("@/lib/auth")>()), requireAdmin: mocks.auth }));
+vi.mock("@/lib/origin", async (original) => ({ ...(await original<typeof import("@/lib/origin")>()), assertSameOrigin: mocks.origin }));
+vi.mock("@/lib/supabase/server", () => ({ createServiceRoleClient: () => ({ rpc: mocks.rpc }) }));
+const exam = "00000000-0000-4000-8000-000000000040"; const question = "00000000-0000-4000-8000-000000000041";
+beforeEach(() => { mocks.rpc.mockReset(); mocks.auth.mockResolvedValue({ id: "admin" }); mocks.rpc.mockResolvedValue({ data: { run_id: "run", jobs: 2, overrides_kept: 1 }, error: null }); });
+it("calls the atomic bulk-question regrade RPC", async () => { const { POST } = await import("./route"); const response = await POST(new Request(`http://localhost/api/admin/exams/${exam}/regrade-question`, { method: "POST", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ question_id: question }) }), { params: Promise.resolve({ id: exam }) }); expect(response.status).toBe(202); expect(mocks.rpc).toHaveBeenCalledWith("start_question_regrade", { p_exam_id: exam, p_question_id: question, p_admin_id: "admin" }); });
+it("rejects unknown fields before the RPC", async () => { const { POST } = await import("./route"); const response = await POST(new Request(`http://localhost/api/admin/exams/${exam}/regrade-question`, { method: "POST", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ question_id: question, extra: true }) }), { params: Promise.resolve({ id: exam }) }); expect(response.status).toBe(400); expect(mocks.rpc).not.toHaveBeenCalled(); });

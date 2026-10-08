@@ -10,9 +10,11 @@ interface AnswerKeyEditorProps {
   marks: number;
   onChange: (key: AnswerKeyInput) => void;
   value: AnswerKeyInput;
+  examId?: string;
+  questionId?: string;
 }
 
-export function AnswerKeyEditor({ disabled = false, errors = {}, marks, onChange, value }: AnswerKeyEditorProps) {
+export function AnswerKeyEditor({ disabled = false, errors = {}, marks, onChange, value, examId, questionId }: AnswerKeyEditorProps) {
   const calibration = value.calibration;
   const set = <K extends keyof AnswerKeyInput>(key: K, next: AnswerKeyInput[K]) => onChange({ ...value, [key]: next });
   return <section className="space-y-5" aria-labelledby="answer-key-title">
@@ -32,5 +34,6 @@ export function AnswerKeyEditor({ disabled = false, errors = {}, marks, onChange
       <p className="text-sm text-muted">Add 2 to 4 short sample answers with the marks you would give. Use answers you invent, not real staff answers.</p>
     </fieldset>
     <details className="border border-hairline p-4"><summary className="min-h-11 cursor-pointer font-bold">How to write a good answer key</summary><p className="mt-3">Example: For a niacinamide question, list the expected benefit, mechanism and safe-use point, assign marks to each, and say which Sinhala or Singlish wording is acceptable.</p></details>
+    {examId && questionId ? <Button variant="secondary" onClick={() => void fetch(`/api/admin/exams/${examId}/regrade-question`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question_id: questionId }) })}>Regrade this question for everyone</Button> : null}
   </section>;
 }

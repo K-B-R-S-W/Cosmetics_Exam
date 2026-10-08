@@ -1,0 +1,10 @@
+import { beforeEach, expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({ auth: vi.fn(), origin: vi.fn(), rpc: vi.fn() }));
+vi.mock("server-only", () => ({}));
+vi.mock("@/lib/auth", async (original) => ({ ...(await original<typeof import("@/lib/auth")>()), requireAdmin: mocks.auth }));
+vi.mock("@/lib/origin", async (original) => ({ ...(await original<typeof import("@/lib/origin")>()), assertSameOrigin: mocks.origin }));
+vi.mock("@/lib/supabase/server", () => ({ createServiceRoleClient: () => ({ rpc: mocks.rpc }) }));
+const attempt = "00000000-0000-4000-8000-000000000030"; const question = "00000000-0000-4000-8000-000000000031";
+beforeEach(() => { mocks.rpc.mockReset(); mocks.auth.mockResolvedValue({ id: "admin" }); mocks.rpc.mockResolvedValue({ data: { run_id: "run", job_id: "job", override_present: false }, error: null }); });
+it("calls the atomic single-attempt regrade RPC with a strict body", async () => { const { POST } = await import("./route"); const response = await POST(new Request(`http://localhost/api/admin/results/${attempt}/regrade`, { method: "POST", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ question_id: question }) }), { params: Promise.resolve({ attempt }) }); expect(response.status).toBe(202); expect(mocks.rpc).toHaveBeenCalledWith("start_attempt_regrade", { p_attempt_id: attempt, p_question_id: question, p_admin_id: "admin" }); });
+it("maps duplicate queued work to 409 without database details", async () => { mocks.rpc.mockResolvedValue({ data: null, error: { message: "regrade_in_progress", details: "database text" } }); const { POST } = await import("./route"); const response = await POST(new Request(`http://localhost/api/admin/results/${attempt}/regrade`, { method: "POST", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ question_id: question }) }), { params: Promise.resolve({ attempt }) }); expect(response.status).toBe(409); const body = await response.json(); expect(body.error.code).toBe("regrade_in_progress"); expect(JSON.stringify(body)).not.toContain("database text"); });

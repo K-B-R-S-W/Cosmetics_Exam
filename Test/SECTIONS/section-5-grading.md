@@ -92,7 +92,7 @@ All of these live in the **worker's** environment (the Gemini keys must never be
 | `GEMINI_KEY_1` .. `GEMINI_KEY_3` | none | The keys. Never logged (only the label `key1`..`key3`) |
 | `GEMINI_MODEL` | `gemini-3.7-flash` | The required model. Startup fails closed if it differs unless a later approved technical change updates this spec |
 | `GEMINI_DAILY_LIMITS` | none | Per-key environment configuration, for example `key1:LIMIT,key2:LIMIT,key3:LIMIT`, using the current values shown in AI Studio; no quota is assumed in code |
-| `GRADING_CHUNK_SIZE` | 10 | Questions per call, 1 to 20 |
+| `GRADING_CHUNK_SIZE` | 10 | Questions per call, 1 to 10 |
 | `GRADING_SLOT_MIN_INTERVAL_MS` | 12000 | Minimum gap between calls on one slot (5 per minute, the lowest figure I saw) *(verify)* |
 | `GRADING_RESERVE` | 1 | Calls kept unused per slot per day |
 | `GRADING_REQUEST_TIMEOUT_MS` | 90000 | Per request |
@@ -263,7 +263,7 @@ Rows are written with `ON CONFLICT DO NOTHING` (Appendix A index), then the job 
 ### 6.4 Partial accept
 
 - All items valid: job `done`.
-- Some invalid or missing: save the valid ones, mark the job `done` with `error = 'partial: n requeued'`, and insert a **new job** (next `chunk_index`) holding only the missing ids, with `tries = parent.tries + 1`. If the new job would exceed `GRADING_MAX_TRIES`, mark the parent `failed` with the missing ids in `error` instead.
+- Some invalid or missing: save the valid ones, mark the job `done` with `error = 'partial:n'`, log `requeued`, and insert a **new job** (next `chunk_index`) holding only the missing ids, with `tries = parent.tries + 1`. If the new job would exceed `GRADING_MAX_TRIES`, mark the parent `failed` instead.
 - Unparseable JSON or a `MAX_TOKENS` cut-off: nothing is saved; the chunk is re-queued as **two half-size jobs** (when it has more than one item), same `tries + 1` rule.
 
 ---
@@ -424,6 +424,8 @@ Budget: 15 cases are 2 calls per repeat, so 6 calls. Run it on a day before the 
 
 ### 10.3 Capture a real 429
 
+The unit-only Phase 6 build ships only clearly labelled `*.synthetic.json` classifier fixtures with top-level `"synthetic": true`. Capturing a real 429 is deferred to the post-Phase-7 live sequence in `PHASE-6-TEST-STEPS.md`; synthetic fixtures must never be presented as real captures.
+
 Once, deliberately exceed the per-minute limit with a spare key and save the full error JSON as `worker/test-fixtures/gemini-429-rpm.json`. Do the same for a daily-quota error if you ever see one. The error classifier (7.4) is unit-tested against these files. This is how the *(verify)* about field names gets closed.
 
 ### 10.4 Before trusting it
@@ -457,7 +459,7 @@ Replace the template questions and the AI-written Sinhala and Singlish with the 
 | New 6A.10 | `lib/grading/quota-day.ts` (Pacific day, 7.7) with a unit test across the November clock change |
 | 6B.1 | The user message is the JSON document in 5.2; the system instruction is 5.1; item ids are `"1"`..`"n"`; chunk size from `GRADING_CHUNK_SIZE`; `lib/grading/html-to-text.ts` per section 4 |
 | 6B.2 | Header key, schema from 5.3, timeout, and typed outcomes from 7.4 |
-| 6B.3 | Validation and `needs_review` from section 6; `ON CONFLICT DO NOTHING` writes; partial accept from 6.4 |
+| 6B.3 | Validation and `needs_review` from section 6; the partial unique index makes job/question writes idempotent. PostgREST batch insert is attempted first; only a `23505` crash-retry collision falls back to per-row inserts that ignore duplicate rows. Partial accept follows section 6.4 |
 | 6B.4 | Replace with the outcome table in 7.4; daily-quota detection is unit-tested against the saved 429 files |
 | 6B.5 | Event list from 7.9; every `call` row sets `key_label` and `model` |
 | New 6B.6 | Run finishing and pausing (7.5, 7.6), including **auto-resume** of `keys_exhausted` pauses |
@@ -533,8 +535,8 @@ create index if not exists idx_grading_log_usage
   where event = 'call';
 
 -- 3. Idempotent AI writes: a job can score a question only once.
---    The worker inserts with ON CONFLICT DO NOTHING, so a crash between "insert scores" and
---    "mark job done" is safe to retry. Regrade rows (new job) and override rows (job_id null) are unaffected.
+--    The worker treats a 23505 on a batch as a crash retry and falls back to per-row inserts,
+--    ignoring only this index's duplicates. Regrade rows (new job) and override rows (job_id null) are unaffected.
 create unique index if not exists uq_question_scores_job_question
   on public.question_scores (job_id, question_id)
   where job_id is not null;

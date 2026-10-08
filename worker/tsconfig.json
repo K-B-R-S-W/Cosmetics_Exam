@@ -8,7 +8,18 @@
     "noEmit": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "zod": ["node_modules/zod"],
+      "sanitize-html": ["node_modules/@types/sanitize-html"]
+    },
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "../apps/web/lib/exam-lifecycle.ts"]
+  "include": [
+    "src/**/*.ts",
+    "../apps/web/lib/exam-lifecycle.ts",
+    "../apps/web/lib/grading/quota-day.ts",
+    "../apps/web/lib/grading/html-to-text.ts",
+    "../apps/web/lib/grading/contracts.ts"
+  ]
 }

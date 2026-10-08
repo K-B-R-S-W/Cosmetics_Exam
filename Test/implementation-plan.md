@@ -343,8 +343,8 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 | 6A.3 | Key state table init | Database / seed | Seed `api_key_state` with key1, key2, key3 |
 | 6A.4 | Job picker | `worker/src/grader.ts` | 🔧²¹ Pick oldest pending job from running runs. Claim with atomic conditional update (`WHERE id = job.id AND status = 'pending' AND tries = <read_tries> RETURNING *`) per §7.2 |
 | 6A.5 | Stuck job reset | `worker/src/grader.ts` | Reset jobs stuck in 'running' for >2 min back to 'pending' |
-| 6A.6 | Health heartbeat | `worker/src/heartbeat.ts` | 🔧 Write to `system_health('worker')` every 30s (not `alerts`). 🔧²¹ Include JSON `detail` (§7.8) with instance UUID, queue counts (pending, running, failed), and per-slot status/usage |
-| ➕ 6A.7 | Alert webhook | `worker/src/alerts.ts` | 🔧 Send critical alerts via **Telegram or Discord webhook**. 🔧²¹ Dedup keys (§7.10): `key_disabled:{label}`, `keys_exhausted:{run}`, `model_not_found`, `jobs_failed:{run}`, `blocked:{run}`, `run_done:{run}`. 🔧²² Format payload by hostname: Discord (`{ "content": text }`) vs Telegram (`{ "text": text }`) with 5s timeout and 1 retry (Section 6 §6). Worker-level alert dedup keys: `worker_started` (INFO, once per start), `guard_exit` (CRITICAL, exit code 3), `supabase_unreachable` (CRITICAL, 5 min failed DB calls) |
+| 6A.6 | Health heartbeat | `worker/src/health.ts` | Write to `system_health('worker')` every 30s (not `alerts`). Include JSON `detail` (§7.8) with instance UUID, queue counts and per-slot label/status/usage; the health lane remains independent of grading |
+| ➕ 6A.7 | In-app alerts | `worker/src/alerts.ts` | Insert deduplicated rows into `alerts`; no Discord/Telegram webhook. Grading keys are referenced only by label, and messages contain no prompts, answers, response text or secrets. Dedup keys include `key_disabled:{label}`, `keys_exhausted:{run}`, `model_not_found`, `jobs_failed:{run}`, `blocked:{run}`, and `run_done:{run}` |
 | ➕ 6A.8 | Quota pre-check | `worker/src/dry-run.ts` | 🔧🔧² Dry-run generation call to verify key works. 🔧²¹ Counts toward daily budget: run once per key, not on every start. Live quotas must be checked in AI Studio |
 | ➕ 6A.9 | Worker key check | `worker/src/key-check.ts` | 🔧⁹ Every 5 minutes, per key: call Gemini model-listing endpoint, write `api_key_state` (`active`, or `disabled` on 400/403). Only place keys are used outside grading |
 | ➕ 6A.10 | Pacific day calculator | `lib/grading/quota-day.ts` | 🔧²¹ Start of current Pacific day and next Pacific midnight using `Intl.DateTimeFormat` with `America/Los_Angeles`. Unit-tested across November DST clock change (§7.7) |
@@ -355,11 +355,11 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 |---|---|---|---|
 | 6B.1 | Prompt builder | `worker/src/prompt.ts`, `lib/grading/html-to-text.ts` | 🔧² One grading job per candidate. 🔧³ **Cap at ~10 questions per Gemini call** (`GRADING_CHUNK_SIZE`). 🔧⁶ `grading_jobs` keyed by `(run_id, attempt_id, chunk_index)`. 🔧²¹ System instruction version `g1` (§5.1). User message is a single JSON document (§5.2) with stringified candidate text to prevent prompt injection. Item IDs are `"1"`..`"n"` mapped back to question UUIDs. HTML converted to plain text via `lib/grading/html-to-text.ts` (`sanitize-html`, entity decoding, 2,000 char cap per §4). Truncate candidate answers >6,000 chars and set `truncated = true` |
 | 6B.2 | Gemini API caller | `worker/src/gemini.ts` | 🔧²¹ `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` with `x-goog-api-key` header (never in URL). Structured JSON schema (§5.3), `temperature: 0`, `maxOutputTokens: 8192`, timeout `GRADING_REQUEST_TIMEOUT_MS` (90s). Returns typed outcomes (§7.4) |
-| 6B.3 | Response parser & validation | `worker/src/parser.ts` | 🔧²¹ Per-item validation (§6.1): check required fields, clamp marks to 0..max, round to `GRADING_MARK_STEP` (0.5). Evaluate `needs_review` rules in code (§6.2): confidence < 0.6 (< 0.75 for Singlish/mixed), verdict mismatch, points mismatch, clamped marks, truncated answer, empty reason, fallback model. Write to `question_scores` with `source = 'ai'` and `ON CONFLICT (job_id, question_id) DO NOTHING`. Partial accept (§6.4): save valid items, re-queue missing items in a new job |
+| 6B.3 | Response parser & validation | `worker/src/parser.ts` | 🔧²¹ Per-item validation (§6.1): check required fields, clamp marks to 0..max, round to `GRADING_MARK_STEP` (0.5). Evaluate `needs_review` rules in code (§6.2): confidence < 0.6 (< 0.75 for Singlish/mixed), verdict mismatch, points mismatch, clamped marks, truncated answer and empty reason. Write to `question_scores` with `source = 'ai'` and idempotency from `uq_question_scores_job_question`. Partial accept (§6.4): save valid items, re-queue missing items in a new job |
 | 6B.4 | Error classifier & actions | `worker/src/errors.ts` | 🔧²¹ Outcome table (§7.4): 200 ok (count call, validate); 429 RPM (slot cooldown 30s/2m/10m, job to pending, no try charged); 429 daily quota (cool slot until next Pacific midnight); 400/403 bad key (disable key, critical alert); 404 model not found (pause all runs, critical alert); 5xx transient (backoff retry up to `GRADING_MAX_TRIES`); safety block (job failed, manual override); unparseable JSON or `MAX_TOKENS` cutoff (split chunk into two half-size jobs). Tested against saved 429 fixtures |
-| 6B.5 | Logging | `worker/src/logger.ts` | 🔧²¹ Write events to `grading_log` (§7.9): `worker_start`, `call`, `done`, `rate_limited`, `key_disabled`, `retry`, `requeued`, `blocked`, `paused`, `resumed`, `run_done`, `run_failed`. Every `call` row records `key_label`, `model`, item count, and latency ms. Never log raw answers, prompts, or API keys |
+| 6B.5 | Logging | `worker/src/grading-log.ts`, `worker/src/grader.ts` | 🔧²¹ Write events to `grading_log` (§7.9): `worker_start`, `call`, `done`, `rate_limited`, `key_disabled`, `retry`, `requeued`, `blocked`, `paused`, `resumed`, `run_done`, `run_failed`. Every `call` row records `key_label`, `model`, item count, and latency ms. A strict safe-detail validator rejects free text. Never log raw answers, prompts, response text or API keys |
 | ➕ 6B.6 | Run lifecycle & auto-resume | `worker/src/runner.ts` | 🔧²¹ Finishing and pausing (§7.5, §7.6): when all slots exhausted (`handleNoSlot`), pause runs with `keys_exhausted` and `resume_at`, send alert. Worker polls every 30s to **auto-resume** runs when slots become available. On attempt job completion, trigger `recomputeResults(attempt)`. Set run `done` or `failed` with completion alert |
-| ➕ 6B.7 | Grading unit test suite | `worker/tests/grading.test.ts` | 🔧²¹ Unit tests in vitest: `buildItems`, `htmlToText`, `validateItem`, `needsReview`, `classifyError` (against 429 fixtures), `nextPacificMidnight`, `roundMark` |
+| ➕ 6B.7 | Grading unit test suite | `worker/src/*.test.ts`, `apps/web/lib/grading/*.test.ts` | Vitest coverage is colocated with prompt, parser, errors, slots, runner, Gemini caller, quota-day and HTML conversion modules; 429 classifier tests use clearly synthetic fixtures until the deferred real capture |
 
 ### 6C — MCQ Scoring + Results (0.5 day)
 
@@ -374,12 +374,12 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 | # | Task | Files | Details |
 |---|---|---|---|
 | 6D.1 | Start grading API | `app/api/admin/exams/[id]/grade/route.ts` | 🔧 **Guard: only after exam is finalized** (all attempts submitted/expired). The grade-start transaction takes `FOR UPDATE` on the exam row before checking keys and creating the run; this conflicts with `save_answer_key`'s `FOR SHARE` lock so a key edit cannot race grading start. 🔧⁹ **Check answer keys are complete** — return `409 missing_answer_keys` with the list of questions that have no answer key. **Score MCQs in code** (compare `selected_option_id` with `answer_keys.correct_option_id`, write to `question_scores` with source=`mcq`). **Auto-zero blank written answers** (no Gemini job needed). Create `grading_runs` + `grading_jobs` for remaining non-empty written answers. 🔧²¹ **Response includes `estimated_calls`** (candidates × ceil(questions / chunk_size)). UI displays this alongside AI Studio quota check reminder |
-| 6D.2 | Resume API | `app/api/admin/grading/[run]/resume/route.ts` | 🔧¹⁰ **Body**: `{ failed_only?: boolean }`. If `failed_only` is true (default), only retry `failed` jobs. If false, retry both `failed` and `pending`. Returns `{ resumed: number }` |
+| 6D.2 | Resume API | `app/api/admin/grading/[run]/resume/route.ts` | Strict optional body `{ failed_only?: boolean }`, default true. Returns `{ run_id, status, requeued_jobs }`; migration 012 clears pause metadata and prevents two active runs for one exam |
 | 6D.3 | Grading progress page | `app/(admin)/admin/results/page.tsx` | Progress bar, key states, log. 🔧²¹ Shows per-slot usage from `system_health.detail` (`used_today / limit`, cooldowns), queue counts by status, live log tail, and "N not graded" count (§6D.3, §7.8, §8.1) |
 | 6D.4 | Review screen | `app/(admin)/admin/results/[attempt]/page.tsx` | Per-question candidate answer, model answer, AI marks, reason, matched/missing points, confidence, 🔧³ `candidate_meaning_english`. 🔧 Reads from `current_scores` view. 🔧²¹ Display model name and prompt version (`details.model`, `details.prompt_version`). Filter for "needs review" items. Display "N questions not graded" banner (§8.1) |
-| 6D.5 | Override API | `app/api/admin/results/[attempt]/override/route.ts` | 🔧 **Writes to `question_scores`** with source = `override`. 🔧² Override rows are never replaced by regrading (the view guarantees this). 🔧¹⁰ **Rules**: `note` is required (the admin must explain the override), and the attempt must be `finalized`. Returns `override_present: true` so the review screen can show the indicator |
+| 6D.5 | Override API | `app/api/admin/results/[attempt]/override/route.ts` | 🔧 **Writes to `question_scores`** with source = `override`. 🔧² Override rows are never replaced by regrading (the view guarantees this). 🔧¹⁰ **Rules**: `note` is required (the admin must explain the override), and the attempt must be `finalized`. Returns the documented current override and authoritative recomputed result |
 | 6D.6 | Regrade API | `app/api/admin/results/[attempt]/regrade/route.ts` | 🔧⁹ Regrade single question for one candidate → new grading job with 🔧³ `question_ids = [that_id]`. Preconditions: attempt must be `finalized` (`409 not_finalized`); question must be written with a non-blank answer (`409 nothing_to_grade`). 🔧² Override always wins; latest `created_at` wins if no override (`current_scores` view). Recalculate totals |
-| ➕ 6D.7 | Shared `recomputeResults()` | `lib/grading/recompute.ts` | 🔧¹⁰ Written once and imported by grade route (6D.1), override route (6D.5), and worker. Reads `current_scores` view (never raw `question_scores`), sums totals, upserts `results` |
+| ➕ 6D.7 | Shared result recomputation | `supabase/migrations/011_grading_rpcs.sql`, `lib/grading/recompute.ts`, `worker/src/grader.ts` | 🔧¹⁰ The authoritative formula is written once in `recompute_results` / `recompute_exam_results`. The web and worker wrappers only call those RPCs, so they cannot drift. The SQL reads `current_scores` (never raw `question_scores`), sums totals and upserts `results` |
 | ➕ 6D.8 | Bulk regrade question API | `app/api/admin/exams/[id]/regrade-question/route.ts` | 🔧²¹ Section 5 §8.4: `POST` with `{ question_id }`. Preconditions: exam must be finalized, else `409 exam_not_finalized`; no grading run active (`409 grading_in_progress`); question is written with model answer (`400 not_written` / `409 missing_answer_key`). Creates run (`kind = 'regrade'`) and one job per attempt that has this question with a non-blank answer. Existing overrides preserved. Writes `admin_actions` (`regrade_question`). Response: `202 { run_id, jobs, overrides_kept }` |
 
 ### 6E — Prompt Testing (0.5 day)
@@ -387,11 +387,11 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 | # | Task | Files | Details |
 |---|---|---|---|
 | 6E.1 | Test script | `worker/scripts/test-prompt.ts` | 🔧²¹ Run prompt harness on 15 test cases from `grading-test-cases.json` (§10.1). Sends in chunks of 10, repeats each chunk 3 times to measure score stability (differ by ≤0.5) |
-| 6E.2 | Test with Singlish/Sinhala | `worker/scripts/grading-test-cases.json` | 🔧²¹ Sample answers across English, Sinhala, Singlish, negation (`epa`, `naha`), and prompt injection (§10.1, §10.2). Sinhala reader verifies `candidate_meaning_english` |
+| 6E.2 | Test with Singlish/Sinhala | `Test/SECTIONS/grading-test-cases.json` | 🔧²¹ Sample answers across English, Sinhala, Singlish, negation (`epa`, `naha`), and prompt injection (§10.1, §10.2). Sinhala reader verifies `candidate_meaning_english` |
 | 6E.3 | Calibration tuning | Answer keys / prompt notes | 🔧²¹ Adjust grading notes and calibration examples based on test results (do not alter system prompt rules unless clearly flawed) |
-| ➕ 6E.4 | Capture 429 fixtures | `worker/test-fixtures/gemini-429-rpm.json` | 🔧²¹ Section 5 §10.3: deliberately exceed RPM limit with a spare key to save raw 429 JSON response. Unit-test error classifier against fixture to verify Google's error payload structure |
+| ➕ 6E.4 | Capture 429 fixtures | `worker/test-fixtures/*.synthetic.json` | Unit tests use fixtures whose filename contains `.synthetic` and whose top-level object has `"synthetic": true`. Capturing a real spare-key 429 remains deferred until the post-Phase-7 live runbook |
 
-**Done when:** full 23-paper run completes; one key deliberately broken → worker fails over and alerts super admin via webhook; MCQ + written scores calculated correctly in `question_scores`; prompt test passes (≥90% within range, stability ≤0.5, injection case A8 scores 0); deliberately exhausted key fails over; all keys exhausted causes clean pause and auto-resumes after cooldown; worker crash during write produces zero duplicate score rows on re-run.
+**Done when:** full 23-paper run completes; one key deliberately broken → worker fails over and creates a deduplicated in-app alert; MCQ + written scores calculate correctly; prompt tests meet the quality/stability targets; exhausted keys fail over; all keys exhausted pauses cleanly and auto-resumes after cooldown; a worker crash during write produces zero duplicate score rows on re-run. These remain live acceptance checks after the unit-only Phase 6 build.
 
 ---
 
@@ -492,7 +492,7 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 | ➕ 8.68 | Test 429 fixture classification | 🔧²¹ 429 classification passes against the saved real fixtures (RPM and daily) |
 | ➕ 8.69 | Test invalid key disabled | 🔧²¹ An invalid key becomes disabled, a critical alert is sent, grading continues on other keys |
 | ➕ 8.70 | Test 404 model not found | 🔧²¹ 404 model-not-found pauses the run with a critical alert and no key rotation |
-| ➕ 8.71 | Test all slots exhausted pause & auto-resume | 🔧²¹ All slots used up: run paused with resume_at, webhook sent; after cooldown resumes by itself |
+| ➕ 8.71 | Test all slots exhausted pause & auto-resume | All slots used up: run paused with `resume_at`, in-app alert created; after cooldown resumes by itself |
 | ➕ 8.72 | Test all keys disabled pause | 🔧²¹ All keys disabled: run paused and does not resume by itself |
 | ➕ 8.73 | Test partial accept | 🔧²¹ A response missing 2 of 10 items saves 8 scores and re-queues exactly those 2 |
 | ➕ 8.74 | Test unparseable JSON split | 🔧²¹ Invalid JSON or MAX_TOKENS cut-off re-queues the chunk as two half-size jobs |
@@ -511,7 +511,7 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 | ➕ 8.87 | Test guard after crash | 🔧²² Kill worker with `kill -9`; systemd restarts it; new instance polls up to 65s, sees heartbeat not advancing, takes over; grading/scheduler continue, exit code is not 3 |
 | ➕ 8.88 | Test guard after graceful restart | 🔧²² `systemctl restart exam-worker` starts without waiting (previous instance wrote `status = 'down'`) |
 | ➕ 8.89 | Test guard against live second worker | 🔧²² Start second worker manually while service runs; second one exits with code 3 after wait; service keeps running |
-| ➕ 8.90 | Test alert delivery | 🔧²² `curl` webhook manually, then trigger real alert (break one key); message reaches phone with no keys or candidate names |
+| ➕ 8.90 | Test alert delivery | Trigger a real grading alert by breaking one test key; the super-admin Health page shows one deduplicated alert with a label only and no keys or candidate text |
 | ➕ 8.91 | Test dead worker visibility | 🔧²² Stop worker; within 90s health page shows it stale and health route returns non-200 |
 | ➕ 8.92 | Test reboot recovery | 🔧²² `sudo reboot` EC2; LiveKit, Caddy, Redis (`restart: unless-stopped`) and worker (systemd enabled) recover automatically; TLS cert valid |
 | ➕ 8.93 | Test restore drill | 🔧²² Section 6 §8 item 6: restore latest DB dump into scratch Supabase project with `pg_restore --no-owner --dbname=<url>`; verify app connects and lists exams and candidates |
@@ -602,7 +602,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | Health check: key-listing endpoint | 5C.2 |
 | Grade only after finalized | 6D.1 |
 | Regrade "current" rule | 6D.6 |
-| Telegram/Discord webhook alerts | 6A.7 |
+| In-app grading alerts only | 6A.7 |
 | UptimeRobot | 0.10, 5C.5 |
 | Post-exam backup to Drive | 7.6 |
 | Consent on rules screen | 2B.6 |
@@ -736,7 +736,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | Retention still 30 in contract, 2B.6 missing source | 2B.6 (shows retention from `/api/auth/me`), contract needs manual fix to 14 |
 | Question HTML allowlist missing | 1E.7 (allowlist added from Section 3 §4.3) |
 | Override rules: note required, attempt must be finalized | 6D.5 (rules added) |
-| Resume body undocumented | 6D.2 (`{ failed_only? }`, returns `{ resumed }`) |
+| Resume body undocumented | 6D.2 (strict optional `{ failed_only? }`, defaults true, returns `{ run_id, status, requeued_jobs }`) |
 | Broadcast limits missing | 5A.5 (5,000 characters, unlimited sends, fixed 5-second toast, publish failure non-blocking) |
 | `recomputeResults()` shared function missing | 6D.7 (new task — `lib/grading/recompute.ts`) |
 | Per-IP login limit could lock out office | 2A.3 (per-IP threshold 50+; per-MER limit is the real protection) |
@@ -883,7 +883,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | Slot manager replaces key manager | 6A.2 (tracks per (key, model): cooldown, daily budget, min interval; skips exhausted slots) |
 | Atomic conditional job claim | 6A.4 (claim query checks `status = 'pending'` and repeats read `tries` to avoid race) |
 | Heartbeat detailed slot status | 6A.6 (writes `detail` JSON with instance id, queue stats, and per-slot usage) |
-| Alert webhook deduping | 6A.7 (uses deduplication keys: `key_disabled:{label}`, `keys_exhausted:{run}`, etc.) |
+| In-app alert deduping | 6A.7 (uses the active-alert unique key and treats 23505 as an existing alert) |
 | Dry-run call quota accounting | 6A.8 (counts against daily budget; run once per key, not on every start) |
 | Pacific midnight tracking | 6A.10 (`lib/grading/quota-day.ts` handles PDT/PST resets with unit tests across clock change) |
 | JSON batch prompt & HTML sanitize | 6B.1 (JSON array input, stringified text prevents injection, item IDs "1".."n", HTML stripped) |
@@ -897,7 +897,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | Progress screen per-slot usage | 6D.3 (shows slot usage from heartbeat `detail`, queue counts, and unscored count) |
 | Review screen model details & unscored count | 6D.4 (shows model, prompt version, needs-review filter, and not-graded count) |
 | Bulk regrade question route | 6D.8 (`POST /api/admin/exams/[id]/regrade-question` creates jobs for all attempts with answer, keeps overrides) |
-| Prompt test harness & 429 fixtures | 6E.1–6E.4 (`test-prompt.ts` with 15 cases; capture real 429 error fixtures) |
+| Prompt test harness & 429 fixtures | 6E.1–6E.4 (`test-prompt.ts` with 15 canonical cases; synthetic classifier fixtures now, real 429 capture deferred) |
 | Grading completion criteria | Phase 6 "Done when" (prompt tests pass, failover verified, auto-resume verified, crash idempotency) |
 | Unscored questions in CSV export | 7.4 (added `unscored_count` column placed after `needs_review_count`) |
 | Worker environment configuration | 0.4 (added worker-only variables: `GEMINI_KEY_1..3`, `GEMINI_MODEL`, `GEMINI_DAILY_LIMITS`, `GRADING_*`, `REVIEW_*`) |
@@ -917,7 +917,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | Missing infra templates & scripts | 0.8, 4D.1, 4D.3 (`setup-ec2.sh`, `deploy-worker.sh`, `check-stack.sh`, `backup-db.sh`, `exam-worker.service`, `livekit.env.example`, `web.env.example`, `worker.env.example`) |
 | Tight memory on t3.small (2 GB) | 4D.6 (2 GB swap), 8.94 (capacity check, watch `free -m` and docker stats, resize to t3.medium if needed) |
 | Dead worker unmonitored | 5C.2 (health route returns non-200 if worker heartbeat > 90s stale so UptimeRobot alerts) |
-| Telegram/Discord webhook formats | 6A.7 (detects format from webhook hostname, 5s timeout, 1 retry) |
+| No Discord/Telegram alert transport | 6A.7 and Section 6 use only the in-app `alerts` table |
 | Worker-level alerts & dedup keys | 6A.7 (`worker_started`, `guard_exit`, `supabase_unreachable`) |
 | Credentials persistence in password manager | 0.4 (`SESSION_SECRET` and `NIC_PEPPER` saved in password manager, never changed once candidates imported) |
 | LiveKit Cloud local dev only | 4A.2 (cloud for local dev only, production on self-hosted EC2) |

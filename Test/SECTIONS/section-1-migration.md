@@ -11,6 +11,9 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 - `005_question_rpcs.sql` — run fifth. It adds atomic, status-locked question save/delete/reorder and answer-key save functions.
 - `006_exam_scheduler.sql` — run sixth. It adds the shared start, due-submission and finalization RPCs and aligns candidate writes on the exam-row-then-attempt-row lock order.
 - `007_proctoring.sql` — run seventh. It adds atomic candidate-event and heartbeat RPCs, one shared disconnect-classification helper, bounded disconnect passes, snapshot-failure repair, login-event and dismiss/restore RPCs, and the low-churn violation indexes. It deliberately does not index `attempts.last_seen_at`.
+- `008_admin_controls.sql` through `010_exam_end_deadline.sql` — run eighth through tenth in numeric order.
+- `011_grading_rpcs.sql` — run eleventh. It adds atomic grading start, resume, regrade and result-recompute functions.
+- `012_grading_runtime.sql` — run twelfth. It adds pause metadata/indexes and hardens resume and duplicate regrade behavior.
 - `001_smoke_test.sql` — run last in the SQL editor; it rolls itself back and reports the observed `generate_paper()` time for 100 questions.
 
 > **Development verification status (4 October 2026):** `001_initial.sql` through `005_question_rpcs.sql` and the full revised `001_smoke_test.sql` (including block 14) ran without errors on PostgreSQL 16.2. The smoke test passed. Earlier development-project checks also reported zero tables without RLS, `/api/health` returned HTTP 200, and a manually created `super_admin` Auth user was linked to its `admin_profiles` row.
@@ -38,7 +41,8 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 6. SQL editor → paste `005_question_rpcs.sql` → **Run**.
 7. SQL editor → paste `006_exam_scheduler.sql` → **Run**.
 8. SQL editor → paste `007_proctoring.sql` → **Run**.
-9. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect the final result **SMOKE TEST PASSED** with the measured `generate_paper_100_question_ms` value.
+9. Run migrations `008_admin_controls.sql` through `012_grading_runtime.sql` in numeric order.
+10. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect the final result **SMOKE TEST PASSED** with the measured `generate_paper_100_question_ms` value.
 10. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
    `insert into public.admin_profiles (id, name, role) values ('<auth user uuid>', 'Name', 'super_admin');`
    Use `'admin'` for ordinary admins.
@@ -146,6 +150,10 @@ The migration and smoke test are intentionally not embedded here. Use these chec
 - [`006_exam_scheduler.sql`](../../supabase/migrations/006_exam_scheduler.sql)
 - [`007_proctoring.sql`](../../supabase/migrations/007_proctoring.sql)
 - [`008_admin_controls.sql`](../../supabase/migrations/008_admin_controls.sql)
+- [`009_announcements_state.sql`](../../supabase/migrations/009_announcements_state.sql)
+- [`010_exam_end_deadline.sql`](../../supabase/migrations/010_exam_end_deadline.sql)
+- [`011_grading_rpcs.sql`](../../supabase/migrations/011_grading_rpcs.sql)
+- [`012_grading_runtime.sql`](../../supabase/migrations/012_grading_runtime.sql)
 - [`001_smoke_test.sql`](./001_smoke_test.sql)
 
 This prevents the documentation copy from drifting away from the executable source of truth.

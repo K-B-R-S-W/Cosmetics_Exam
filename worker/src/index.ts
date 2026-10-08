@@ -20,6 +20,11 @@ import { schedulerLogger } from "./logger";
 import { runProctoringPasses } from "./proctoring";
 import { runSchedulerTick } from "./scheduler";
 import { createSchedulerSource } from "./supabase-source";
+import { startGradingLane, type GradingLane } from "./grading-lane";
+import { createGradingRepository } from "./grader";
+import { initializeGrading, runGradingTick, type GradingRetry } from "./runner";
+import { SlotManager } from "./slots";
+import { checkKeys } from "./key-check";
 
 export type WorkerLaneController = {
   stop(): void;
@@ -103,8 +108,6 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
 }
 
 async function main(): Promise<void> {
-  const config = loadWorkerConfig();
-
   if (process.env.WORKER_SELF_TEST === "1") {
     let lifecycleRuns = 0;
     let proctoringRuns = 0;
@@ -120,10 +123,17 @@ async function main(): Promise<void> {
     if (lifecycleRuns !== 1 || proctoringRuns !== 1 || healthRuns !== 1) {
       throw new Error("worker_lane_self_test_failed");
     }
-    console.info("WORKER DIST THREE-LANE SELF-TEST PASSED");
+    let gradingRuns = 0;
+    const grading = startGradingLane(async () => { gradingRuns += 1; return { active: false }; });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    grading.stop();
+    if (gradingRuns !== 1) throw new Error("worker_grading_lane_self_test_failed");
+    console.info("WORKER DIST FOUR-LANE SELF-TEST PASSED");
     console.info("WORKER DIST SELF-TEST PASSED");
     return;
   }
+
+  const config = loadWorkerConfig();
 
   const client = createClient(config.supabaseUrl, config.serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -135,10 +145,14 @@ async function main(): Promise<void> {
   let stopping = false;
   let ownsRow = false;
   let lanes: WorkerLaneController | null = null;
+  let gradingLane: GradingLane | null = null;
   const shutdown = createShutdownHandler({
     instance,
     store,
-    getLanes: () => lanes,
+    getLanes: () => lanes ? {
+      stop() { lanes?.stop(); gradingLane?.stop(); },
+      waitForHeartbeat(timeoutMs) { return lanes?.waitForHeartbeat(timeoutMs) ?? Promise.resolve(); },
+    } : null,
     ownsRow: () => ownsRow,
     setStopping: () => { stopping = true; },
     exit: (code) => process.exit(code),
@@ -195,6 +209,36 @@ async function main(): Promise<void> {
     },
     heartbeat,
   );
+
+  const repository = createGradingRepository(client);
+  const slots = new SlotManager(config.grading.keys, config.grading.reserve, config.grading.slotMinIntervalMs);
+  await initializeGrading({ repository, config: config.grading, slots });
+  await repository.log({ run_id: null, event: "worker_start", detail: `version=${WORKER_VERSION}` });
+  let nextKeyCheckAt = 0;
+  const gradingRetries = new Map<string, GradingRetry>();
+  gradingLane = startGradingLane(async () => {
+    if (Date.now() >= nextKeyCheckAt) {
+      await checkKeys(config.grading, async (label, status) => {
+        const slot = slots.slots.find((item) => item.label === label);
+        if (slot) slot.disabled = status === "disabled";
+        await repository.updateKey(label, status, null, status === "disabled" ? "key_rejected" : null);
+      });
+      nextKeyCheckAt = Date.now() + 5 * 60_000;
+    }
+    const result = await runGradingTick({ repository, config: config.grading, slots, retryState: gradingRetries });
+    activity.grading = {
+      queue: await repository.queueCounts(),
+      slots: slots.slots.map((slot) => ({
+        key: slot.label,
+        model: config.grading.model,
+        used: slot.usedToday,
+        limit: slot.dailyLimit,
+        cooldown_until: slot.cooldownUntil ? new Date(slot.cooldownUntil).toISOString() : null,
+        disabled: slot.disabled,
+      })),
+    };
+    return result;
+  });
 }
 
 if (!process.env.VITEST) main().catch(() => {

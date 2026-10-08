@@ -21,6 +21,10 @@ export type WorkerHealthRow = {
 export type WorkerActivity = {
   lastLifecycleTickAt: string | null;
   lastProctoringTickAt: string | null;
+  grading?: {
+    queue: { pending: number; running: number; failed: number };
+    slots: { key: string; model: string; used: number; limit: number; cooldown_until: string | null; disabled: boolean }[];
+  };
 };
 
 export type WorkerIdentity = {
@@ -95,6 +99,7 @@ export function serializeHealthDetail(
     started_at: identity.startedAt,
     last_lifecycle_tick_at: activity.lastLifecycleTickAt,
     last_proctoring_tick_at: activity.lastProctoringTickAt,
+    ...(activity.grading ?? {}),
     beat,
   });
 }

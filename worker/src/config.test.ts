@@ -13,9 +13,13 @@ describe("worker config", () => {
     expect(loadWorkerConfig({
       SUPABASE_URL: "https://example.supabase.co",
       SUPABASE_SERVICE_ROLE_KEY: "synthetic-service-key",
-    })).toEqual({
+      GEMINI_MODEL: "gemini-3.7-flash",
+      GEMINI_KEY_1: "synthetic-key",
+      GEMINI_DAILY_LIMITS: "key1:20",
+    })).toMatchObject({
       supabaseUrl: "https://example.supabase.co",
       serviceRoleKey: "synthetic-service-key",
+      grading: { model: "gemini-3.7-flash", chunkSize: 10 },
     });
   });
 
@@ -26,5 +30,19 @@ describe("worker config", () => {
     expect(() => loadWorkerConfig({ SUPABASE_SERVICE_ROLE_KEY: "synthetic-service-key" })).toThrow(
       "SUPABASE_URL",
     );
+  });
+
+  it("fails closed on a different model or an unbounded key", () => {
+    const base = { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "service" };
+    expect(() => loadWorkerConfig({ ...base, GEMINI_MODEL: "other", GEMINI_KEY_1: "key", GEMINI_DAILY_LIMITS: "key1:10" }))
+      .toThrow("gemini-3.7-flash");
+    expect(() => loadWorkerConfig({ ...base, GEMINI_MODEL: "gemini-3.7-flash", GEMINI_KEY_1: "key", GEMINI_DAILY_LIMITS: "key1:0" }))
+      .toThrow("positive daily limit");
+  });
+
+  it("validates the approved chunk range", () => {
+    const base = { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "service", GEMINI_MODEL: "gemini-3.7-flash", GEMINI_KEY_1: "key", GEMINI_DAILY_LIMITS: "key1:10" };
+    expect(loadWorkerConfig({ ...base, GRADING_CHUNK_SIZE: "1" }).grading.chunkSize).toBe(1);
+    expect(() => loadWorkerConfig({ ...base, GRADING_CHUNK_SIZE: "11" })).toThrow("GRADING_CHUNK_SIZE");
   });
 });

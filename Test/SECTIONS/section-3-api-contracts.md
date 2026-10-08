@@ -144,6 +144,7 @@ New or changed files compared with the plan are marked **NEW**.
 | 42 | `GET /api/question-images/[questionId]` **NEW** | candidate | 1E.2 | private Storage download |
 | 43 | `POST, DELETE /api/admin/question-images` **NEW** | admin | 1E.2 | private Storage upload/delete |
 | 44 | `POST /api/exam/announcements/[id]/claim` **NEW** | candidate | 5A.5 | `rpc claim_broadcast` |
+| 45 | `GET /api/admin/grading?exam_id=` **NEW** | admin | 6D.3 | grading status tables |
 
 ### 2.2 Phase 5 health contracts
 
@@ -746,8 +747,10 @@ Running grading again after a finished run is allowed. It adds new MCQ and zero 
 - Upsert into `results`.
 
 **`POST /api/admin/grading/[run]/resume`**
-Empty body. The run must be `paused` or `failed` (`409 not_resumable`). Sets `failed` jobs and `running` jobs older than 2 minutes back to `pending` (`tries = 0`, `error = null`, `locked_at = null`), sets the run to `running`, and writes a `resumed` row to `grading_log`. Key cooldowns are the worker's business and are not touched.
-`200 { "run": { "id", "status": "running" }, "requeued_jobs": 4 }`.
+Optional strict body `{ "failed_only": true }`; `failed_only` defaults to `true`. The run must be `paused` or `failed` (`409 not_resumable`) and no other run for that exam may be running or paused (`409 grading_in_progress`). It clears `pause_reason` and `resume_at`, writes a `resumed` row, and returns `{ "run_id", "status": "running", "requeued_jobs" }`.
+
+**`GET /api/admin/grading?exam_id=<uuid>`** — Any admin. Returns explicit run fields, queue counts, key labels/status/counts, `not_graded`, and at most 50 safe grading-log rows. It never returns Gemini keys, prompts, candidate answers, or response text. The browser polls every 10 seconds only while visible.
+`200 { "runs": [...], "queue": { "pending": 4, "running": 2, "done": 10, "failed": 0 }, "keys": [...], "logs": [...], "not_graded": 3 }`.
 
 **`POST /api/admin/results/[attempt]/override`**
 ```json
@@ -759,7 +762,7 @@ Inserts `question_scores (source='override', created_by = admin)`, then recomput
 There is no "undo override": override again with the value you want. A regrade never replaces an override (the view guarantees it).
 
 **`POST /api/admin/results/[attempt]/regrade`** — Single-candidate regrade (6D.6)
-`{ "question_id": "<uuid>" }`. Regrades one question for a single candidate's attempt. Preconditions: attempt must be `finalized` (`409 not_finalized`); question must be written and in paper with a non-blank answer (`409 nothing_to_grade` otherwise). Creates a `grading_runs` row (`kind='regrade'`) and exactly one `grading_jobs` row for this attempt (`chunk_index 0`, `question_ids: [id]`). Overrides stay current (`current_scores` view). Writes `admin_actions` (`regrade`). Response: `202 { "run_id": "<uuid>", "job_id": "<uuid>", "override_present": true }`. When `override_present` is `true`, the new AI score is stored but the override stays current, and the review screen should say so.
+`{ "question_id": "<uuid>" }`. Regrades one question for a single candidate's attempt. Preconditions: attempt must be `finalized` (`409 not_finalized`); question must be written and in paper with a non-blank answer (`409 nothing_to_grade` otherwise); the same attempt/question must not already be pending or running in an active run (`409 regrade_in_progress`). Creates a `grading_runs` row (`kind='regrade'`) and exactly one `grading_jobs` row for this attempt (`chunk_index 0`, `question_ids: [id]`). Overrides stay current (`current_scores` view). Writes `admin_actions` (`regrade`). Response: `202 { "run_id": "<uuid>", "job_id": "<uuid>", "override_present": true }`.
 
 **`POST /api/admin/exams/[id]/regrade-question`** — Bulk regrade one question for all candidates (NEW route 41 for 6D.8, Section 5 §8.4)
 `{ "question_id": "<uuid>" }`. Regrades one question across all candidates who answered it.

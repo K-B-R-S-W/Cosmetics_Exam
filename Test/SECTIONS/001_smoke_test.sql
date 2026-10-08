@@ -1591,6 +1591,97 @@ begin
   delete from public.candidates where id = v_candidate;
 end $$;
 
+-- 20. Migrations 011/012: grading RPC exposure and runtime metadata.
+do $$
+begin
+  assert exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'grading_runs'
+       and column_name = 'pause_reason'
+  ), '20a: grading_runs.pause_reason must exist';
+  assert exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'grading_runs'
+       and column_name = 'resume_at'
+  ), '20b: grading_runs.resume_at must exist';
+  assert exists (select 1 from pg_indexes where schemaname = 'public' and indexname = 'idx_grading_runs_paused_resume'),
+    '20c: paused-run index must exist';
+  assert exists (select 1 from pg_indexes where schemaname = 'public' and indexname = 'idx_grading_jobs_pending_created'),
+    '20d: pending-job index must exist';
+  assert has_function_privilege('service_role', 'public.start_grading(uuid,uuid,integer,boolean)', 'EXECUTE')
+     and not has_function_privilege('anon', 'public.start_grading(uuid,uuid,integer,boolean)', 'EXECUTE')
+     and not has_function_privilege('authenticated', 'public.start_grading(uuid,uuid,integer,boolean)', 'EXECUTE'),
+    '20e: start_grading must be service-role only';
+  assert has_function_privilege('service_role', 'public.resume_grading_run(uuid,boolean)', 'EXECUTE')
+     and not has_function_privilege('anon', 'public.resume_grading_run(uuid,boolean)', 'EXECUTE')
+     and not has_function_privilege('authenticated', 'public.resume_grading_run(uuid,boolean)', 'EXECUTE'),
+    '20f: resume_grading_run must be service-role only';
+  assert has_function_privilege('service_role', 'public.start_attempt_regrade(uuid,uuid,uuid)', 'EXECUTE')
+     and not has_function_privilege('anon', 'public.start_attempt_regrade(uuid,uuid,uuid)', 'EXECUTE')
+     and not has_function_privilege('authenticated', 'public.start_attempt_regrade(uuid,uuid,uuid)', 'EXECUTE'),
+    '20g: start_attempt_regrade must be service-role only';
+end $$;
+
+-- 20h-20j: migration 012 behavior. Synthetic rows are transaction-local and
+-- cascade-cleaned by deleting the exam and candidate at the end.
+do $$
+declare
+  v_exam uuid := gen_random_uuid();
+  v_candidate uuid := gen_random_uuid();
+  v_attempt uuid;
+  v_question uuid := gen_random_uuid();
+  v_resume_run uuid := gen_random_uuid();
+  v_other_run uuid := gen_random_uuid();
+  v_job uuid := gen_random_uuid();
+  v_result jsonb;
+  v_caught boolean := false;
+begin
+  insert into public.candidates (id, mer_code, full_name, nic_hash)
+  values (v_candidate, 'MER-SMOKE-012', 'Migration 012 Synthetic Candidate', 'synthetic-hash-012');
+  insert into public.exams (id, title, duration_min, status, started_at, ends_at)
+  values (v_exam, 'Migration 012 grading', 30, 'finalized', clock_timestamp() - interval '31 minutes', clock_timestamp() - interval '1 minute');
+  insert into public.exam_candidates (exam_id, candidate_id) values (v_exam, v_candidate);
+  select id into v_attempt from public.attempts where exam_id = v_exam and candidate_id = v_candidate;
+  update public.attempts set status = 'finalized', submit_reason = 'auto', submitted_at = clock_timestamp() where id = v_attempt;
+  insert into public.questions (id, exam_id, position, type, body_html, marks)
+  values (v_question, v_exam, 0, 'written', '<p>Synthetic written question</p>', 2);
+  insert into public.answer_keys (question_id, model_answer) values (v_question, 'Synthetic model answer');
+  insert into public.attempt_questions (attempt_id, question_id, position) values (v_attempt, v_question, 0);
+  insert into public.answers (attempt_id, question_id, answer_text, revision) values (v_attempt, v_question, 'Synthetic answer', 1);
+
+  insert into public.grading_runs (id, exam_id, kind, status, pause_reason, resume_at)
+  values (v_resume_run, v_exam, 'regrade', 'paused', 'keys_exhausted', clock_timestamp() + interval '1 hour');
+  insert into public.grading_jobs (id, run_id, attempt_id, chunk_index, question_ids, status)
+  values (v_job, v_resume_run, v_attempt, 0, jsonb_build_array(v_question), 'failed');
+  insert into public.grading_runs (id, exam_id, kind, status)
+  values (v_other_run, v_exam, 'regrade', 'running');
+
+  begin
+    perform public.resume_grading_run(v_resume_run, true);
+  exception when raise_exception then
+    v_caught := sqlerrm = 'grading_in_progress';
+  end;
+  assert v_caught, '20h: resume must reject another active run for the exam';
+
+  update public.grading_runs set status = 'done', finished_at = clock_timestamp() where id = v_other_run;
+  v_result := public.resume_grading_run(v_resume_run, true);
+  assert v_result->>'status' = 'running' and (v_result->>'requeued_jobs')::integer = 1,
+    '20i: resume returns the 011 response shape and requeues failed jobs';
+  assert (select pause_reason is null and resume_at is null from public.grading_runs where id = v_resume_run),
+    '20i: resume clears pause metadata';
+
+  v_caught := false;
+  begin
+    perform public.start_attempt_regrade(v_attempt, v_question, null);
+  exception when raise_exception then
+    v_caught := sqlerrm = 'regrade_in_progress';
+  end;
+  assert v_caught, '20j: duplicate queued attempt/question regrade must be rejected';
+
+  delete from public.exams where id = v_exam;
+  delete from public.candidates where id = v_candidate;
+end $$;
+
 select
   'SMOKE TEST PASSED' as result,
   current_setting('app.smoke_generate_paper_ms')::numeric as generate_paper_100_question_ms;
