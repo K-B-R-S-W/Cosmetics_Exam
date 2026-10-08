@@ -40,3 +40,17 @@ it("holds transient retries for the 2 second first backoff", async () => {
   await runGradingTick(deps); now = 1_000; await runGradingTick(deps); expect(fetcher).toHaveBeenCalledOnce();
   now = 2_000; await runGradingTick(deps); expect(fetcher).toHaveBeenCalledTimes(2);
 });
+
+it("releases an uncharged claimed job and logs only a safe code when input loading fails", async () => {
+  const repo = repository();
+  const job = { id: "job", runId: "run", attemptId: "attempt", chunkIndex: 0, questionIds: ["question"], tries: 2 };
+  vi.mocked(repo.pendingJobs).mockResolvedValue([job]);
+  vi.mocked(repo.claim).mockResolvedValue(true);
+  vi.mocked(repo.loadItems).mockRejectedValue(new Error("secret database relationship text"));
+  const keys = [{ label: "key1", key: "secret", dailyLimit: 10 }];
+  await runGradingTick({ repository: repo, config: { ...DEFAULT_GRADING_TUNING, model: "gemini-3.7-flash", keys, reserve: 0, slotMinIntervalMs: 0, requestTimeoutMs: 1_000 }, slots: new SlotManager(keys, 0, 0) });
+  expect(repo.requeue).toHaveBeenCalledWith(job);
+  expect(repo.fail).not.toHaveBeenCalled();
+  expect(repo.log).toHaveBeenCalledWith({ run_id: "run", job_id: "job", event: "retry", detail: "reason=input_read_failed" });
+  expect(JSON.stringify(vi.mocked(repo.log).mock.calls)).not.toContain("relationship text");
+});

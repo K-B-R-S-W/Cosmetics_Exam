@@ -41,7 +41,14 @@ async function processJob(deps: RunnerDependencies, job: GradingJob): Promise<vo
   }
   try {
   if (!await deps.repository.claim(job, slot.label, deps.config.model)) { deps.retryState?.delete(job.id); return; }
-  const items = await deps.repository.loadItems(job);
+  let items;
+  try {
+    items = await deps.repository.loadItems(job);
+  } catch {
+    await deps.repository.requeue(job);
+    await deps.repository.log({ run_id: job.runId, job_id: job.id, event: "retry", detail: "reason=input_read_failed" });
+    return;
+  }
   const prompt = buildPrompt(items, deps.config.maxAnswerChars, deps.config.promptVersion);
   let result;
   try { result = await callGemini({ key: slot.key, user: prompt.user, timeoutMs: deps.config.requestTimeoutMs, thinking: deps.config.thinking, fetcher: deps.fetcher }); }

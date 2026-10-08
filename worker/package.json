@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "node esbuild.mjs",
+    "db-smoke": "npm run build && node dist/db-smoke.js",
     "dry-run": "npm run build && node dist/dry-run.js",
     "test:prompt": "npm run build && node dist/test-prompt.js",
     "lint": "eslint src scripts esbuild.mjs",

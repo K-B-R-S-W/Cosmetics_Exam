@@ -238,6 +238,8 @@ async function main(): Promise<void> {
       })),
     };
     return result;
+  }, {
+    onError: (code) => schedulerLogger.error("grading_lane_failed", { error_code: code }),
   });
 }
 

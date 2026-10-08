@@ -36,6 +36,56 @@ export interface GradingRepository {
 type QueryError = { code?: string; message?: string } | null;
 function failed(error: QueryError): void { if (error) throw new Error("database_error"); }
 
+type GradingInputRow = {
+  question_id: string;
+  questions?: unknown;
+  answers?: unknown;
+};
+
+function rows<T>(value: T[] | T | null | undefined): T[] {
+  if (Array.isArray(value)) return value;
+  return value ? [value] : [];
+}
+
+export async function loadGradingItems(client: SupabaseClient, job: GradingJob): Promise<GradingSourceItem[]> {
+  const assignmentsResult = await client.from("attempt_questions")
+    .select("question_id")
+    .eq("attempt_id", job.attemptId)
+    .in("question_id", job.questionIds);
+  failed(assignmentsResult.error);
+  const assignments = rows(assignmentsResult.data as GradingInputRow[] | GradingInputRow | null);
+  const questionIds = assignments.map((row) => row.question_id);
+  if (questionIds.length === 0) return [];
+
+  const [questionsResult, keysResult, answersResult] = await Promise.all([
+    client.from("questions").select("id,body_html,marks").in("id", questionIds),
+    client.from("answer_keys").select("question_id,model_answer,grading_notes,calibration").in("question_id", questionIds),
+    client.from("answers").select("question_id,answer_text").eq("attempt_id", job.attemptId).in("question_id", questionIds),
+  ]);
+  failed(questionsResult.error);
+  failed(keysResult.error);
+  failed(answersResult.error);
+
+  const questions = new Map(rows(questionsResult.data).map((row) => [row.id, row]));
+  const keys = new Map(rows(keysResult.data).map((row) => [row.question_id, row]));
+  const answers = new Map(rows(answersResult.data).map((row) => [row.question_id, row]));
+  return assignments.map((assignment) => {
+    const question = questions.get(assignment.question_id);
+    const key = keys.get(assignment.question_id);
+    if (!question || !key) throw new Error("grading_input_incomplete");
+    const answer = answers.get(assignment.question_id);
+    return {
+      questionId: assignment.question_id,
+      questionHtml: question.body_html,
+      answerText: answer?.answer_text ?? "",
+      modelAnswer: key.model_answer ?? "",
+      maxMarks: Number(question.marks),
+      gradingNotes: key.grading_notes,
+      calibration: key.calibration,
+    };
+  });
+}
+
 export async function insertScoreRowsIdempotently(
   insert: (rows: Record<string, unknown> | Record<string, unknown>[]) => PromiseLike<{ error: QueryError }>,
   rows: Record<string, unknown>[],
@@ -63,13 +113,7 @@ export function createGradingRepository(client: SupabaseClient): GradingReposito
       const { data, error } = await client.from("grading_jobs").update({ status: "running", locked_at: new Date().toISOString(), key_label: label, model, tries: job.tries + 1 }).eq("id", job.id).eq("status", "pending").eq("tries", job.tries).select("id"); failed(error); return (data?.length ?? 0) === 1;
     },
     async loadItems(job) {
-      const { data, error } = await client.from("attempt_questions").select("question_id,questions!inner(body_html,marks,answer_keys!inner(model_answer,grading_notes,calibration)),answers(answer_text)").eq("attempt_id", job.attemptId).in("question_id", job.questionIds); failed(error);
-      return (data ?? []).map((row) => {
-        const question = row.questions as unknown as { body_html: string; marks: number; answer_keys: { model_answer: string; grading_notes?: string | null; calibration?: unknown }[] };
-        const answer = row.answers as unknown as { answer_text?: string | null }[];
-        const key = question.answer_keys[0];
-        return { questionId: row.question_id, questionHtml: question.body_html, answerText: answer[0]?.answer_text ?? "", modelAnswer: key.model_answer, maxMarks: Number(question.marks), gradingNotes: key.grading_notes, calibration: key.calibration };
-      });
+      return loadGradingItems(client, job);
     },
     async saveScores(job, scores, model, keyLabel) {
       if (!scores.length) return;

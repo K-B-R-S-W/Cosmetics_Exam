@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 
 const temporaryRoot = await mkdtemp(join(tmpdir(), "exam-worker-dist-"));
 const copiedDist = join(temporaryRoot, "dist");
-const requiredBundles = ["index.js", "dry-run.js", "test-prompt.js"];
+const requiredBundles = ["index.js", "dry-run.js", "test-prompt.js", "db-smoke.js"];
 
 try {
   const distEntries = await readdir(resolve("dist"));
