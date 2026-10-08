@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, it, vi } from "vitest";
-import { insertScoreRowsIdempotently, loadGradingItems } from "./grader";
+import { createGradingRepository, insertScoreRowsIdempotently, loadGradingItems } from "./grader";
 
 it("falls back per score after a crash-retry duplicate", async () => {
   const insert = vi.fn()
@@ -51,4 +51,29 @@ it("reports a safe database error from any explicit grading input query", async 
   const byTable = { attempt_questions: assignment, questions: question, answer_keys: key, answers: answer };
   const client = { from: vi.fn((table: keyof typeof byTable) => byTable[table].builder) } as unknown as SupabaseClient;
   await expect(loadGradingItems(client, { id: "job", runId: "run", attemptId: "attempt", chunkIndex: 0, questionIds: ["q1"], tries: 0 })).rejects.toThrow("database_error");
+});
+
+it("resets null and expired running locks without resetting tries", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-08T10:00:00.000Z"));
+  const calls: unknown[][] = [];
+  const builder = {
+    update: vi.fn((...args: unknown[]) => { calls.push(["update", ...args]); return builder; }),
+    eq: vi.fn((...args: unknown[]) => { calls.push(["eq", ...args]); return builder; }),
+    lt: vi.fn((...args: unknown[]) => { calls.push(["lt", ...args]); return builder; }),
+    or: vi.fn((...args: unknown[]) => { calls.push(["or", ...args]); return builder; }),
+    select: vi.fn((...args: unknown[]) => { calls.push(["select", ...args]); return Promise.resolve({ data: [{ id: "job" }], error: null }); }),
+  };
+  const client = { from: vi.fn(() => builder) } as unknown as SupabaseClient;
+
+  await expect(createGradingRepository(client).resetStuck(180_000)).resolves.toBe(1);
+
+  expect(calls).toEqual([
+    ["update", { status: "pending", locked_at: null, error: null }],
+    ["eq", "status", "running"],
+    ["or", "locked_at.is.null,locked_at.lt.2026-10-08T09:57:00.000Z"],
+    ["select", "id"],
+  ]);
+  expect(JSON.stringify(calls)).not.toContain("tries");
+  vi.useRealTimers();
 });

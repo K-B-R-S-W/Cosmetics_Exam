@@ -16,6 +16,19 @@ it("discovers up to three jobs without sharing another lane", async () => {
   expect(repo.pendingJobs).toHaveBeenCalledWith(3);
 });
 
+it("resets stale jobs first with a cutoff safely beyond the request timeout", async () => {
+  const repo = repository();
+  await runGradingTick({ repository: repo, config: { ...DEFAULT_GRADING_TUNING, model: "gemini-3.7-flash", keys: [], reserve: 0, slotMinIntervalMs: 0, requestTimeoutMs: 1_000 }, slots: new SlotManager([], 0, 0) });
+  expect(repo.resetStuck).toHaveBeenCalledWith(120_000);
+  expect(vi.mocked(repo.resetStuck).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(repo.resumeDue).mock.invocationCallOrder[0]!);
+});
+
+it("scales the stuck cutoff for a longer configured request timeout", async () => {
+  const repo = repository();
+  await runGradingTick({ repository: repo, config: { ...DEFAULT_GRADING_TUNING, model: "gemini-3.7-flash", keys: [], reserve: 0, slotMinIntervalMs: 0, requestTimeoutMs: 300_000 }, slots: new SlotManager([], 0, 0) });
+  expect(repo.resetStuck).toHaveBeenCalledWith(360_000);
+});
+
 it("does not split or complete a job when a score write fails", async () => {
   const repo = repository();
   vi.mocked(repo.pendingJobs).mockResolvedValue([{ id: "job", runId: "run", attemptId: "attempt", chunkIndex: 0, questionIds: ["question"], tries: 0 }]);

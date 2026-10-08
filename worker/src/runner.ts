@@ -108,6 +108,7 @@ async function recordTransientFailure(
 }
 
 export async function runGradingTick(deps: RunnerDependencies): Promise<GradingTickResult> {
+  await deps.repository.resetStuck(Math.max(120_000, deps.config.requestTimeoutMs + 60_000));
   await deps.repository.resumeDue();
   const jobs = await deps.repository.pendingJobs(3);
   const outcomes = await Promise.allSettled(jobs.map((job) => processJob(deps, job)));

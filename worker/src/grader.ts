@@ -10,7 +10,7 @@ export type GradingJob = {
 };
 
 export interface GradingRepository {
-  resetStuck(): Promise<number>;
+  resetStuck(cutoffMs?: number): Promise<number>;
   pendingJobs(limit: number): Promise<GradingJob[]>;
   claim(job: GradingJob, label: string, model: string): Promise<boolean>;
   loadItems(job: GradingJob): Promise<GradingSourceItem[]>;
@@ -102,9 +102,9 @@ export async function insertScoreRowsIdempotently(
 
 export function createGradingRepository(client: SupabaseClient): GradingRepository {
   return {
-    async resetStuck() {
-      const cutoff = new Date(Date.now() - 120_000).toISOString();
-      const { data, error } = await client.from("grading_jobs").update({ status: "pending", locked_at: null, error: null }).eq("status", "running").lt("locked_at", cutoff).select("id"); failed(error); return data?.length ?? 0;
+    async resetStuck(cutoffMs = 120_000) {
+      const cutoff = new Date(Date.now() - cutoffMs).toISOString();
+      const { data, error } = await client.from("grading_jobs").update({ status: "pending", locked_at: null, error: null }).eq("status", "running").or(`locked_at.is.null,locked_at.lt.${cutoff}`).select("id"); failed(error); return data?.length ?? 0;
     },
     async pendingJobs(limit) {
       const { data, error } = await client.from("grading_jobs").select("id,run_id,attempt_id,chunk_index,question_ids,tries,grading_runs!inner(status)").eq("status", "pending").eq("grading_runs.status", "running").order("created_at").order("id").limit(limit); failed(error);
