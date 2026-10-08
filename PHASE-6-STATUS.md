@@ -14,6 +14,7 @@ Final local verification on 8 October 2026: web typecheck, ESLint, colour lint, 
 - Admin start/resume/progress/review/override/single regrade/bulk regrade routes and pages. Progress returns labels/counts only and caps logs at 50.
 - Operator commands: `npm run dry-run` and `npm run test:prompt` in `worker/`. Neither runs at startup.
 - The production build cleans `worker/dist`, emits the deployment-required `dist/index.js`, and `test:dist` executes that exact artifact from an isolated directory.
+- Gemini daily limits are read once when the worker process starts. The Results page shows the slot limits from the latest worker heartbeat, not directly from the env file; after changing `GEMINI_DAILY_LIMITS`, restart the worker and allow up to 30 seconds for the first grading-state heartbeat. Use the worker heartbeat age and instance/version on Health to distinguish a stale process/report.
 
 ## Database-call profile
 

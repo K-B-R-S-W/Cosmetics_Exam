@@ -9,9 +9,12 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it("shows only key labels and queue counts", async () => {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ runs: [], queue: { pending: 2 }, keys: [{ label: "key1", status: "active", cooldown_until: null }], logs: [], not_graded: 0 }))));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ runs: [], queue: { pending: 2 }, keys: ["key1", "key2", "key3"].map((label) => ({ label, status: "active", cooldown_until: null, used: 0, limit: 100 })), logs: [], not_graded: 0 }))));
   render(<GradingProgress examId="exam" examStatus="finalized" attempts={[]} />);
-  expect(await screen.findByText("key1: active")).toBeTruthy(); expect(screen.getByText("2")).toBeTruthy();
+  expect(await screen.findByText("key1: active — 0 / 100")).toBeTruthy();
+  expect(screen.getByText("key2: active — 0 / 100")).toBeTruthy();
+  expect(screen.getByText("key3: active — 0 / 100")).toBeTruthy();
+  expect(screen.getByText("2")).toBeTruthy();
 });
 
 it("offers Start grading only for a finalized exam with no active run", async () => {

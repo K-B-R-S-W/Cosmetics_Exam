@@ -188,6 +188,18 @@ describe("health detail and PostgREST adapter", () => {
     expect(JSON.stringify(detail)).not.toContain("secret");
   });
 
+  it("serializes every grading slot limit without changing it", () => {
+    const gradingActivity = {
+      ...activity,
+      grading: {
+        queue: { pending: 0, running: 0, failed: 0 },
+        slots: ["key1", "key2", "key3"].map((key) => ({ key, model: "gemini-3.7-flash", used: 0, limit: 100, cooldown_until: null, disabled: false })),
+      },
+    };
+    const detail = JSON.parse(serializeHealthDetail(identity, gradingActivity, 8));
+    expect(detail.slots.map((slot: { key: string; limit: number }) => [slot.key, slot.limit])).toEqual([["key1", 100], ["key2", 100], ["key3", 100]]);
+  });
+
   it("treats insert unique violation 23505 as a lost race", async () => {
     const client = {
       from: vi.fn(() => ({ insert: vi.fn().mockResolvedValue({ error: { code: "23505" } }) })),

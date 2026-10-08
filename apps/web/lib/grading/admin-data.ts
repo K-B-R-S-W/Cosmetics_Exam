@@ -29,7 +29,7 @@ export async function loadGradingProgress(client: SupabaseClient, examId: string
   };
 }
 
-function safeWorkerSlots(detail: string | null): Array<{ key: string; used: number; limit: number }> {
+export function safeWorkerSlots(detail: string | null): Array<{ key: string; used: number; limit: number }> {
   try {
     const parsed: unknown = JSON.parse(detail ?? "null");
     if (!parsed || typeof parsed !== "object" || !("slots" in parsed) || !Array.isArray(parsed.slots)) return [];

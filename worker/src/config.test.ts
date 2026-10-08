@@ -23,6 +23,19 @@ describe("worker config", () => {
     });
   });
 
+  it("keeps each configured daily limit by its exact key label", () => {
+    const config = loadWorkerConfig({
+      SUPABASE_URL: "https://example.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "synthetic-service-key",
+      GEMINI_MODEL: "gemini-3.7-flash",
+      GEMINI_KEY_1: "one", GEMINI_KEY_2: "two", GEMINI_KEY_3: "three",
+      GEMINI_DAILY_LIMITS: "key1:100,key2:100,key3:100",
+    });
+    expect(config.grading.keys.map(({ label, dailyLimit }) => ({ label, dailyLimit }))).toEqual([
+      { label: "key1", dailyLimit: 100 }, { label: "key2", dailyLimit: 100 }, { label: "key3", dailyLimit: 100 },
+    ]);
+  });
+
   it("fails closed when either secret is missing", () => {
     expect(() => loadWorkerConfig({ SUPABASE_URL: "https://example.supabase.co" })).toThrow(
       "SUPABASE_SERVICE_ROLE_KEY",
