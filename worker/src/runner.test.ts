@@ -41,6 +41,39 @@ it("holds transient retries for the 2 second first backoff", async () => {
   now = 2_000; await runGradingTick(deps); expect(fetcher).toHaveBeenCalledTimes(2);
 });
 
+it.each([500, 503])("logs transient HTTP %s without response data", async (status) => {
+  const repo = repository();
+  const job = { id: "job", runId: "run", attemptId: "attempt", chunkIndex: 0, questionIds: ["question"], tries: 0 };
+  vi.mocked(repo.pendingJobs).mockResolvedValue([job]);
+  vi.mocked(repo.claim).mockResolvedValue(true);
+  vi.mocked(repo.loadItems).mockResolvedValue([{ questionId: "question", questionHtml: "Q", answerText: "A", modelAnswer: "A", maxMarks: 1 }]);
+  const fetcher = vi.fn().mockResolvedValue(new Response("private response body", { status, headers: { "x-private": "secret" } }));
+  const keys = [{ label: "key1", key: "secret", dailyLimit: 10 }];
+
+  await runGradingTick({ repository: repo, config: { ...DEFAULT_GRADING_TUNING, model: "gemini-3.7-flash", keys, reserve: 0, slotMinIntervalMs: 0, requestTimeoutMs: 1_000 }, slots: new SlotManager(keys, 0, 0), fetcher });
+
+  expect(repo.log).toHaveBeenCalledWith({ run_id: "run", job_id: "job", key_label: "key1", model: "gemini-3.7-flash", event: "retry", detail: `tries=1,status=${status}` });
+  expect(JSON.stringify(vi.mocked(repo.log).mock.calls)).not.toContain("private response body");
+  expect(JSON.stringify(vi.mocked(repo.log).mock.calls)).not.toContain("x-private");
+  expect(repo.fail).toHaveBeenCalledWith(job, "transient", true, DEFAULT_GRADING_TUNING.maxTries);
+});
+
+it("logs a network error without inventing an HTTP status", async () => {
+  const repo = repository();
+  const job = { id: "job", runId: "run", attemptId: "attempt", chunkIndex: 0, questionIds: ["question"], tries: 0 };
+  vi.mocked(repo.pendingJobs).mockResolvedValue([job]);
+  vi.mocked(repo.claim).mockResolvedValue(true);
+  vi.mocked(repo.loadItems).mockResolvedValue([{ questionId: "question", questionHtml: "Q", answerText: "A", modelAnswer: "A", maxMarks: 1 }]);
+  const fetcher = vi.fn().mockRejectedValue(new Error("private network failure"));
+  const keys = [{ label: "key1", key: "secret", dailyLimit: 10 }];
+
+  await runGradingTick({ repository: repo, config: { ...DEFAULT_GRADING_TUNING, model: "gemini-3.7-flash", keys, reserve: 0, slotMinIntervalMs: 0, requestTimeoutMs: 1_000 }, slots: new SlotManager(keys, 0, 0), fetcher });
+
+  expect(repo.log).toHaveBeenCalledWith({ run_id: "run", job_id: "job", key_label: "key1", model: "gemini-3.7-flash", event: "retry", detail: "tries=1,reason=network_error" });
+  expect(JSON.stringify(vi.mocked(repo.log).mock.calls)).not.toContain("private network failure");
+  expect(repo.fail).toHaveBeenCalledWith(job, "network_error", true, DEFAULT_GRADING_TUNING.maxTries);
+});
+
 it("releases an uncharged claimed job and logs only a safe code when input loading fails", async () => {
   const repo = repository();
   const job = { id: "job", runId: "run", attemptId: "attempt", chunkIndex: 0, questionIds: ["question"], tries: 2 };

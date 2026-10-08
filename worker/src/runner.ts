@@ -52,7 +52,7 @@ async function processJob(deps: RunnerDependencies, job: GradingJob): Promise<vo
   const prompt = buildPrompt(items, deps.config.maxAnswerChars, deps.config.promptVersion);
   let result;
   try { result = await callGemini({ key: slot.key, user: prompt.user, timeoutMs: deps.config.requestTimeoutMs, thinking: deps.config.thinking, fetcher: deps.fetcher }); }
-  catch { await recordTransientFailure(deps, job, slot.label, "network_error"); return; }
+  catch { await recordTransientFailure(deps, job, slot.label, "network_error", { reason: "network_error" }); return; }
   if (result.ok || result.status === 200) {
     await deps.repository.log({ run_id: job.runId, job_id: job.id, key_label: slot.label, model: deps.config.model, event: "call", detail: `items=${items.length},latency_ms=${result.latencyMs}` });
     deps.slots.markCall(slot.label, (deps.now ?? (() => new Date()))().getTime());
@@ -81,11 +81,17 @@ async function processJob(deps: RunnerDependencies, job: GradingJob): Promise<vo
   else if (action.kind === "model_not_found") { await deps.repository.requeue(job); await deps.repository.pauseAll("model_not_found"); await deps.repository.alert({ type: "grading", severity: "critical", message: "The configured grading model was not found.", uniqueKey: "model_not_found" }); }
   else if (action.kind === "split") await deps.repository.split(job, deps.config.maxTries);
   else if (action.kind === "blocked") { await deps.repository.failPermanently(job, "blocked"); await deps.repository.log({ run_id: job.runId, job_id: job.id, event: "blocked", detail: "reason=safety" }); await deps.repository.alert({ type: "grading", severity: "warning", message: "A grading job needs a manual override.", uniqueKey: `blocked:${job.runId}` }); }
-  else { await recordTransientFailure(deps, job, slot.label, "transient"); }
+  else { await recordTransientFailure(deps, job, slot.label, "transient", { status: result.status }); }
   } finally { deps.slots.release(slot.label); }
 }
 
-async function recordTransientFailure(deps: RunnerDependencies, job: GradingJob, slotLabel: string, code: string): Promise<void> {
+async function recordTransientFailure(
+  deps: RunnerDependencies,
+  job: GradingJob,
+  slotLabel: string,
+  code: string,
+  failure: { status: number } | { reason: "network_error" },
+): Promise<void> {
   const chargedTries = job.tries + 1;
   await deps.repository.fail(job, code, true, deps.config.maxTries);
   if (chargedTries < deps.config.maxTries) {
@@ -95,7 +101,10 @@ async function recordTransientFailure(deps: RunnerDependencies, job: GradingJob,
     if (job.tries < 2) next.preferredLabel = slotLabel; else next.excludeLabel = slotLabel;
     deps.retryState?.set(job.id, next);
   } else deps.retryState?.delete(job.id);
-  await deps.repository.log({ run_id: job.runId, job_id: job.id, key_label: slotLabel, model: deps.config.model, event: "retry", detail: `tries=${chargedTries}` });
+  const detail = "status" in failure
+    ? `tries=${chargedTries},status=${failure.status}`
+    : `tries=${chargedTries},reason=${failure.reason}`;
+  await deps.repository.log({ run_id: job.runId, job_id: job.id, key_label: slotLabel, model: deps.config.model, event: "retry", detail });
 }
 
 export async function runGradingTick(deps: RunnerDependencies): Promise<GradingTickResult> {
