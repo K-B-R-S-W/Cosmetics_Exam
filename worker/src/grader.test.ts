@@ -24,18 +24,18 @@ function query(data: unknown, error: unknown = null) {
 
 it("loads grading input through explicit foreign-key-independent queries", async () => {
   const assignment = query([{ question_id: "q1" }]);
-  const question = query({ id: "q1", body_html: "<p>Question</p>", marks: "2" });
+  const question = query({ id: "q1", body_html: "<p>Question</p>", marks: "2", image_path: "questions/q1/image.jpg", image_alt_text: "A labelled skin diagram" });
   const key = query({ question_id: "q1", model_answer: "Answer", grading_notes: "Notes", calibration: [] });
   const answer = query([{ question_id: "q1", answer_text: "Candidate" }]);
   const byTable = { attempt_questions: assignment, questions: question, answer_keys: key, answers: answer };
   const client = { from: vi.fn((table: keyof typeof byTable) => byTable[table].builder) } as unknown as SupabaseClient;
 
   await expect(loadGradingItems(client, { id: "job", runId: "run", attemptId: "attempt", chunkIndex: 0, questionIds: ["q1"], tries: 0 })).resolves.toEqual([{
-    questionId: "q1", questionHtml: "<p>Question</p>", answerText: "Candidate", modelAnswer: "Answer",
+    questionId: "q1", questionHtml: "<p>Question</p>", questionImageDescription: "A labelled skin diagram", answerText: "Candidate", modelAnswer: "Answer",
     maxMarks: 2, gradingNotes: "Notes", calibration: [],
   }]);
   expect(assignment.calls).toEqual([["select", "question_id"], ["eq", "attempt_id", "attempt"], ["in", "question_id", ["q1"]]]);
-  expect(question.calls).toEqual([["select", "id,body_html,marks"], ["in", "id", ["q1"]]]);
+  expect(question.calls).toEqual([["select", "id,body_html,marks,image_path,image_alt_text"], ["in", "id", ["q1"]]]);
   expect(key.calls).toEqual([["select", "question_id,model_answer,grading_notes,calibration"], ["in", "question_id", ["q1"]]]);
   expect(answer.calls).toEqual([["select", "question_id,answer_text"], ["eq", "attempt_id", "attempt"], ["in", "question_id", ["q1"]]]);
   for (const calls of Object.values(byTable).map((entry) => entry.calls)) {

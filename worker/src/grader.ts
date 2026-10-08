@@ -58,7 +58,7 @@ export async function loadGradingItems(client: SupabaseClient, job: GradingJob):
   if (questionIds.length === 0) return [];
 
   const [questionsResult, keysResult, answersResult] = await Promise.all([
-    client.from("questions").select("id,body_html,marks").in("id", questionIds),
+    client.from("questions").select("id,body_html,marks,image_path,image_alt_text").in("id", questionIds),
     client.from("answer_keys").select("question_id,model_answer,grading_notes,calibration").in("question_id", questionIds),
     client.from("answers").select("question_id,answer_text").eq("attempt_id", job.attemptId).in("question_id", questionIds),
   ]);
@@ -77,6 +77,7 @@ export async function loadGradingItems(client: SupabaseClient, job: GradingJob):
     return {
       questionId: assignment.question_id,
       questionHtml: question.body_html,
+      questionImageDescription: question.image_path ? question.image_alt_text : undefined,
       answerText: answer?.answer_text ?? "",
       modelAnswer: key.model_answer ?? "",
       maxMarks: Number(question.marks),
