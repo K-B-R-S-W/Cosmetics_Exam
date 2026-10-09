@@ -62,6 +62,11 @@ export function ViolationTimeline({
     <ol className="space-y-4" aria-label="Violation timeline">
       {items.map((item) => {
         const dismissed = Boolean(item.meta?.dismissed);
+        const snapshotMarker = item.meta?.snapshot_deleted_at
+          ? "Snapshot deleted after 14-day retention"
+          : item.meta?.snapshot_purge_queued_at
+            ? "Snapshot cleanup pending"
+            : null;
         return (
           <li key={item.id} className="border border-hairline bg-surface p-4">
             <div className="flex justify-between gap-4">
@@ -89,6 +94,7 @@ export function ViolationTimeline({
                 <Image unoptimized className="h-12 w-16 object-cover" src={item.snapshot_url} width={64} height={48} alt="" />
               </button>
             ) : null}
+            {snapshotMarker ? <p className="mt-3 text-sm text-muted">{snapshotMarker}</p> : null}
             {item.counts || dismissed ? (
               <Button
                 className="mt-3"

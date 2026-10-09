@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { SnapshotCleanup } from "@/components/admin/SnapshotCleanup";
 import { Button } from "@/components/ui/Button";
 import type { AdminHealthBody, HealthAlert, KeyHealth } from "@/lib/admin-health";
 
@@ -55,5 +56,6 @@ export function HealthDashboard() {
     </tbody></table>
     <h3 className="mt-8 text-question font-bold">Gemini keys</h3>{health.keys.length ? <table className="mt-3 w-full border-collapse bg-surface"><caption className="sr-only">Gemini key status</caption><thead><tr className="border-b border-hairline text-left"><th className="p-3">Key</th><th className="p-3">Status</th><th className="p-3">Last error</th><th className="p-3">Checked</th></tr></thead><tbody>{health.keys.map((key) => <tr key={key.label} className="border-b border-hairline"><th className="p-3 text-left">{key.label}</th><td className="p-3">{keyStatus(key)}</td><td className="p-3">{key.last_error ?? "—"}</td><td className="p-3">{new Date(key.updated_at).toLocaleString("en-LK", { timeZone: "Asia/Colombo" })}</td></tr>)}</tbody></table> : <p className="mt-3 text-muted">No key data yet. The worker writes it every 30 seconds once it is running.</p>}
     <h3 className="mt-8 text-question font-bold">Active alerts</h3>{health.alerts.length ? <table className="mt-3 w-full border-collapse bg-surface"><caption className="sr-only">Active alerts</caption><thead><tr className="border-b border-hairline text-left"><th className="p-3">Severity</th><th className="p-3">Message</th><th className="p-3">Time</th><th className="p-3"><span className="sr-only">Actions</span></th></tr></thead><tbody>{health.alerts.map((alert) => <tr key={alert.id} className="border-b border-hairline"><td className="p-3 font-bold">{alert.severity === "critical" ? "⚠ Critical" : alert.severity === "warning" ? "⚠ Warning" : "Info"}</td><td className="p-3">{alert.message}</td><td className="p-3">{new Date(alert.created_at).toLocaleString("en-LK", { timeZone: "Asia/Colombo" })}</td><td className="p-3"><Button variant="quiet" onClick={() => void resolve(alert)}>Resolve</Button></td></tr>)}</tbody></table> : <p className="mt-3 text-muted">No active alerts.</p>}</> : loading ? <p className="mt-6 text-muted">Checking services…</p> : null}
+    <SnapshotCleanup />
   </section>;
 }
