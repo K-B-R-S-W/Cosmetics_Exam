@@ -1,5 +1,5 @@
 -- =====================================================================
--- 001_smoke_test.sql  —  run AFTER migrations 001 through 010 in the Supabase SQL editor.
+-- 001_smoke_test.sql  —  run AFTER migrations 001 through 013 in the Supabase SQL editor.
 -- Everything runs inside a transaction that is ROLLED BACK, so no data is left behind.
 -- Success = the final result-grid row says "SMOKE TEST PASSED". Any failure raises an error naming the check.
 -- =====================================================================
@@ -18,7 +18,7 @@ declare
     'answer_keys', 'attempts', 'attempt_questions', 'sessions', 'answers', 'violation_events',
     'grading_runs', 'grading_jobs', 'question_scores', 'results', 'api_key_state',
     'grading_log', 'login_attempts', 'alerts', 'system_health', 'admin_actions',
-    'broadcasts', 'broadcast_recipients'
+    'broadcasts', 'broadcast_recipients', 'snapshot_purge_queue'
   ];
   views constant text[] := array['current_scores', 'attempt_progress', 'attempt_deadlines'];
   sequences constant text[] := array['grading_log_id_seq', 'login_attempts_id_seq', 'admin_actions_id_seq'];
@@ -39,7 +39,10 @@ declare
     'public.save_answer_key(uuid,uuid,text,text,jsonb)',
     'public.start_exam(uuid,boolean)',
     'public.submit_due_attempt(uuid)',
-    'public.finalize_exam_if_closed(uuid)'
+    'public.finalize_exam_if_closed(uuid)',
+    'public.preview_snapshot_purge(uuid)',
+    'public.claim_snapshot_purge_batch(uuid,integer,uuid)',
+    'public.finish_snapshot_purge_batch(uuid,uuid[],uuid[])'
   ];
 begin
   assert not exists (
@@ -1679,6 +1682,215 @@ begin
   assert v_caught, '20j: duplicate queued attempt/question regrade must be rejected';
 
   delete from public.exams where id = v_exam;
+  delete from public.candidates where id = v_candidate;
+end $$;
+
+-- 21. Migration 013: capture-time retention, durable leases, strict exam
+-- guards, partial completion and upload-failure compatibility.
+do $$
+declare
+  v_candidate uuid := gen_random_uuid();
+  v_ended_exam uuid := gen_random_uuid();
+  v_live_exam uuid := gen_random_uuid();
+  v_guarded_exam uuid := gen_random_uuid();
+  v_ended_attempt uuid;
+  v_live_attempt uuid;
+  v_guarded_attempt uuid;
+  v_old_event uuid := gen_random_uuid();
+  v_boundary_event uuid := gen_random_uuid();
+  v_new_event uuid := gen_random_uuid();
+  v_failed_upload_event uuid := gen_random_uuid();
+  v_live_event uuid := gen_random_uuid();
+  v_guarded_event uuid := gen_random_uuid();
+  v_claim_one uuid := gen_random_uuid();
+  v_claim_two uuid := gen_random_uuid();
+  v_claim_three uuid := gen_random_uuid();
+  v_original_capture timestamptz := transaction_timestamp() - interval '15 days';
+  v_claimed_event uuid;
+  v_claimed_capture timestamptz;
+  v_count bigint;
+  v_deleted integer;
+  v_released integer;
+  v_attempts_before bigint;
+  v_answers_before bigint;
+  v_papers_before bigint;
+  v_scores_before bigint;
+  v_results_before bigint;
+begin
+  assert exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'violation_events'
+       and column_name = 'snapshot_captured_at'
+  ), '21a: violation_events.snapshot_captured_at must exist';
+  assert exists (
+    select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relname = 'snapshot_purge_queue'
+       and c.relrowsecurity
+  ), '21a: snapshot_purge_queue must have RLS enabled';
+
+  insert into public.candidates (id, mer_code, full_name, nic_hash)
+  values (v_candidate, 'MER-SMOKE-013', 'Migration 013 Synthetic Candidate', 'synthetic-hash-013');
+  insert into public.exams (id, title, duration_min, status, started_at, ends_at)
+  values
+    (v_ended_exam, 'Migration 013 ended exam', 30, 'ended',
+     transaction_timestamp() - interval '31 days', transaction_timestamp() - interval '30 days'),
+    (v_live_exam, 'Migration 013 live guard', 30, 'live',
+     transaction_timestamp() - interval '1 minute', transaction_timestamp() + interval '29 minutes'),
+    (v_guarded_exam, 'Migration 013 in-progress guard', 30, 'finalized',
+     transaction_timestamp() - interval '31 days', transaction_timestamp() - interval '30 days');
+  insert into public.exam_candidates (exam_id, candidate_id)
+  values
+    (v_ended_exam, v_candidate),
+    (v_live_exam, v_candidate),
+    (v_guarded_exam, v_candidate);
+  select id into v_ended_attempt from public.attempts
+   where exam_id = v_ended_exam and candidate_id = v_candidate;
+  select id into v_live_attempt from public.attempts
+   where exam_id = v_live_exam and candidate_id = v_candidate;
+  select id into v_guarded_attempt from public.attempts
+   where exam_id = v_guarded_exam and candidate_id = v_candidate;
+  update public.attempts
+     set status = 'in_progress', joined_at = transaction_timestamp()
+   where id = v_guarded_attempt;
+
+  insert into public.violation_events (
+    id, attempt_id, type, counts, occurred_at,
+    snapshot_path, snapshot_captured_at
+  ) values
+    (v_old_event, v_ended_attempt, 'CAMERA_LOST', false, v_original_capture,
+     format('snapshots/%s/%s/%s.jpg', v_ended_exam, v_ended_attempt, v_old_event), v_original_capture),
+    (v_boundary_event, v_ended_attempt, 'MIC_LOST', false,
+     transaction_timestamp() - interval '14 days',
+     format('snapshots/%s/%s/%s.jpg', v_ended_exam, v_ended_attempt, v_boundary_event),
+     transaction_timestamp() - interval '14 days'),
+    (v_new_event, v_ended_attempt, 'FOCUS_LOST', false,
+     transaction_timestamp() - interval '13 days',
+     format('snapshots/%s/%s/%s.jpg', v_ended_exam, v_ended_attempt, v_new_event),
+     transaction_timestamp() - interval '13 days'),
+    (v_failed_upload_event, v_ended_attempt, 'FULLSCREEN_EXIT', false,
+     transaction_timestamp() - interval '15 days',
+     format('snapshots/%s/%s/%s.jpg', v_ended_exam, v_ended_attempt, v_failed_upload_event),
+     transaction_timestamp() - interval '15 days'),
+    (v_live_event, v_live_attempt, 'CAMERA_LOST', false,
+     transaction_timestamp() - interval '15 days',
+     format('snapshots/%s/%s/%s.jpg', v_live_exam, v_live_attempt, v_live_event),
+     transaction_timestamp() - interval '15 days'),
+    (v_guarded_event, v_guarded_attempt, 'CAMERA_LOST', false,
+     transaction_timestamp() - interval '15 days',
+     format('snapshots/%s/%s/%s.jpg', v_guarded_exam, v_guarded_attempt, v_guarded_event),
+     transaction_timestamp() - interval '15 days');
+
+  assert public.mark_violation_snapshot_failed(v_failed_upload_event),
+    '21b: the existing upload-failure RPC must still update its event';
+  assert (
+    select snapshot_path is null
+       and snapshot_captured_at is null
+       and meta->>'snapshot_error' = 'true'
+      from public.violation_events where id = v_failed_upload_event
+  ), '21b: upload failure must clear path and capture time together';
+
+  select public.preview_snapshot_purge(v_ended_exam) into v_count;
+  assert v_count = 1,
+    '21c: only the strictly older ended-exam snapshot must be eligible';
+  assert public.preview_snapshot_purge(v_live_exam) = 0,
+    '21d: a live exam must never be eligible';
+  assert public.preview_snapshot_purge(v_guarded_exam) = 0,
+    '21e: an exam with an in-progress attempt must never be eligible';
+  assert not exists (select 1 from public.snapshot_purge_queue),
+    '21f: preview must not write queue rows';
+
+  select count(*) into v_attempts_before from public.attempts;
+  select count(*) into v_answers_before from public.answers;
+  select count(*) into v_papers_before from public.attempt_questions;
+  select count(*) into v_scores_before from public.question_scores;
+  select count(*) into v_results_before from public.results;
+
+  select count(*), (array_agg(out_event_id))[1], (array_agg(out_snapshot_captured_at))[1]
+    into v_count, v_claimed_event, v_claimed_capture
+    from public.claim_snapshot_purge_batch(v_claim_one, 100, v_ended_exam);
+  assert v_count = 1 and v_claimed_event = v_old_event
+     and v_claimed_capture = v_original_capture,
+    '21g: claim must stage the old snapshot and retain its original capture time';
+  assert (
+    select snapshot_path is null and snapshot_captured_at is null
+       and meta ? 'snapshot_purge_queued_at'
+      from public.violation_events where id = v_old_event
+  ), '21g: staging must detach the event reference atomically';
+  assert (
+    select snapshot_path = format('snapshots/%s/%s/%s.jpg', v_ended_exam, v_ended_attempt, v_old_event)
+       and snapshot_captured_at = v_original_capture
+       and claim_token = v_claim_one
+      from public.snapshot_purge_queue where event_id = v_old_event
+  ), '21g: the queue must retain the exact path and original capture time';
+
+  select count(*) into v_count
+    from public.claim_snapshot_purge_batch(v_claim_two, 100, v_ended_exam);
+  assert v_count = 0, '21h: a fresh ten-minute lease must not be stolen';
+
+  update public.snapshot_purge_queue
+     set claimed_at = transaction_timestamp() - interval '10 minutes 1 second'
+   where event_id = v_old_event;
+  select count(*), (array_agg(out_event_id))[1]
+    into v_count, v_claimed_event
+    from public.claim_snapshot_purge_batch(v_claim_two, 100, v_ended_exam);
+  assert v_count = 1 and v_claimed_event = v_old_event
+     and (select claim_token = v_claim_two from public.snapshot_purge_queue where event_id = v_old_event),
+    '21i: an expired ten-minute lease must be reclaimable';
+
+  select out_deleted, out_released into v_deleted, v_released
+    from public.finish_snapshot_purge_batch(v_claim_two, '{}', array[v_old_event]);
+  assert v_deleted = 0 and v_released = 1
+     and exists (
+       select 1 from public.snapshot_purge_queue
+        where event_id = v_old_event and claim_token is null and claimed_at is null
+     ), '21j: a failed Storage deletion must release but retain durable work';
+  assert not (
+    select meta ? 'snapshot_deleted_at' from public.violation_events where id = v_old_event
+  ), '21j: a failed Storage deletion must not claim the snapshot was deleted';
+
+  select count(*) into v_count
+    from public.claim_snapshot_purge_batch(v_claim_three, 100, v_ended_exam);
+  assert v_count = 1, '21k: released work must be retryable';
+  select out_deleted, out_released into v_deleted, v_released
+    from public.finish_snapshot_purge_batch(v_claim_three, array[v_old_event], '{}');
+  assert v_deleted = 1 and v_released = 0,
+    '21k: confirmed Storage deletion must finish exactly one claim';
+  assert not exists (
+    select 1 from public.snapshot_purge_queue where event_id = v_old_event
+  ), '21k: completed queue work must be removed';
+  assert (
+    select snapshot_path is null and snapshot_captured_at is null
+       and meta ? 'snapshot_deleted_at'
+       and not (meta ? 'snapshot_purge_queued_at')
+      from public.violation_events where id = v_old_event
+  ), '21k: completed event must retain only the deletion marker';
+
+  select count(*) into v_count
+    from public.claim_snapshot_purge_batch(gen_random_uuid(), 100, v_ended_exam);
+  assert v_count = 0, '21l: a second purge run must be idempotent';
+  assert (select snapshot_path is not null from public.violation_events where id = v_boundary_event),
+    '21m: the exact 14-day boundary must remain retained';
+  assert (select snapshot_path is not null from public.violation_events where id = v_new_event),
+    '21m: a newer snapshot must remain retained';
+  assert (select snapshot_path is not null from public.violation_events where id = v_live_event),
+    '21m: a live-exam snapshot must remain retained';
+  assert (select snapshot_path is not null from public.violation_events where id = v_guarded_event),
+    '21m: an in-progress-exam snapshot must remain retained';
+  assert exists (select 1 from public.violation_events where id = v_old_event),
+    '21n: purge must retain the violation event row';
+
+  assert (select count(*) from public.attempts) = v_attempts_before
+     and (select count(*) from public.answers) = v_answers_before
+     and (select count(*) from public.attempt_questions) = v_papers_before
+     and (select count(*) from public.question_scores) = v_scores_before
+     and (select count(*) from public.results) = v_results_before,
+    '21o: purge must not change attempts, answers, papers, scores or results';
+  assert (select status = 'not_started' from public.attempts where id = v_ended_attempt)
+     and (select status = 'not_started' from public.attempts where id = v_live_attempt)
+     and (select status = 'in_progress' from public.attempts where id = v_guarded_attempt),
+    '21o: purge must not change attempt status';
+
+  delete from public.exams where id in (v_ended_exam, v_live_exam, v_guarded_exam);
   delete from public.candidates where id = v_candidate;
 end $$;
 

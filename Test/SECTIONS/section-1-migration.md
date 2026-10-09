@@ -14,6 +14,7 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 - `008_admin_controls.sql` through `010_exam_end_deadline.sql` — run eighth through tenth in numeric order.
 - `011_grading_rpcs.sql` — run eleventh. It adds atomic grading start, resume, regrade and result-recompute functions.
 - `012_grading_runtime.sql` — run twelfth. It adds pause metadata/indexes and hardens resume and duplicate regrade behavior.
+- `013_snapshot_retention.sql` — run thirteenth. It records snapshot capture time and adds the durable, service-role-only 14-day purge queue and RPCs.
 - `001_smoke_test.sql` — run last in the SQL editor; it rolls itself back and reports the observed `generate_paper()` time for 100 questions.
 
 > **Development verification status (4 October 2026):** `001_initial.sql` through `005_question_rpcs.sql` and the full revised `001_smoke_test.sql` (including block 14) ran without errors on PostgreSQL 16.2. The smoke test passed. Earlier development-project checks also reported zero tables without RLS, `/api/health` returned HTTP 200, and a manually created `super_admin` Auth user was linked to its `admin_profiles` row.
@@ -28,6 +29,8 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 > **Migration 006 verification (5 October 2026):** migration 006 applied cleanly to the Supabase development project. The revised smoke test, including block 15, returned **SMOKE TEST PASSED** and measured `generate_paper` with 100 questions at **4.87 ms**. A separate privileges check confirmed `start_exam`, `submit_due_attempt`, and `finalize_exam_if_closed` are executable by `service_role` only; both `anon` and `authenticated` reported false.
 >
 > **Migration 007 verification (5 October 2026):** migration 007 applied cleanly to the Supabase development project. After the transaction-clock correction, the full smoke test, including block 16, returned **SMOKE TEST PASSED** and measured `generate_paper` with 100 questions at **4.29 ms**. Block 16 covers grants, JSON-object metadata, heartbeat auth outcomes, short and long gap classification, submitted-attempt exclusion, snapshot/rate rules, and real-admin dismiss/restore including null metadata, audit rows and reversal guards. The `FOR UPDATE SKIP LOCKED` behaviour and cross-function lock ordering cannot be proved by the single-session smoke transaction and still require the documented two-session rehearsal.
+>
+> **Migration 013 status (9 October 2026): written, not applied.** Its smoke block is also unrun. Do not mark snapshot retention database behavior verified until migration 013 and the full smoke test pass on the development project.
 
 ---
 
@@ -41,12 +44,12 @@ This section replaces the scattered schema tasks in Phase 1A (1A.1, 1A.3–1A.20
 6. SQL editor → paste `005_question_rpcs.sql` → **Run**.
 7. SQL editor → paste `006_exam_scheduler.sql` → **Run**.
 8. SQL editor → paste `007_proctoring.sql` → **Run**.
-9. Run migrations `008_admin_controls.sql` through `012_grading_runtime.sql` in numeric order.
+9. Run migrations `008_admin_controls.sql` through `013_snapshot_retention.sql` in numeric order.
 10. SQL editor → paste `001_smoke_test.sql` → **Run**. Expect the final result **SMOKE TEST PASSED** with the measured `generate_paper_100_question_ms` value.
-10. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
+11. Dashboard → Authentication → Users → create each admin and super-admin manually, then add the matching profile:
    `insert into public.admin_profiles (id, name, role) values ('<auth user uuid>', 'Name', 'super_admin');`
    Use `'admin'` for ordinary admins.
-11. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` are in `supabase_realtime`.
+12. Dashboard → Database → Replication: confirm `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` are in `supabase_realtime`.
 
 If an already-created database still has the old exam default, run this only after the implementation migration step becomes due:
 
@@ -70,6 +73,7 @@ Fresh databases created by the current `001_initial.sql` already use `10` and do
 | Exam papers | Every candidate receives every composed question. `shuffle` controls question order and MCQ option order only; reconnects retain the saved order |
 | Engine rules | `generate_paper`, `unassign_exam_candidates`, `save_answer`, `advance_position`, `submit_attempt`, `start_exam`, `submit_due_attempt`, and `finalize_exam_if_closed` enforce paper, assignment, revision, deadline, navigation, submit and lifecycle behavior atomically with the database clock |
 | Proctoring rules | Candidate events, heartbeat/reconnect, disconnect passes, late-focus reversal, login events and dismiss/restore use service-role-only RPCs. Every database writer of `DISCONNECTED` or `RECONNECTED` supplies `clock_timestamp()` explicitly because latest-row decisions order by `occurred_at`; the table's `now()` default is transaction-stable. Passes lock at most 500 attempts per call in UUID order with `FOR UPDATE SKIP LOCKED`; overflow is retried on the next worker tick |
+| Snapshot retention | `violation_events.snapshot_captured_at` measures the 14-day window. Only `ended` or `finalized` exams with no `in_progress` attempt qualify. `snapshot_purge_queue` retains exact paths and original capture times under ten-minute claims while Storage deletion is pending; event rows stay. Existing paths are conservatively backfilled to the migration application time |
 | Views | `current_scores`, `attempt_progress`, and `attempt_deadlines` are `security_invoker` views |
 | Realtime | `attempts`, `violation_events`, `grading_jobs`, `grading_log`, `alerts`, and `exams` |
 | Storage | Private `snapshots` and `question-images` buckets; candidates receive question images only through an authorized API route |
@@ -77,6 +81,8 @@ Fresh databases created by the current `001_initial.sql` already use `10` and do
 | Default privileges | `FOR ROLE postgres` defaults revoke table/sequence privileges and function `EXECUTE`; future objects must be granted deliberately |
 
 `position` and `current_position` are **0-based** everywhere.
+
+Migration 013 rollback is allowed only after purge callers are paused and every queued Storage object is confirmed present. In one transaction, update each queued `violation_events` row with both `snapshot_path = snapshot_purge_queue.snapshot_path` and `snapshot_captured_at = snapshot_purge_queue.snapshot_captured_at`, remove `snapshot_purge_queued_at`/`snapshot_deleted_at`, and then delete the queue rows. The trigger preserves the explicitly restored original timestamp. Verify the queue is empty before dropping the purge RPCs, trigger/function, indexes, all-or-none constraint, queue table and capture-time column in dependency order. Never drop a non-empty queue: it is the only durable reference to files detached for deletion.
 
 Every new database function must explicitly set its own safe `search_path`; do not rely on the caller's or database's default path.
 

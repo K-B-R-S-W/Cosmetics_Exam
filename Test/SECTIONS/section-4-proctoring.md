@@ -216,8 +216,10 @@ The canonical SQL for both parts is in migration 007.
 | Black frame | Draw to a canvas and average the pixel brightness. Below `BLACK_LUMA` (12 of 255), do not send a snapshot and set `meta.snapshot_skipped = 'black'`. The event is still sent. |
 | Camera off | No snapshot. The event is still sent. |
 | Upload | Inside `POST /api/events` as base64, uploaded by the server (unchanged from Section 3). A failed upload keeps the event and sets `meta.snapshot_error = true`. |
-| Retention | 14 days (`SNAPSHOT_RETENTION_DAYS`). The rules screen shows this number from `/api/auth/me`. |
+| Retention | Exactly 14 days from snapshot capture time (`SNAPSHOT_RETENTION_DAYS`). The exact 14-day boundary is retained; deletion begins only when strictly older. Existing paths receive the migration-013 application time so they get a fresh conservative window. Only `ended` or `finalized` exams with no `in_progress` attempt qualify. The rules screen shows the same number from `/api/auth/me`. |
 | Viewing | Admins only, through signed URLs that last 300 s (unchanged). |
+
+Migration 013 assigns `snapshot_captured_at` when the event reserves its Storage path, immediately before the route uploads the file. If upload fails, `mark_violation_snapshot_failed()` clears both fields. Purge staging retains the exact path and original capture time in a durable queue before clearing the event reference. The admin timeline says **Snapshot cleanup pending** while queued and **Snapshot deleted after 14-day retention** only after Storage confirms the object is absent. Event rows, counts and incident metadata stay.
 
 ---
 

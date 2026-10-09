@@ -409,7 +409,7 @@ Phase 3 builds and unit-tests the 3C components as reusable, unmounted pieces. P
 | 7.4 | Summary CSV export | `app/api/admin/results/export/route.ts` — all scores + which questions each candidate received. 🔧⁹🔧¹⁰ **Formula-injection guard**: prefix cell values starting with `=`, `+`, `-`, `@` with `'`. Include Sinhala names with UTF-8 BOM for Excel compatibility. 🔧¹⁹ **Add two columns** (Section 4 §7.3): `violations_counted` (`violation_count`) and `violations_logged` (count of all `violation_events` rows for the attempt). 🔧²¹ **Add column** (Section 5 §8.1): `unscored_count` placed after `needs_review_count` (count of written questions without a score row) |
 | 7.5 | Paper indicator | Show the complete ordered question list saved for the candidate |
 | ➕ 7.6 | Post-exam backup export | 🔧 Export results and PDFs. Copy to Google Drive immediately after the exam (free Supabase projects don't have reliable backups) |
-| ➕ 7.7 | Snapshot deletion | 🔧²🔧⁹ **Dual purge**: (1) `POST /api/admin/snapshots/purge` (super-admin route, `maxDuration = 30`), and (2) worker daily cron job calling the same shared function. Retention default = `SNAPSHOT_RETENTION_DAYS` = **14 days**. Deletes Storage objects and nulls the `snapshot_path` on `violation_events` rows. The rules screen promises this retention to staff |
+| ➕ 7.7 | Snapshot deletion | 🔧²🔧⁹ **Dual purge**: (1) `POST /api/admin/snapshots/purge` (super-admin route, `maxDuration = 30`), and (2) an independent worker lane once a day, both calling the same shared orchestrator. Retention is exactly `SNAPSHOT_RETENTION_DAYS` = **14 days**; there is no zero-day or caller-selected override. Migration 013 records capture time and stages eligible `ended`/`finalized` exam snapshots through a durable, ten-minute-lease queue before the shared code removes exact validated paths from the private `snapshots` bucket in batches of at most 100. Event rows stay; successful deletion clears `snapshot_path` and records `meta.snapshot_deleted_at`. Live exams and exams with an `in_progress` attempt are never eligible. Missing or invalid retention configuration deletes nothing and disables only the purge lane. |
 
 **Done when:** PDF exports correctly with Sinhala text; CSV contains all scores and question assignments; backup exported.
 
@@ -718,7 +718,7 @@ All issues from `Issues.md` (rounds 1–22) are addressed in this plan:
 | Client `counts` flag trusted | 3A.1, 3B.1 (server decides `counts`) |
 | CSV import too slow for 300 NICs | 1C.4 (cap 100 rows, batches) |
 | Acknowledge split across two screens | 2A.5 (no API), 2A.6 (called from rules, both flags) |
-| Snapshot retention undecided | 0.4, 7.7 (`SNAPSHOT_RETENTION_DAYS` = 14) |
+| Snapshot retention | Resolved in 0.4 and 7.7: `SNAPSHOT_RETENTION_DAYS` is exactly 14 with no caller override |
 | Waiting-room incidents counting | 3A.1, 3B.1 (waiting-room = `counts: false`; exam-phase = `counts: true`) |
 | New routes needed | 1C.5, 1D.3, 1D.4, 1E.6, 1E.7, 2A.7, 2A.8, 6D.6 (files added) |
 | Section 3 reference | [`SECTIONS/section-3-api-contracts.md`](file:///e:/1.%20Projects/Cosmetics.lk/Projects/Cosmetics_Exam/SECTIONS/section-3-api-contracts.md) |

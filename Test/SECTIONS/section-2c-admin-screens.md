@@ -556,9 +556,9 @@ One block per question on the candidate's paper, in the order the candidate saw 
 - **Resolve** (route 33) is Quiet and needs no confirmation. Toast **Alert resolved.**
 - The alert **chip in the top bar** (super admin only) says **{n} alerts** and links here. It is hidden at zero. Critical alerts say **{n} alerts, 1 critical**.
 - **Snapshot cleanup** (task 7.7, route 34) is a section at the bottom:
-  - **Delete snapshots older than [14] days.** A **Check** button (`dry_run: true`) shows **412 snapshots would be deleted.** Then **Delete snapshots** (Destructive) opens a dialog: **Delete {n} snapshots?** / **The photos are removed. The event records stay.** / **Delete snapshots** / **Cancel**.
-  - **Delete all snapshots for an exam** (post-exam cleanup, `older_than_days: 0`): an exam select and the same two-step flow with `confirm: true`. The dialog adds **This removes every snapshot for "{title}".**
-  - The line **Snapshots are also deleted automatically after {retention} days.** shows the real number.
+  - **Delete snapshots older than 14 days.** A **Check** button (`dry_run: true`) shows **412 snapshots would be deleted.** Then **Delete snapshots** (Destructive) opens a dialog: **Delete {n} snapshots?** / **The photos are removed. The event records stay.** / **Delete snapshots** / **Cancel**. There is no delete-all or caller-selected retention control; an optional exam filter only narrows snapshots that are already older than 14 days.
+  - A bounded run reports any **remaining** count. When it is non-zero, show **Run again to continue.**
+  - The line **Snapshots are also deleted automatically after 14 days.** shows the locked retention. Missing or invalid retention configuration disables the controls and deletes nothing.
 
 ---
 
