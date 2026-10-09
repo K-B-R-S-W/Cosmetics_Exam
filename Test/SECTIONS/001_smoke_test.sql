@@ -1702,9 +1702,17 @@ declare
   v_failed_upload_event uuid := gen_random_uuid();
   v_live_event uuid := gen_random_uuid();
   v_guarded_event uuid := gen_random_uuid();
+  v_normal_capture_event uuid := gen_random_uuid();
+  v_future_capture_event uuid := gen_random_uuid();
+  v_mixed_queued_event uuid := gen_random_uuid();
+  v_mixed_new_event_one uuid := gen_random_uuid();
+  v_mixed_new_event_two uuid := gen_random_uuid();
   v_claim_one uuid := gen_random_uuid();
   v_claim_two uuid := gen_random_uuid();
   v_claim_three uuid := gen_random_uuid();
+  v_claim_four uuid := gen_random_uuid();
+  v_claim_five uuid := gen_random_uuid();
+  v_wrong_claim uuid := gen_random_uuid();
   v_original_capture timestamptz := transaction_timestamp() - interval '15 days';
   v_claimed_event uuid;
   v_claimed_capture timestamptz;
@@ -1716,6 +1724,8 @@ declare
   v_papers_before bigint;
   v_scores_before bigint;
   v_results_before bigint;
+  v_mixed_queue_before jsonb;
+  v_mixed_meta_before jsonb;
 begin
   assert exists (
     select 1 from information_schema.columns
@@ -1779,6 +1789,39 @@ begin
      transaction_timestamp() - interval '15 days',
      format('snapshots/%s/%s/%s.jpg', v_guarded_exam, v_guarded_attempt, v_guarded_event),
      transaction_timestamp() - interval '15 days');
+
+  -- Migration 007 supplies a path before upload and has no capture-time
+  -- argument. The migration-013 trigger must stamp that normal write.
+  insert into public.violation_events (
+    id, attempt_id, type, counts, occurred_at, snapshot_path
+  ) values (
+    v_normal_capture_event, v_ended_attempt, 'CAMERA_LOST', false,
+    clock_timestamp(),
+    format('snapshots/%s/%s/%s.jpg', v_ended_exam, v_ended_attempt, v_normal_capture_event)
+  );
+  assert (
+    select snapshot_captured_at between clock_timestamp() - interval '5 seconds'
+                                    and clock_timestamp()
+      from public.violation_events where id = v_normal_capture_event
+  ), '21b: a path inserted without capture time must receive the current time';
+
+  insert into public.violation_events (
+    id, attempt_id, type, counts, occurred_at
+  ) values (
+    v_future_capture_event, v_ended_attempt, 'CAMERA_LOST', false,
+    clock_timestamp()
+  );
+  update public.violation_events
+     set snapshot_path = format(
+           'snapshots/%s/%s/%s.jpg',
+           v_ended_exam, v_ended_attempt, v_future_capture_event
+         ),
+         snapshot_captured_at = clock_timestamp() + interval '1 day'
+   where id = v_future_capture_event;
+  assert (
+    select snapshot_captured_at <= clock_timestamp()
+      from public.violation_events where id = v_future_capture_event
+  ), '21b: a future capture time must be clamped to the current time';
 
   assert public.mark_violation_snapshot_failed(v_failed_upload_event),
     '21b: the existing upload-failure RPC must still update its event';
@@ -1889,6 +1932,104 @@ begin
      and (select status = 'not_started' from public.attempts where id = v_live_attempt)
      and (select status = 'in_progress' from public.attempts where id = v_guarded_attempt),
     '21o: purge must not change attempt status';
+
+  -- One unclaimed durable item plus two new eligible events must fill one
+  -- bounded batch without losing the remaining eligible reference.
+  insert into public.violation_events (
+    id, attempt_id, type, counts, occurred_at,
+    snapshot_path, snapshot_captured_at
+  ) values
+    (v_mixed_queued_event, v_ended_attempt, 'CAMERA_LOST', false, v_original_capture,
+     format('snapshots/%s/%s/%s.jpg', v_ended_exam, v_ended_attempt, v_mixed_queued_event),
+     v_original_capture),
+    (v_mixed_new_event_one, v_ended_attempt, 'CAMERA_LOST', false, v_original_capture,
+     format('snapshots/%s/%s/%s.jpg', v_ended_exam, v_ended_attempt, v_mixed_new_event_one),
+     v_original_capture),
+    (v_mixed_new_event_two, v_ended_attempt, 'CAMERA_LOST', false, v_original_capture,
+     format('snapshots/%s/%s/%s.jpg', v_ended_exam, v_ended_attempt, v_mixed_new_event_two),
+     v_original_capture);
+  insert into public.snapshot_purge_queue (
+    event_id, snapshot_path, snapshot_captured_at
+  )
+  select id, snapshot_path, snapshot_captured_at
+    from public.violation_events
+   where id = v_mixed_queued_event;
+  update public.violation_events
+     set snapshot_path = null,
+         meta = jsonb_set(
+           coalesce(meta, '{}'::jsonb),
+           '{snapshot_purge_queued_at}',
+           to_jsonb(clock_timestamp()),
+           true
+         )
+   where id = v_mixed_queued_event;
+
+  select count(*) into v_count
+    from public.claim_snapshot_purge_batch(v_claim_four, 2, v_ended_exam);
+  assert v_count = 2,
+    '21p: a mixed claim must fill its batch from queued and newly eligible work';
+  assert (
+    select claim_token = v_claim_four
+      from public.snapshot_purge_queue where event_id = v_mixed_queued_event
+  ), '21p: the existing unclaimed queue row must be included first';
+  assert (
+    select count(*) = 1
+      from public.violation_events
+     where id in (v_mixed_new_event_one, v_mixed_new_event_two)
+       and snapshot_path is not null
+  ), '21p: one newly eligible event must remain referenced after the first batch';
+
+  select count(*) into v_count
+    from public.claim_snapshot_purge_batch(v_claim_five, 2, v_ended_exam);
+  assert v_count = 1,
+    '21q: the second mixed claim must return the remaining eligible event';
+  assert not exists (
+    select 1 from public.violation_events
+     where id in (v_mixed_new_event_one, v_mixed_new_event_two)
+       and snapshot_path is not null
+  ), '21q: both newly eligible events must be durably staged after two claims';
+
+  select coalesce(jsonb_agg(to_jsonb(q) order by q.event_id), '[]'::jsonb)
+    into v_mixed_queue_before
+    from public.snapshot_purge_queue q
+   where q.event_id in (
+     v_mixed_queued_event, v_mixed_new_event_one, v_mixed_new_event_two
+   );
+  select coalesce(
+           jsonb_object_agg(ve.id::text, coalesce(ve.meta, 'null'::jsonb)),
+           '{}'::jsonb
+         )
+    into v_mixed_meta_before
+    from public.violation_events ve
+   where ve.id in (
+     v_mixed_queued_event, v_mixed_new_event_one, v_mixed_new_event_two
+   );
+
+  select out_deleted, out_released into v_deleted, v_released
+    from public.finish_snapshot_purge_batch(
+      v_wrong_claim,
+      array[v_mixed_queued_event, v_mixed_new_event_one, v_mixed_new_event_two],
+      '{}'
+    );
+  assert v_deleted = 0 and v_released = 0,
+    '21r: a wrong finish token must report no changes';
+  assert v_mixed_queue_before = (
+    select coalesce(jsonb_agg(to_jsonb(q) order by q.event_id), '[]'::jsonb)
+      from public.snapshot_purge_queue q
+     where q.event_id in (
+       v_mixed_queued_event, v_mixed_new_event_one, v_mixed_new_event_two
+     )
+  ), '21r: a wrong finish token must not change queue rows';
+  assert v_mixed_meta_before = (
+    select coalesce(
+             jsonb_object_agg(ve.id::text, coalesce(ve.meta, 'null'::jsonb)),
+             '{}'::jsonb
+           )
+      from public.violation_events ve
+     where ve.id in (
+       v_mixed_queued_event, v_mixed_new_event_one, v_mixed_new_event_two
+     )
+  ), '21r: a wrong finish token must not change event metadata';
 
   delete from public.exams where id in (v_ended_exam, v_live_exam, v_guarded_exam);
   delete from public.candidates where id = v_candidate;

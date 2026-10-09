@@ -26,11 +26,18 @@ begin
   if new.snapshot_path is null then
     new.snapshot_captured_at := null;
   elsif tg_op = 'INSERT' then
-    new.snapshot_captured_at := coalesce(new.snapshot_captured_at, clock_timestamp());
+    new.snapshot_captured_at := least(
+      coalesce(new.snapshot_captured_at, clock_timestamp()),
+      clock_timestamp()
+    );
   elsif old.snapshot_path is null then
     -- An explicitly supplied timestamp is preserved for a documented rollback
-    -- from snapshot_purge_queue; ordinary null-to-path writes use capture time.
-    new.snapshot_captured_at := coalesce(new.snapshot_captured_at, clock_timestamp());
+    -- from snapshot_purge_queue, but neither inserts nor restores may put a
+    -- capture time in the future. Ordinary null-to-path writes use capture time.
+    new.snapshot_captured_at := least(
+      coalesce(new.snapshot_captured_at, clock_timestamp()),
+      clock_timestamp()
+    );
   elsif new.snapshot_path is distinct from old.snapshot_path then
     new.snapshot_captured_at := clock_timestamp();
   elsif new.snapshot_captured_at is null then
