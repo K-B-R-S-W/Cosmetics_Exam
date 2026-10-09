@@ -105,4 +105,60 @@ a:not([class]) {
   body {
     background: var(--surface);
   }
+
+  .admin-shell:has(.print-result) {
+    display: block;
+    min-height: auto;
+    background: white;
+  }
+
+  .admin-shell:has(.print-result) > header,
+  .admin-shell:has(.print-result) > nav {
+    display: none;
+  }
+
+  .admin-shell:has(.print-result) > main {
+    overflow: visible;
+    padding: 0;
+  }
+
+  .print-result {
+    page: candidate-result;
+    background: white;
+    color: black;
+    font-family: var(--font-atkinson), var(--font-sinhala), sans-serif;
+  }
+
+  .print-controls {
+    display: none;
+  }
+
+  .print-question {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .print-question-image {
+    max-height: 80mm;
+    max-width: 100%;
+  }
+
+  .print-footer-identity {
+    position: fixed;
+    bottom: -12mm;
+    left: 0;
+    display: block;
+    color: black;
+    font-size: 9pt;
+  }
+}
+
+@page candidate-result {
+  size: A4;
+  margin: 16mm 16mm 20mm;
+
+  @bottom-right {
+    content: "page " counter(page) " of " counter(pages);
+    font-size: 9pt;
+  }
 }

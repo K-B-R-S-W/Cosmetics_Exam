@@ -18,18 +18,22 @@ function query(data: unknown, error: unknown = null) {
 function fixture(status: string, failure?: keyof ReturnType<typeof tables>) {
   const values = tables(status);
   if (failure) values[failure] = query(null, { code: "PGRST200", message: "candidate answer must stay private" });
-  const client = { from: vi.fn((table: keyof typeof values) => values[table].builder) } as unknown as SupabaseClient;
-  return { values, client };
+  const createSignedUrls = vi.fn().mockResolvedValue({ data: [], error: null });
+  const storageFrom = vi.fn(() => ({ createSignedUrls }));
+  const client = { from: vi.fn((table: keyof typeof values) => values[table].builder), storage: { from: storageFrom } } as unknown as SupabaseClient;
+  return { values, client, createSignedUrls, storageFrom };
 }
 
 function tables(status: string) {
   return {
-    attempts: query({ id: "attempt", status, candidates: { mer_code: "MER-1", full_name: "Candidate" } }),
-    attempt_questions: query([{ question_id: "q1", position: 0, questions: [{ id: "q1", position: 6, type: "written", body_html: "<p>Question</p>", marks: 2 }] }]),
+    attempts: query({ id: "attempt", status, exam_id: "exam", candidates: { mer_code: "MER-1", full_name: "Candidate", outlet: null } }),
+    attempt_questions: query([{ question_id: "q1", position: 0, questions: [{ id: "q1", position: 6, type: "written", body_html: "<p>Question</p>", marks: 2, image_path: null, image_alt_text: null }] }]),
     answer_keys: query({ question_id: "q1", correct_option_id: null, model_answer: "Model" }),
     answers: query([{ question_id: "q1", answer_text: "Answer", selected_option_id: null }]),
     current_scores: query([{ question_id: "q1", source: "ai", marks: 1, reason: "Partial", needs_review: true, details: { confidence: 0.5 } }]),
     mcq_options: query([]),
+    exams: query({ title: "Exam", started_at: "2026-10-09T03:30:00.000Z" }),
+    results: query({ mcq_marks: 0, written_marks: 1, total_marks: 2, total_percent: 50 }),
   };
 }
 
@@ -39,8 +43,8 @@ describe.each(["not_started", "acknowledged", "in_progress", "submitted", "final
     const result = await loadAttemptReview(client, "attempt", vi.fn());
     expect(result?.status).toBe(status);
     expect(result?.items[0]).toMatchObject({ question_id: "q1", type: "written", answer: "Answer", model_answer: "Model", selected_option: null, correct_option: null, max_marks: 2 });
-    expect(values.attempts.calls).toEqual([["select", "id,status,candidates!inner(mer_code,full_name)"], ["eq", "id", "attempt"], ["maybeSingle"]]);
-    expect(values.attempt_questions.calls).toEqual([["select", "question_id,position,questions!inner(id,position,type,body_html,marks)"], ["eq", "attempt_id", "attempt"], ["order", "position"]]);
+    expect(values.attempts.calls).toEqual([["select", "id,status,exam_id,candidates!inner(mer_code,full_name,outlet)"], ["eq", "id", "attempt"], ["maybeSingle"]]);
+    expect(values.attempt_questions.calls).toEqual([["select", "question_id,position,questions!inner(id,position,type,body_html,marks,image_path,image_alt_text)"], ["eq", "attempt_id", "attempt"], ["order", "position"]]);
     expect(result?.question_numbers).toEqual([7]);
     expect(values.answer_keys.calls).toEqual([["select", "question_id,correct_option_id,model_answer"], ["in", "question_id", ["q1"]]]);
     expect(values.answers.calls).toEqual([["select", "question_id,answer_text,selected_option_id"], ["eq", "attempt_id", "attempt"], ["in", "question_id", ["q1"]]]);
@@ -51,6 +55,55 @@ describe.each(["not_started", "acknowledged", "in_progress", "submitted", "final
     expect(values.attempt_questions.calls[0]?.[1]).not.toContain("answers(");
     expect(values.attempt_questions.calls[0]?.[1]).not.toContain("answer_keys(");
   });
+});
+
+it("keeps the default review load at its existing query count with no Storage call", async () => {
+  const { client, createSignedUrls, storageFrom } = fixture("finalized");
+  await loadAttemptReview(client, "attempt", vi.fn());
+  expect(client.from).toHaveBeenCalledTimes(5);
+  expect(storageFrom).not.toHaveBeenCalled();
+  expect(createSignedUrls).not.toHaveBeenCalled();
+  expect(client.from).not.toHaveBeenCalledWith("exams");
+  expect(client.from).not.toHaveBeenCalledWith("results");
+});
+
+it("loads print metadata from current scores/results and signs images in one batch", async () => {
+  const { values, client, createSignedUrls } = fixture("finalized");
+  values.attempt_questions = query([
+    { question_id: "q1", position: 0, questions: { id: "q1", position: 6, type: "written", body_html: "Question", marks: 2, image_path: "exam/q1.jpg", image_alt_text: "Diagram" } },
+  ]);
+  createSignedUrls.mockResolvedValue({ data: [{ path: "exam/q1.jpg", signedUrl: "https://signed.test/q1.jpg", error: null }], error: null });
+  const result = await loadAttemptReview(client, "attempt", vi.fn(), { includePrintData: true });
+  expect(result?.print).toMatchObject({ exam_title: "Exam", earned_marks: 1, max_marks: 2, total_percent: 50, is_final: false });
+  expect(result?.items[0]?.image).toEqual({ url: "https://signed.test/q1.jpg", alt_text: "Diagram" });
+  expect(createSignedUrls).toHaveBeenCalledWith(["exam/q1.jpg"], 300);
+  expect(values.current_scores.calls[0]?.[1]).toBe("question_id,source,marks,reason,needs_review,details");
+});
+
+it("uses current_scores for override finality and MCQ correctness", async () => {
+  const { values, client } = fixture("finalized");
+  values.attempt_questions = query([{ question_id: "q1", position: 0, questions: { id: "q1", position: 1, type: "mcq", body_html: "Question", marks: 1, image_path: null, image_alt_text: null } }]);
+  values.answer_keys = query({ question_id: "q1", correct_option_id: "option-a", model_answer: null });
+  values.answers = query([{ question_id: "q1", answer_text: null, selected_option_id: "option-a" }]);
+  values.mcq_options = query([{ id: "option-a", question_id: "q1", label: "a", text_html: "Correct" }]);
+  values.current_scores = query([{ question_id: "q1", source: "override", marks: 1, reason: "Reviewed", needs_review: false, details: null }]);
+  values.results = query({ mcq_marks: 1, written_marks: 0, total_marks: 1, total_percent: 100 });
+  const result = await loadAttemptReview(client, "attempt", vi.fn(), { includePrintData: true });
+  expect(result?.print?.is_final).toBe(true);
+  expect(result?.items[0]).toMatchObject({ selected_correct: true, score: { source: "override", marks: 1 } });
+});
+
+it("marks missing print images unavailable and keeps database failures safe", async () => {
+  const { values, client, createSignedUrls } = fixture("finalized");
+  values.attempt_questions = query([{ question_id: "q1", position: 0, questions: { id: "q1", position: 0, type: "written", body_html: "Question", marks: 2, image_path: "exam/missing.jpg", image_alt_text: "Missing" } }]);
+  createSignedUrls.mockResolvedValue({ data: null, error: { message: "private storage detail" } });
+  const result = await loadAttemptReview(client, "attempt", vi.fn(), { includePrintData: true });
+  expect(result?.items[0]?.image).toEqual({ url: null, alt_text: "Missing", image_missing: true });
+
+  const logger = vi.fn();
+  const broken = fixture("finalized", "results");
+  await expect(loadAttemptReview(broken.client, "attempt", logger, { includePrintData: true })).rejects.toThrow("attempt_review_result_failed");
+  expect(JSON.stringify(logger.mock.calls)).not.toContain("candidate answer");
 });
 
 it("loads the selected and correct MCQ options through one explicit query", async () => {
@@ -102,6 +155,7 @@ it("returns no selected option when the referenced option was deleted", async ()
   const result = await loadAttemptReview(client, "attempt", vi.fn());
 
   expect(result?.items[0]?.selected_option).toBeNull();
+  expect(result?.items[0]?.selected_correct).toBeNull();
 });
 
 it("reports an MCQ options query failure with a safe code", async () => {

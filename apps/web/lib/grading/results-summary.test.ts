@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it, vi } from "vitest";
-import { loadResultsSummary, resolveResultsExamParam } from "./results-summary";
+import { isResultFinal, loadResultsSummary, resolveResultsExamParam } from "./results-summary";
 
 type Row = Record<string, unknown>;
 
@@ -121,4 +121,11 @@ describe("loadResultsSummary", () => {
 it("prefers exam and accepts exam_id as a backward-compatible fallback", () => {
   expect(resolveResultsExamParam({ exam: "new", exam_id: "old" })).toBe("new");
   expect(resolveResultsExamParam({ exam_id: "old" })).toBe("old");
+});
+
+it("shares the final-result rule", () => {
+  expect(isResultFinal({ tookExam: true, hasResult: true, unscoredCount: 0, needsReviewCount: 0 })).toBe(true);
+  expect(isResultFinal({ tookExam: false, hasResult: true, unscoredCount: 0, needsReviewCount: 0 })).toBe(false);
+  expect(isResultFinal({ tookExam: true, hasResult: true, unscoredCount: 1, needsReviewCount: 0 })).toBe(false);
+  expect(isResultFinal({ tookExam: true, hasResult: true, unscoredCount: 0, needsReviewCount: 1 })).toBe(false);
 });

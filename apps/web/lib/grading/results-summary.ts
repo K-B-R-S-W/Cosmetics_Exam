@@ -79,6 +79,10 @@ export function resolveResultsExamParam(params: { exam?: string; exam_id?: strin
   return params.exam ?? params.exam_id;
 }
 
+export function isResultFinal(input: { tookExam: boolean; hasResult: boolean; unscoredCount: number; needsReviewCount: number }): boolean {
+  return input.tookExam && input.hasResult && input.unscoredCount === 0 && input.needsReviewCount === 0;
+}
+
 export async function loadResultsSummary(
   client: SupabaseClient,
   examId: string,
@@ -151,7 +155,7 @@ export async function loadResultsSummary(
         total_percent: result ? Number(result.total_percent) : null,
         needs_review_count: needsReviewCount,
         unscored_count: unscoredCount,
-        is_final: !isAbsent && Boolean(result) && unscoredCount === 0 && needsReviewCount === 0,
+        is_final: isResultFinal({ tookExam: !isAbsent, hasResult: Boolean(result), unscoredCount, needsReviewCount }),
         is_absent: isAbsent,
       };
     }),
