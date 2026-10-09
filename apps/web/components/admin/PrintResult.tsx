@@ -17,6 +17,19 @@ function marks(item: AttemptReviewItem): string {
   return item.score ? `${item.score.marks} / ${item.max_marks}` : "Not graded";
 }
 
+function formatPrintTimestamp(value: Date): string {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Colombo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(value).map((part) => [part.type, part.value]));
+  return `${parts.day}/${parts.month}/${parts.year}, ${parts.hour}:${parts.minute}`;
+}
+
 export function cssString(value: string): string {
   return value
     .replaceAll("\\", "\\\\")
@@ -31,8 +44,10 @@ export function cssString(value: string): string {
 export function PrintResult({ attemptId, candidate, print, items }: { attemptId: string; candidate: AttemptReviewData["candidate"]; print: PrintData; items: AttemptReviewItem[] }) {
   const [includeModels, setIncludeModels] = useState(false);
   const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
+  const documentTitle = `${candidate.mer_code} - ${candidate.full_name} - ${print.exam_title}`;
+  const printedAt = formatPrintTimestamp(new Date());
   return <article className="print-result bg-surface text-ink">
-    <style data-print-page>{`@page candidate-result { @bottom-left { content: "${cssString(`${candidate.full_name} · ${candidate.mer_code}`)}"; font-size: 9pt; } }`}</style>
+    <style data-print-page>{`@page candidate-result { @top-left { content: "${cssString(printedAt)}"; font-size: 9pt; white-space: nowrap; } @top-right { content: "${cssString(documentTitle)}"; font-size: 9pt; text-align: right; max-width: 110mm; white-space: normal; overflow-wrap: anywhere; } @bottom-left { content: "${cssString(`${candidate.full_name} · ${candidate.mer_code}`)}"; font-size: 9pt; } }`}</style>
     <div className="print-controls mb-6 flex flex-wrap items-center gap-3 border-b border-line pb-4">
       <label className="flex min-h-11 items-center gap-2"><input type="checkbox" checked={includeModels} onChange={(event) => setIncludeModels(event.target.checked)} /> Include model answers</label>
       <Button onClick={() => window.print()}>Print or save as PDF</Button>

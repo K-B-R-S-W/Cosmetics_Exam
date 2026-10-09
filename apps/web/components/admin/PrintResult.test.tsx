@@ -142,3 +142,24 @@ it("escapes the page-margin identity as inert CSS while preserving Sinhala", () 
   expect(container.querySelector("script")).toBeNull();
   expect(container.querySelector(".print-footer-identity")).toBeNull();
 });
+
+it("adds a Colombo print timestamp and an escaped right-aligned document title", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-09T04:35:00.000Z"));
+  const hostile = 'Name "\\\n</style><script>x</script>\u0001 සිංහල';
+  const examTitle = "අවසන් විභාගය";
+  const mer = "MER-7";
+  const { container } = render(<PrintResult attemptId="attempt" candidate={{ mer_code: mer, full_name: hostile, outlet: null }} print={{ ...print, exam_title: examTitle }} items={[]} />);
+  const pageRule = container.querySelector("style[data-print-page]")?.textContent ?? "";
+
+  expect(pageRule).toContain('@top-left { content: "09/10/2026, 10:05";');
+  expect(pageRule).toContain(`@top-right { content: "${cssString(`${mer} - ${hostile} - ${examTitle}`)}";`);
+  expect(pageRule).toContain("text-align: right");
+  expect(pageRule).toContain("max-width: 110mm");
+  expect(pageRule).toContain("සිංහල");
+  expect(pageRule).toContain(examTitle);
+  expect(pageRule).not.toContain("</style>");
+  expect(pageRule).not.toContain("\u0001");
+  expect(container.querySelector("script")).toBeNull();
+  vi.useRealTimers();
+});
