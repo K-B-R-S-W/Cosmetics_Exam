@@ -25,6 +25,11 @@ import { createGradingRepository } from "./grader";
 import { initializeGrading, runGradingTick, type GradingRetry } from "./runner";
 import { SlotManager } from "./slots";
 import { checkKeys } from "./key-check";
+import {
+  createSnapshotPurgeTick,
+  startSnapshotPurgeLane,
+  type SnapshotPurgeLane,
+} from "./snapshot-purge";
 
 export type WorkerLaneController = {
   stop(): void;
@@ -112,6 +117,7 @@ async function main(): Promise<void> {
     let lifecycleRuns = 0;
     let proctoringRuns = 0;
     let healthRuns = 0;
+    let snapshotPurgeRuns = 0;
     const lanes = startWorkerLanes(
       async () => { lifecycleRuns += 1; },
       async () => { proctoringRuns += 1; },
@@ -123,12 +129,19 @@ async function main(): Promise<void> {
     if (lifecycleRuns !== 1 || proctoringRuns !== 1 || healthRuns !== 1) {
       throw new Error("worker_lane_self_test_failed");
     }
+    const snapshotPurge = startSnapshotPurgeLane(async () => {
+      snapshotPurgeRuns += 1;
+      return "continue";
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    snapshotPurge.stop();
+    if (snapshotPurgeRuns !== 1) throw new Error("worker_snapshot_purge_lane_self_test_failed");
     let gradingRuns = 0;
     const grading = startGradingLane(async () => { gradingRuns += 1; return { active: false }; });
     await new Promise((resolve) => setTimeout(resolve, 0));
     grading.stop();
     if (gradingRuns !== 1) throw new Error("worker_grading_lane_self_test_failed");
-    console.info("WORKER DIST FOUR-LANE SELF-TEST PASSED");
+    console.info("WORKER DIST FIVE-LANE SELF-TEST PASSED");
     console.info("WORKER DIST SELF-TEST PASSED");
     return;
   }
@@ -146,11 +159,12 @@ async function main(): Promise<void> {
   let ownsRow = false;
   let lanes: WorkerLaneController | null = null;
   let gradingLane: GradingLane | null = null;
+  let snapshotPurgeLane: SnapshotPurgeLane | null = null;
   const shutdown = createShutdownHandler({
     instance,
     store,
     getLanes: () => lanes ? {
-      stop() { lanes?.stop(); gradingLane?.stop(); },
+      stop() { lanes?.stop(); gradingLane?.stop(); snapshotPurgeLane?.stop(); },
       waitForHeartbeat(timeoutMs) { return lanes?.waitForHeartbeat(timeoutMs) ?? Promise.resolve(); },
     } : null,
     ownsRow: () => ownsRow,
@@ -187,6 +201,7 @@ async function main(): Promise<void> {
     stopping = true;
     ownsRow = false;
     lanes?.stop();
+    snapshotPurgeLane?.stop();
     process.exit(3);
   };
   const heartbeat = createHeartbeatRunner({
@@ -209,6 +224,12 @@ async function main(): Promise<void> {
     },
     heartbeat,
   );
+
+  snapshotPurgeLane = startSnapshotPurgeLane(createSnapshotPurgeTick({
+    client,
+    retentionDays: config.snapshotRetentionDays,
+    logger: schedulerLogger,
+  }));
 
   const repository = createGradingRepository(client);
   const slots = new SlotManager(config.grading.keys, config.grading.reserve, config.grading.slotMinIntervalMs);

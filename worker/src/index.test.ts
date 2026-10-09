@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkerHealthStore } from "./health";
 import { createShutdownHandler, startWorkerLanes } from "./index";
+import { startSnapshotPurgeLane } from "./snapshot-purge";
 
 afterEach(() => vi.useRealTimers());
 
@@ -29,6 +30,22 @@ describe("worker lanes", () => {
     expect(lifecycle).toHaveBeenCalledTimes(1);
     expect(proctoring).toHaveBeenCalledTimes(1);
     expect(heartbeat).toHaveBeenCalledTimes(2);
+    lanes.stop();
+  });
+
+  it("does not let a hanging snapshot purge block the existing worker lanes", async () => {
+    vi.useFakeTimers();
+    const lifecycle = vi.fn().mockResolvedValue(undefined);
+    const proctoring = vi.fn().mockResolvedValue(undefined);
+    const heartbeat = vi.fn().mockResolvedValue(undefined);
+    const purge = startSnapshotPurgeLane(() => new Promise<"continue">(() => undefined));
+    const lanes = startWorkerLanes(lifecycle, proctoring, heartbeat);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(lifecycle).toHaveBeenCalledTimes(7);
+    expect(proctoring).toHaveBeenCalledTimes(3);
+    expect(heartbeat).toHaveBeenCalledTimes(2);
+    purge.stop();
     lanes.stop();
   });
 });

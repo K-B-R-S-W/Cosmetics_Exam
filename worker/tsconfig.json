@@ -20,6 +20,7 @@
     "../apps/web/lib/exam-lifecycle.ts",
     "../apps/web/lib/grading/quota-day.ts",
     "../apps/web/lib/grading/html-to-text.ts",
-    "../apps/web/lib/grading/contracts.ts"
+    "../apps/web/lib/grading/contracts.ts",
+    "../apps/web/lib/snapshot-purge.ts"
   ]
 }

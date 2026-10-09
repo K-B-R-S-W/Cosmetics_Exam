@@ -6,6 +6,10 @@ export type SchedulerLogContext = {
   missing?: string[];
   finalized_attempts?: number;
   changed?: number;
+  eligible?: number;
+  deleted?: number;
+  failed?: number;
+  remaining?: number;
   error_code?: string;
 };
 

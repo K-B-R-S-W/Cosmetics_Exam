@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { PROCTORING_INTERVAL_MS, SCHEDULER_EARLY_WINDOW_MS, SCHEDULER_INTERVAL_MS, loadWorkerConfig } from "./config";
+import { PROCTORING_INTERVAL_MS, SCHEDULER_EARLY_WINDOW_MS, SCHEDULER_INTERVAL_MS, SNAPSHOT_PURGE_INTERVAL_MS, loadWorkerConfig } from "./config";
 
 describe("worker config", () => {
   it("uses the approved scheduler cadence and conservative scan window", () => {
     expect(SCHEDULER_INTERVAL_MS).toBe(10_000);
     expect(PROCTORING_INTERVAL_MS).toBe(30_000);
     expect(SCHEDULER_EARLY_WINDOW_MS).toBe(60_000);
+    expect(SNAPSHOT_PURGE_INTERVAL_MS).toBe(24 * 60 * 60_000);
   });
 
   it("accepts the scheduler's complete environment", () => {
@@ -19,8 +20,21 @@ describe("worker config", () => {
     })).toMatchObject({
       supabaseUrl: "https://example.supabase.co",
       serviceRoleKey: "synthetic-service-key",
+      snapshotRetentionDays: undefined,
       grading: { model: "gemini-3.7-flash", chunkSize: 10 },
     });
+  });
+
+  it("carries snapshot retention without making invalid values fatal to other lanes", () => {
+    const base = {
+      SUPABASE_URL: "https://example.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "synthetic-service-key",
+      GEMINI_MODEL: "gemini-3.7-flash",
+      GEMINI_KEY_1: "synthetic-key",
+      GEMINI_DAILY_LIMITS: "key1:20",
+    };
+    expect(loadWorkerConfig({ ...base, SNAPSHOT_RETENTION_DAYS: "14" }).snapshotRetentionDays).toBe("14");
+    expect(loadWorkerConfig({ ...base, SNAPSHOT_RETENTION_DAYS: "0" }).snapshotRetentionDays).toBe("0");
   });
 
   it("keeps each configured daily limit by its exact key label", () => {

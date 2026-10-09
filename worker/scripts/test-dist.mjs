@@ -42,7 +42,7 @@ try {
     result.error
     || result.status !== 0
     || result.signal
-    || !result.stdout.includes("WORKER DIST FOUR-LANE SELF-TEST PASSED")
+    || !result.stdout.includes("WORKER DIST FIVE-LANE SELF-TEST PASSED")
     || !result.stdout.includes("WORKER DIST SELF-TEST PASSED")
   ) {
     throw new Error([

@@ -7,6 +7,7 @@ export const HEALTH_GUARD_POLL_INTERVAL_MS = 5_000;
 export const HEALTH_GUARD_TAKEOVER_AFTER_MS = 65_000;
 export const GRADING_IDLE_INTERVAL_MS = 30_000;
 export const GRADING_ACTIVE_INTERVAL_MS = 2_000;
+export const SNAPSHOT_PURGE_INTERVAL_MS = 24 * 60 * 60_000;
 
 export type GradingKeyConfig = { label: string; key: string; dailyLimit: number };
 export type GradingConfig = {
@@ -35,6 +36,7 @@ export const DEFAULT_GRADING_TUNING = {
 export type WorkerConfig = {
   supabaseUrl: string;
   serviceRoleKey: string;
+  snapshotRetentionDays: string | undefined;
   grading: GradingConfig;
 };
 
@@ -87,6 +89,9 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env): 
   if (promptVersion !== "g1") throw new Error("GRADING_PROMPT_VERSION must be g1");
   return {
     supabaseUrl, serviceRoleKey,
+    // The purge lane validates this independently so a bad value cannot stop
+    // lifecycle, proctoring, health or grading work.
+    snapshotRetentionDays: environment.SNAPSHOT_RETENTION_DAYS,
     grading: {
       model, keys,
       chunkSize: integer("GRADING_CHUNK_SIZE", 10, 1, 10),
