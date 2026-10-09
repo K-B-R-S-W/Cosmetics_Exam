@@ -101,6 +101,25 @@ a:not([class]) {
   }
 }
 
+/* Screen preview only: approximate the A4 page. */
+.print-route {
+  min-height: 100vh;
+  padding: 24px 16px;
+  background: var(--paper);
+}
+
+.print-result {
+  max-width: 210mm;
+  margin: 0 auto;
+  padding: 16mm;
+  box-shadow: 0 1px 8px rgb(0 0 0 / 0.15);
+}
+
+.print-question-image {
+  max-height: 80mm;
+  max-width: 100%;
+}
+
 @media print {
   html:has(.print-route),
   body:has(.print-route) {
@@ -120,6 +139,9 @@ a:not([class]) {
   }
 
   .print-route {
+    background: white;
+    min-height: 0;
+    padding: 0;
     width: 100%;
     max-width: 100%;
     min-width: 0;
@@ -130,6 +152,9 @@ a:not([class]) {
     page: candidate-result;
     width: 100%;
     max-width: 100%;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
     min-width: 0;
     overflow: visible;
     background: white;

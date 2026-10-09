@@ -85,6 +85,27 @@ it("uses words rather than colour classes to carry result meaning", () => {
   expect(container.innerHTML).not.toMatch(/text-(alert|ok|warn)|bg-(alert|ok|warn)/);
 });
 
+it("provides a centered A4-sized screen preview with bounded images", () => {
+  const css = readFileSync(resolve(process.cwd(), "styles/globals.css"), "utf8");
+  const screenCss = css.slice(0, css.indexOf("@media print"));
+  expect(screenCss).toMatch(/\.print-route\s*{[\s\S]*?min-height:\s*100vh[\s\S]*?padding:\s*24px 16px/);
+  expect(screenCss).toMatch(/\.print-result\s*{[\s\S]*?max-width:\s*210mm[\s\S]*?margin:\s*0 auto[\s\S]*?padding:\s*16mm/);
+  expect(screenCss).toMatch(/\.print-question-image\s*{[\s\S]*?max-height:\s*80mm[\s\S]*?max-width:\s*100%/);
+});
+
+it("resets the screen preview without removing print safeguards", () => {
+  const css = readFileSync(resolve(process.cwd(), "styles/globals.css"), "utf8");
+  const printCss = css.slice(css.indexOf("@media print"), css.indexOf("@page candidate-result"));
+  expect(printCss).toMatch(/\.print-route\s*{[\s\S]*?background:\s*white[\s\S]*?min-height:\s*0[\s\S]*?padding:\s*0/);
+  expect(printCss).toMatch(/\.print-result\s*{[\s\S]*?max-width:\s*100%[\s\S]*?margin:\s*0[\s\S]*?padding:\s*0[\s\S]*?box-shadow:\s*none/);
+  expect(printCss).toMatch(/\.print-question\s*{[\s\S]*?border:\s*1px solid black[\s\S]*?break-inside:\s*avoid/);
+  expect(printCss).toContain("overflow-wrap: anywhere");
+  expect(css).toContain("margin: 16mm 16mm 20mm");
+  expect(css).toContain('counter(page) " of " counter(pages)');
+  expect(css).not.toContain(".print-footer-identity");
+  expect(css).not.toContain(".admin-shell:has(.print-result)");
+});
+
 it("scopes A4 print rules and prevents question blocks from splitting", () => {
   const css = readFileSync(resolve(process.cwd(), "styles/globals.css"), "utf8");
   expect(css).toContain("@page candidate-result");
