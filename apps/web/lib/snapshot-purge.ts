@@ -21,6 +21,8 @@ type FinishRow = {
 type StorageFile = { name: string };
 type StorageErrorLike = {
   code?: string;
+  status?: number | string;
+  originalError?: { status?: number | string };
 };
 
 export type SnapshotPurgeResult = {
@@ -84,6 +86,21 @@ function isMissingStorageError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const code = String((error as StorageErrorLike).code ?? "").toLowerCase();
   return code === "nosuchkey" || code === "objectnotfound" || code === "object_not_found";
+}
+
+function storageErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const candidate = error as StorageErrorLike;
+  const value = candidate.status ?? candidate.originalError?.status;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
+function isAbsentAfterRemove(data: boolean, error: unknown): boolean {
+  if (data !== false) return false;
+  if (!error) return true;
+  if (isMissingStorageError(error)) return true;
+  return [400, 404].includes(storageErrorStatus(error) ?? -1);
 }
 
 async function preview(client: SupabaseClient, examId?: string): Promise<number> {
@@ -152,9 +169,12 @@ async function removeClaimed(
   const checked = await Promise.all(unconfirmed.map(async (item) => {
     try {
       const result = await bucket.exists(item.out_snapshot_path);
+      // This fallback is reached only after remove() succeeded or returned a
+      // missing-key error, so a 400/404 HEAD response means this object is absent.
+      // Bucket-level remove errors are rejected above and never reach this path.
       return {
         id: item.out_event_id,
-        absent: result.data === false && (!result.error || isMissingStorageError(result.error)),
+        absent: isAbsentAfterRemove(result.data, result.error),
       };
     } catch {
       return { id: item.out_event_id, absent: false };

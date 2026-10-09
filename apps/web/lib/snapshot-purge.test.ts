@@ -182,6 +182,111 @@ describe("snapshot purge orchestrator", () => {
     expect(result).toMatchObject({ deleted: 0, failed: 1, remaining: 1 });
   });
 
+  it.each([
+    ["StorageApiError 404", { status: 404, name: "StorageApiError" }],
+    ["StorageApiError 400", { status: 400, name: "StorageApiError" }],
+    ["StorageUnknownError 404", { name: "StorageUnknownError", originalError: { status: 404 } }],
+  ])("finishes an absent object reported as %s", async (_label, error) => {
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: 1, error: null })
+      .mockResolvedValueOnce({ data: [{ out_event_id: eventId, out_snapshot_path: path(), out_snapshot_captured_at: "2026-09-01T00:00:00Z" }], error: null })
+      .mockResolvedValueOnce({ data: [{ out_deleted: 1, out_released: 0 }], error: null })
+      .mockResolvedValueOnce({ data: 0, error: null });
+    const client = clientWith(rpc, {
+      remove: vi.fn().mockResolvedValue({ data: [], error: null }),
+      exists: vi.fn().mockResolvedValue({ data: false, error }),
+    });
+
+    await runSnapshotPurge({
+      client,
+      dryRun: false,
+      retentionDays: "14",
+      randomUUID: () => "00000000-0000-4000-8000-000000000099",
+    });
+
+    expect(rpc).toHaveBeenCalledWith("finish_snapshot_purge_batch", expect.objectContaining({
+      p_deleted_event_ids: [eventId],
+      p_failed_event_ids: [],
+    }));
+  });
+
+  it.each([
+    ["status 500", { data: false, error: { status: 500, name: "StorageApiError" } }],
+    ["status 403", { data: false, error: { status: 403, name: "StorageApiError" } }],
+    ["object still present", { data: true, error: null }],
+  ])("releases the claim when existence reconciliation reports %s", async (_label, existsResult) => {
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: 1, error: null })
+      .mockResolvedValueOnce({ data: [{ out_event_id: eventId, out_snapshot_path: path(), out_snapshot_captured_at: "2026-09-01T00:00:00Z" }], error: null })
+      .mockResolvedValueOnce({ data: [{ out_deleted: 0, out_released: 1 }], error: null })
+      .mockResolvedValueOnce({ data: 1, error: null });
+    const client = clientWith(rpc, {
+      remove: vi.fn().mockResolvedValue({ data: [], error: null }),
+      exists: vi.fn().mockResolvedValue(existsResult),
+    });
+
+    await runSnapshotPurge({
+      client,
+      dryRun: false,
+      retentionDays: "14",
+      randomUUID: () => "00000000-0000-4000-8000-000000000099",
+    });
+
+    expect(rpc).toHaveBeenCalledWith("finish_snapshot_purge_batch", expect.objectContaining({
+      p_deleted_event_ids: [],
+      p_failed_event_ids: [eventId],
+    }));
+  });
+
+  it("releases the claim when the existence check throws", async () => {
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: 1, error: null })
+      .mockResolvedValueOnce({ data: [{ out_event_id: eventId, out_snapshot_path: path(), out_snapshot_captured_at: "2026-09-01T00:00:00Z" }], error: null })
+      .mockResolvedValueOnce({ data: [{ out_deleted: 0, out_released: 1 }], error: null })
+      .mockResolvedValueOnce({ data: 1, error: null });
+    const client = clientWith(rpc, {
+      remove: vi.fn().mockResolvedValue({ data: [], error: null }),
+      exists: vi.fn().mockRejectedValue(new Error("network_error")),
+    });
+
+    await runSnapshotPurge({
+      client,
+      dryRun: false,
+      retentionDays: "14",
+      randomUUID: () => "00000000-0000-4000-8000-000000000099",
+    });
+
+    expect(rpc).toHaveBeenCalledWith("finish_snapshot_purge_batch", expect.objectContaining({
+      p_deleted_event_ids: [],
+      p_failed_event_ids: [eventId],
+    }));
+  });
+
+  it("finishes a reserved snapshot path that was never uploaded and clears remaining", async () => {
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: 1, error: null })
+      .mockResolvedValueOnce({ data: [{ out_event_id: eventId, out_snapshot_path: path(), out_snapshot_captured_at: "2026-09-01T00:00:00Z" }], error: null })
+      .mockResolvedValueOnce({ data: [{ out_deleted: 1, out_released: 0 }], error: null })
+      .mockResolvedValueOnce({ data: 0, error: null });
+    const client = clientWith(rpc, {
+      remove: vi.fn().mockResolvedValue({ data: [], error: null }),
+      exists: vi.fn().mockResolvedValue({ data: false, error: { status: 404, name: "StorageApiError" } }),
+    });
+
+    const result = await runSnapshotPurge({
+      client,
+      dryRun: false,
+      retentionDays: "14",
+      randomUUID: () => "00000000-0000-4000-8000-000000000099",
+    });
+
+    expect(rpc).toHaveBeenCalledWith("finish_snapshot_purge_batch", expect.objectContaining({
+      p_deleted_event_ids: [eventId],
+      p_failed_event_ids: [],
+    }));
+    expect(result).toMatchObject({ deleted: 1, failed: 0, remaining: 0 });
+  });
+
   it("continues with another bounded batch when time remains", async () => {
     const rows = Array.from({ length: SNAPSHOT_PURGE_BATCH_SIZE + 1 }, (_, index) => {
       const id = `00000000-0000-4000-8000-${String(index + 100).padStart(12, "0")}`;
