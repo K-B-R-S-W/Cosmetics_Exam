@@ -16,6 +16,8 @@ Do not mark the worker lane or timeline markers live-verified from these results
 
 ## Part B — Worker startup purge
 
+**Status:** Reported passed by the project owner; exact counts, hashes and logs were not recorded. Repeat with recorded evidence during the Phase 8 rehearsal.
+
 1. Use the development project and synthetic candidates. Stop any other worker connected to that project so the single-instance guard does not reject this process.
 2. Prepare an ended or finalized synthetic exam with:
    - one snapshot captured more than 14 days ago;
@@ -36,6 +38,8 @@ Part B: date; worker commit; eligible/deleted/failed/remaining counts; queue cou
 
 ## Part C — Lane-only invalid configuration
 
+**Status:** Reported passed by the project owner; exact counts, hashes and logs were not recorded. Repeat with recorded evidence during the Phase 8 rehearsal.
+
 1. Stop the local worker and set `SNAPSHOT_RETENTION_DAYS=0` (then repeat once with it missing).
 2. Start the worker.
 3. Confirm exactly one `snapshot_purge_disabled` line for that process and no purge RPC/Storage call.
@@ -46,6 +50,8 @@ The 24-hour cadence and non-overlap guard are unit-tested. A real continuous 24-
 
 ## Part D — Timeline markers
 
+**Status:** Reported passed by the project owner; exact counts, hashes and logs were not recorded. Repeat with recorded evidence during the Phase 8 rehearsal.
+
 1. Open an attempt's violation timeline containing an old eligible snapshot.
 2. While a purge claim is held, confirm the event shows **Snapshot cleanup pending**. This state may be too brief to catch manually; if so, leave it unit-test-only rather than changing production timing.
 3. After successful deletion, reload the timeline and confirm **Snapshot deleted after 14-day retention** and no broken image control.
@@ -54,6 +60,8 @@ The 24-hour cadence and non-overlap guard are unit-tested. A real continuous 24-
 Record these separately from the already verified deletion behavior.
 
 ## Part E — Backup and restore drill
+
+**Status:** Reported passed by the project owner; exact counts, hashes and logs were not recorded. The restore target was not recorded, so this does not satisfy the hosted restore rehearsal. Repeat with recorded evidence during the Phase 8 rehearsal.
 
 1. Follow `docs/BACKUP.md` from a clean PowerShell window.
 2. Verify the three database files, source row counts, the `question-images` object-root folder, Results CSV, migration copy, commit ID and SHA-256 manifest. Confirm the default archive contains no snapshots.
@@ -74,7 +82,9 @@ Deleting an exam cascades its event and purge-queue rows but does not delete Sto
 
 ## Deferred until hosted
 
-- Continuous 24-hour purge cadence and restart/crash reclaim.
-- Scheduled encrypted backups and off-host copy/alerting.
-- VPS-specific paths and service account.
-- Android B3–B5 and other hosting-dependent checks.
+- Continuous 24-hour purge cadence.
+- VPS/systemd restart and crash reclaim.
+- Automated backups.
+- Hosted restore rehearsal.
+- Android B3–B5.
+- UptimeRobot.
