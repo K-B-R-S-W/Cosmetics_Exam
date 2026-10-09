@@ -17,10 +17,22 @@ function marks(item: AttemptReviewItem): string {
   return item.score ? `${item.score.marks} / ${item.max_marks}` : "Not graded";
 }
 
+export function cssString(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replace(/[\n\r\f]/g, "\\a ")
+    .replaceAll("<", "\\3c ")
+    .replaceAll(">", "\\3e ")
+    .replaceAll("&", "\\26 ")
+    .replace(/[\u0000-\u0008\u000b\u000e-\u001f\u007f]/g, "");
+}
+
 export function PrintResult({ attemptId, candidate, print, items }: { attemptId: string; candidate: AttemptReviewData["candidate"]; print: PrintData; items: AttemptReviewItem[] }) {
   const [includeModels, setIncludeModels] = useState(false);
   const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
   return <article className="print-result bg-surface text-ink">
+    <style data-print-page>{`@page candidate-result { @bottom-left { content: "${cssString(`${candidate.full_name} · ${candidate.mer_code}`)}"; font-size: 9pt; } }`}</style>
     <div className="print-controls mb-6 flex flex-wrap items-center gap-3 border-b border-line pb-4">
       <label className="flex min-h-11 items-center gap-2"><input type="checkbox" checked={includeModels} onChange={(event) => setIncludeModels(event.target.checked)} /> Include model answers</label>
       <Button onClick={() => window.print()}>Print or save as PDF</Button>
@@ -60,6 +72,5 @@ export function PrintResult({ attemptId, candidate, print, items }: { attemptId:
         </div>}
       </section>;
     })}</div>
-    <footer className="print-footer-identity hidden">{candidate.full_name} · {candidate.mer_code}</footer>
   </article>;
 }

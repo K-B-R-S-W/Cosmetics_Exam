@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { PrintResult } from "./PrintResult";
+import { PrintResult, cssString } from "./PrintResult";
 
 const print = {
   exam_title: "අවසන් විභාගය",
@@ -90,5 +90,34 @@ it("scopes A4 print rules and prevents question blocks from splitting", () => {
   expect(css).toContain("@page candidate-result");
   expect(css).toMatch(/\.print-result\s*{[\s\S]*?page:\s*candidate-result/);
   expect(css).toMatch(/\.print-question\s*{[\s\S]*?break-inside:\s*avoid/);
+  expect(css).toMatch(/\.print-result\s*{[\s\S]*?width:\s*100%/);
+  expect(css).toMatch(/\.print-result\s*{[\s\S]*?max-width:\s*100%/);
+  expect(css).toMatch(/\.print-result\s*{[\s\S]*?min-width:\s*0/);
+  expect(css).toMatch(/\.print-result\s*{[\s\S]*?overflow:\s*visible/);
+  expect(css).toMatch(/html:has\(\.print-route\),\s*body:has\(\.print-route\)\s*{[\s\S]*?height:\s*auto/);
+  expect(css).toMatch(/html:has\(\.print-route\),\s*body:has\(\.print-route\)\s*{[\s\S]*?width:\s*auto/);
+  expect(css).toMatch(/html:has\(\.print-route\),\s*body:has\(\.print-route\)\s*{[\s\S]*?max-width:\s*100%/);
+  expect(css).toMatch(/html:has\(\.print-route\),\s*body:has\(\.print-route\)\s*{[\s\S]*?overflow:\s*visible/);
+  expect(css).toMatch(/\.print-question[^{]*{[\s\S]*?overflow-wrap:\s*anywhere/);
+  expect(css).not.toContain(".admin-shell:has(.print-result)");
+  expect(css).not.toContain(".print-footer-identity");
   expect(css).toContain('counter(page) " of " counter(pages)');
+});
+
+it("escapes the page-margin identity as inert CSS while preserving Sinhala", () => {
+  const hostile = 'Name "\\\n</style><script>x</script>&\u0001 සිංහල';
+  const escaped = cssString(hostile);
+  expect(escaped).toContain('Name \\"\\\\\\a ');
+  expect(escaped).toContain("\\3c /style\\3e \\3c script\\3e x\\3c /script\\3e \\26 ");
+  expect(escaped).toContain("සිංහල");
+  expect(escaped).not.toContain("</style>");
+  expect(escaped).not.toContain("\u0001");
+
+  const { container } = render(<PrintResult attemptId="attempt" candidate={{ mer_code: "MER-1", full_name: hostile, outlet: null }} print={print} items={[]} />);
+  const style = container.querySelector("style[data-print-page]");
+  expect(style?.textContent).toContain("@page candidate-result");
+  expect(style?.textContent).toContain('@bottom-left');
+  expect(style?.textContent).not.toContain("</style>");
+  expect(container.querySelector("script")).toBeNull();
+  expect(container.querySelector(".print-footer-identity")).toBeNull();
 });

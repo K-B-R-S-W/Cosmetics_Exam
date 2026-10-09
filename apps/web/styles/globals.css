@@ -102,28 +102,36 @@ a:not([class]) {
 }
 
 @media print {
+  html:has(.print-route),
+  body:has(.print-route) {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  body:has(.print-route) {
+    display: block;
+  }
+
   body {
     background: var(--surface);
   }
 
-  .admin-shell:has(.print-result) {
-    display: block;
-    min-height: auto;
-    background: white;
-  }
-
-  .admin-shell:has(.print-result) > header,
-  .admin-shell:has(.print-result) > nav {
-    display: none;
-  }
-
-  .admin-shell:has(.print-result) > main {
+  .print-route {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow: visible;
-    padding: 0;
   }
 
   .print-result {
     page: candidate-result;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: visible;
     background: white;
     color: black;
     font-family: var(--font-atkinson), var(--font-sinhala), sans-serif;
@@ -134,22 +142,29 @@ a:not([class]) {
   }
 
   .print-question {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    word-break: normal;
+    border: 1px solid black;
     break-inside: avoid;
     page-break-inside: avoid;
   }
 
-  .print-question-image {
-    max-height: 80mm;
+  .print-question p,
+  .print-question h2,
+  .print-question span {
     max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: normal;
   }
 
-  .print-footer-identity {
-    position: fixed;
-    bottom: -12mm;
-    left: 0;
-    display: block;
-    color: black;
-    font-size: 9pt;
+  .print-question-image {
+    width: auto;
+    max-height: 80mm;
+    max-width: 100%;
   }
 }
 

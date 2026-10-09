@@ -24,6 +24,27 @@ it("requests print-only metadata and images", async () => {
   expect(mocks.load).toHaveBeenCalledWith(expect.anything(), "attempt", undefined, { includePrintData: true });
 });
 
+it("generates the candidate-specific title including Sinhala", async () => {
+  mocks.load.mockResolvedValue({ attemptId: "attempt", status: "finalized", candidate: { mer_code: "MER-7", full_name: "සිංහල නම", outlet: null }, question_numbers: [], items: [], print: { exam_title: "අවසන් විභාගය", exam_date: null, earned_marks: 0, max_marks: 0, total_percent: null, is_final: true } });
+  const { generateMetadata } = await import("./page");
+  await expect(generateMetadata({ params: Promise.resolve({ attempt: "attempt" }) })).resolves.toEqual({ title: "MER-7 - සිංහල නම - අවසන් විභාගය" });
+});
+
+it("uses Results as the safe title when the attempt is missing or cannot load", async () => {
+  const { generateMetadata } = await import("./page");
+  mocks.load.mockResolvedValueOnce(null);
+  await expect(generateMetadata({ params: Promise.resolve({ attempt: "missing" }) })).resolves.toEqual({ title: "Results" });
+  mocks.load.mockRejectedValueOnce(new Error("raw_database_message"));
+  await expect(generateMetadata({ params: Promise.resolve({ attempt: "broken" }) })).resolves.toEqual({ title: "Results" });
+});
+
+it("returns the fallback title without loading candidate data for a non-admin", async () => {
+  mocks.auth.mockRejectedValue(new AdminAuthError("forbidden", 403));
+  const { generateMetadata } = await import("./page");
+  await expect(generateMetadata({ params: Promise.resolve({ attempt: "forbidden" }) })).resolves.toEqual({ title: "Results" });
+  expect(mocks.load).not.toHaveBeenCalled();
+});
+
 it("uses notFound only for a genuinely missing attempt", async () => {
   mocks.load.mockResolvedValue(null);
   const { default: Page } = await import("./page");
