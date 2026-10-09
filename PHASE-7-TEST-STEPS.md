@@ -56,11 +56,17 @@ Record these separately from the already verified deletion behavior.
 ## Part E — Backup and restore drill
 
 1. Follow `docs/BACKUP.md` from a clean PowerShell window.
-2. Verify the three database files, both Storage folders, Results CSV, migration copy, commit ID and SHA-256 manifest.
+2. Verify the three database files, source row counts, the `question-images` object-root folder, Results CSV, migration copy, commit ID and SHA-256 manifest. Confirm the default archive contains no snapshots.
 3. Encrypt with 7-Zip AES-256, test the archive, and copy it to a second location.
 4. Restore into a scratch hosted project. If no second active Free-project slot is available, use the documented local Docker fallback.
-5. Verify representative candidate/exam/result counts, a question image, an unexpired snapshot and the CSV totals.
-6. Delete the scratch project or stop and remove the exact local restore directory after recording the result.
+5. Immediately after extraction, verify the manifest hash and every file hash again. Compare the exact restored counts for the listed key tables with `source-row-counts.csv`.
+6. Run the read-only Auth/profile query and confirm every `admin_profiles.user_id` has a matching `auth.users.id`. If it does not, stop and repeat the restore into a clean target; do not rewrite IDs to hide the mismatch.
+7. Re-enable missing members of `supabase_realtime`, then verify its exact public-table membership is `alerts`, `attempts`, `exams`, `grading_jobs`, `grading_log`, and `violation_events`.
+8. Run `Test/SECTIONS/001_smoke_test.sql` against the restored database and require the final `SMOKE TEST PASSED` result. It rolls back its test data.
+9. Verify Results/CSV totals and a known question image at the exact object key recorded from `questions.image_path`. The default drill does not restore or inspect snapshots.
+10. Record the date, versions, commit, hashes, counts, Auth check, Realtime list, smoke result, Storage check and pass/fail outside the temporary restore folder. Only then delete the scratch project, or stop the local stack and remove the exact temporary folders.
+
+Optional same-day snapshot safety-copy drill: keep it separate from the long-term archive, verify one still-unexpired snapshot only there, and delete the restored objects plus every copy of the archive the same day. No archive containing snapshots may be kept for 14 days.
 
 ## Test-data deletion warning
 

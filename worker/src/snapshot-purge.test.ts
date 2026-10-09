@@ -121,6 +121,20 @@ describe("snapshot purge tick", () => {
 });
 
 describe("snapshot purge lane", () => {
+  it("swallows a rejected tick and remains available for the next run", async () => {
+    vi.useFakeTimers();
+    const tick = vi.fn()
+      .mockRejectedValueOnce(new Error("synthetic tick failure"))
+      .mockResolvedValue("continue" as const);
+    const lane = startSnapshotPurgeLane(tick, 1_000);
+
+    await expect(lane.tickNow()).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(tick).toHaveBeenCalledTimes(2);
+    await expect(lane.tickNow()).resolves.toBeUndefined();
+    lane.stop();
+  });
+
   it("runs at startup and every 24 hours, then stops", async () => {
     vi.useFakeTimers();
     const tick = vi.fn().mockResolvedValue("continue" as const);

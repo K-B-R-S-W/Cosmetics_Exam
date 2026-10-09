@@ -19,6 +19,7 @@ Date: 9 October 2026.
 - Idle runs produce no log line. Successful changes log counts only. Identical failures are suppressed until their safe error code/count fingerprint changes, and recovery is logged once.
 - No candidate identifiers, object paths, row contents, request data, secrets or Storage/DB error text are logged.
 - Shutdown and guard-exit stop the purge timer with the other process-owned lanes. A running Storage/RPC operation is not force-cancelled; process shutdown still terminates it, and migration 013's lease makes a later run reclaimable.
+- The lane boundary catches an unexpected rejected tick defensively, clears its running guard and permits the next scheduled run; this prevents a fire-and-forget timer from producing an unhandled rejection or leaving the lane stuck.
 
 ## Database and Storage call profile
 
@@ -39,6 +40,7 @@ Awaiting local live verification:
 - Idle second startup with no routine log line.
 - Invalid-retention startup with the other worker lanes continuing.
 - Live timeline markers after a real queued/deleted event.
+- The documented encrypted backup and either the hosted-scratch or local-Docker restore drill, including hashes, counts, Auth, Realtime, smoke and exact question-image checks.
 
 Deferred until hosting:
 
@@ -49,4 +51,4 @@ Deferred until hosting:
 
 ## Backup status
 
-`docs/BACKUP.md` contains the manual Windows PowerShell database/Storage backup, hashing, AES-256 encryption, hosted scratch restore and local Docker fallback. The commands are documented but were not executed in this commit. `infra/ec2/backup-db.sh` remains unchanged and is explicitly classified as a public-schema-only partial backup with no Storage export.
+`docs/BACKUP.md` contains the manual Windows PowerShell database and durable `question-images` backup, hashing, AES-256 encryption, hosted scratch restore and local Docker fallback. Long-kept archives deliberately exclude snapshots to preserve the exact 14-day retention promise. A separate optional same-day snapshot safety copy has a same-day deletion rule and a hard 14-day ceiling. Both restore paths now require extracted-manifest verification, key-table count comparison, Auth/admin-profile matching, exact Realtime publication verification, the rollback-wrapped smoke test and a known question-image path check before the drill result is recorded and temporary resources are deleted. The commands are documented but were not executed in this commit. `infra/ec2/backup-db.sh` remains unchanged and is explicitly classified as a public-schema-only partial backup with no Storage export.

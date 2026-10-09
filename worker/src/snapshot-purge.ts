@@ -90,13 +90,17 @@ export function startSnapshotPurgeLane(
   const run = (): Promise<void> => {
     if (stopped || disabled) return Promise.resolve();
     if (running) return running;
-    running = tick()
+    running = Promise.resolve()
+      .then(tick)
       .then((result) => {
         if (result === "disable") {
           disabled = true;
           if (timer) clearInterval(timer);
         }
       })
+      // The production tick is defensive already; keep the lane safe if an injected
+      // or future tick rejects so the fire-and-forget timer cannot leak a rejection.
+      .catch(() => undefined)
       .finally(() => { running = null; });
     return running;
   };
