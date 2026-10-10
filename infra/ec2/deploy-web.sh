@@ -98,9 +98,11 @@ echo "==> Build the production web app as exam"
 # being printed, written to shell history, or copied into the repository.
 sudo cat /etc/exam-web.env | sudo -u exam /bin/bash -c '
   set -euo pipefail
-  set -a
-  source /dev/stdin
-  set +a
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\''\r'\''}"
+    [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+    export "$line"
+  done
   cd "$1"
   npm ci
   npm run build
