@@ -1,0 +1,31 @@
+# /etc/systemd/system/exam-web.service
+[Unit]
+Description=Exam platform web application
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=exam
+Group=exam
+WorkingDirectory=/opt/exam-web
+EnvironmentFile=/etc/exam-web.env
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--max-old-space-size=1536
+ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3000
+Restart=always
+RestartSec=5
+MemoryMax=2G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Next's production image optimizer writes only beneath this runtime cache.
+ReadWritePaths=/opt/exam-web/.next/cache
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

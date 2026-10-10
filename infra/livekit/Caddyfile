@@ -8,3 +8,9 @@
 	# WebSocket upgrade is handled automatically by reverse_proxy.
 	reverse_proxy 127.0.0.1:7880
 }
+
+# APP_HOST must be set in /opt/livekit/.env or Caddy will not start.
+{$APP_HOST} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3000
+}
