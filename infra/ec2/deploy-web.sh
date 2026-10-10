@@ -4,6 +4,61 @@
 # Needs: an existing exam user, /opt/exam-web, sudo, and /etc/exam-web.env already filled in with mode 600.
 set -euo pipefail
 
+validate_env_stream() {
+  local line name value inline_comment_re
+  local -i line_number=0
+  local -A values=()
+  local -A value_lines=()
+  inline_comment_re='[[:space:]]+#'
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    ((line_number += 1))
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+    if [[ ! "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      echo "Environment preflight failed: line $line_number variable <invalid> must use NAME=value" >&2
+      return 1
+    fi
+    name="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+
+    if [[ "$line" =~ $inline_comment_re ]]; then
+      echo "Environment preflight failed: line $line_number variable $name has a trailing comment" >&2
+      return 1
+    fi
+    if [[ "$name" == GEMINI_* ]]; then
+      echo "Environment preflight failed: line $line_number variable $name is not allowed" >&2
+      return 1
+    fi
+
+    values["$name"]="$value"
+    value_lines["$name"]="$line_number"
+  done
+
+  for name in LIVEKIT_URL NEXT_PUBLIC_LIVEKIT_URL; do
+    if [[ -z "${values[$name]+present}" ]]; then
+      echo "Environment preflight failed: line 0 variable $name is missing" >&2
+      return 1
+    fi
+    if [[ "${values[$name]}" != wss://* ]]; then
+      echo "Environment preflight failed: line ${value_lines[$name]} variable $name must start with wss://" >&2
+      return 1
+    fi
+  done
+
+  name=ALLOWED_ORIGINS
+  if [[ -z "${values[$name]+present}" ]]; then
+    echo "Environment preflight failed: line 0 variable $name is missing" >&2
+    return 1
+  fi
+  if [[ "${values[$name]}" != https://* ]]; then
+    echo "Environment preflight failed: line ${value_lines[$name]} variable $name must start with https://" >&2
+    return 1
+  fi
+}
+
 assume_yes=false
 if [[ "${1:-}" == "-y" ]]; then
   assume_yes=true
@@ -24,6 +79,7 @@ env_mode="$(sudo stat -c '%a' /etc/exam-web.env)"
   exit 1
 }
 unset env_owner env_mode
+sudo cat /etc/exam-web.env | validate_env_stream
 id exam >/dev/null 2>&1 || { echo "The exam user is missing; provision the VPS before deploying" >&2; exit 1; }
 [[ -d /opt/exam-web ]] || { echo "/opt/exam-web is missing; provision the VPS before deploying" >&2; exit 1; }
 [[ "$(readlink -f /opt/exam-web)" == "/opt/exam-web" ]] || {
