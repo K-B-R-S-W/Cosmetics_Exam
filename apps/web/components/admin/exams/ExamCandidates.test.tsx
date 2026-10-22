@@ -25,7 +25,9 @@ describe("ExamCandidates", () => {
     fireEvent.click(checkbox);
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ removed: [], blocked: [{ candidate_id: "cand-1", reason: "attempt_started" }] }), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify(assignedBody), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify(availableBody), { status: 200 }));
     fireEvent.click(screen.getByRole("button", { name: "Remove selected" }));
-    expect(await screen.findByText(/could not be removed because they have already joined the exam/)).toBeTruthy();
+    const blockedMessage = await screen.findByText(/could not be removed because they have already joined the exam/);
+    expect(blockedMessage.closest("section")).toBeTruthy();
+    expect(within(screen.getByTestId("toast-container")).queryByText(/could not be removed/)).toBeNull();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
   });
 
@@ -85,7 +87,8 @@ describe("ExamCandidates", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...availableBody, items: [], total: 0, scanned_count: 0 }), { status: 200 }));
     fireEvent.click(addButton);
     expect(await within(screen.getByTestId("toast-container")).findByText("100 added before the error.")).toBeTruthy();
-    expect((await screen.findByRole("alert")).textContent).toContain("Second batch failed.");
+    expect(await within(screen.getByTestId("toast-container")).findByText("Second batch failed.")).toBeTruthy();
+    expect(screen.queryByText("Second batch failed.", { selector: "section > p[role='alert']" })).toBeNull();
     const postCalls = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
     expect(postCalls.map(([, init]) => JSON.parse(String(init?.body)).candidate_ids.length)).toEqual([100, 100]);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
@@ -97,5 +100,18 @@ describe("ExamCandidates", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...availableBody, scan_limit: 1000, scanned_count: 1000 }), { status: 200 }));
     renderCandidates();
     expect(await screen.findByText("Search to narrow the list.")).toBeTruthy();
+  });
+
+  it("shows a failed remove request as a persistent toast", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify(assignedBody), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(availableBody), { status: 200 }));
+    renderCandidates();
+    fireEvent.click(await screen.findByLabelText("Select assigned TEST-001"));
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Synthetic remove failure." } }), { status: 500 }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove selected" }));
+
+    expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic remove failure.")).toBeTruthy();
+    expect(screen.queryByText("Synthetic remove failure.", { selector: "section > p[role='alert']" })).toBeNull();
   });
 });
