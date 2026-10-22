@@ -45,7 +45,7 @@ describe("LiveGrid", () => {
     fireEvent.click(tile);
     expect(await screen.findByRole("complementary", { name: "Candidate MER-2" })).toBeTruthy();
     mocks.realtimeInput!.onFlagged("one");
-    await waitFor(() => expect(screen.getByRole("status", { name: "" }).textContent).toContain("reached the flag threshold"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("reached the flag threshold"));
   });
 
   it("uses server time for offline status and the countdown despite a skewed admin clock", async () => {

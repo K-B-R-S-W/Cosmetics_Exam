@@ -7,6 +7,7 @@ import { AdminExamControls } from "@/components/admin/AdminExamControls";
 import { CandidatePanel } from "@/components/admin/CandidatePanel";
 import { ThresholdControl } from "@/components/admin/ThresholdControl";
 import { VideoTile } from "@/components/admin/VideoTile";
+import { useToast } from "@/components/ui/Toast";
 import { useAdminLiveKit } from "@/hooks/useAdminLiveKit";
 import { useViolationRealtime } from "@/hooks/useViolationRealtime";
 import { deriveLiveStatus, progressLabel, sortByMer, type LiveAttempt, type LiveExam, type LiveProgress, type LiveStatus } from "@/lib/admin-live";
@@ -18,6 +19,7 @@ const FILTERS: Filter[] = ["All", "Flagged", "Offline", "Camera off", "Not joine
 
 export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
   const router = useRouter();
+  const toast = useToast();
   const [body, setBody] = useState<LiveBody>();
   const [error, setError] = useState<string>();
   const [filter, setFilter] = useState<Filter>("All");
@@ -25,7 +27,6 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
   const [selectedId, setSelectedId] = useState<string>();
   const [events, setEvents] = useState<ViolationEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
-  const [toast, setToast] = useState<string>();
   const [returnFocus, setReturnFocus] = useState<HTMLElement | null>(null);
   const [missingSince, setMissingSince] = useState<Record<string, number>>({});
   const [clockOffsetMs, setClockOffsetMs] = useState(0);
@@ -80,18 +81,12 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
     },
     onFlagged: (attemptId) => {
       const attempt = attemptById.get(attemptId);
-      if (attempt) setToast(`${attempt.candidate.mer_code} reached the flag threshold.`);
+      if (attempt) toast.error(`${attempt.candidate.mer_code} reached the flag threshold.`);
     },
     onViolationChanged: (attemptId) => {
       if (selectedId && (!attemptId || selectedId === attemptId)) void loadEvents(selectedId);
     },
   });
-
-  useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(() => setToast(undefined), 6_000);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
 
   useEffect(() => {
     if (!body?.exam) return;
@@ -174,7 +169,6 @@ export function LiveGrid({ requestedExamId }: { requestedExamId?: string }) {
       <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{visible.map(({ attempt, status }) => <VideoTile key={attempt.id} attempt={attempt} status={status} threshold={exam.flag_threshold} progress={progressLabel(exam, attempt, progressById.get(attempt.id))} videoTrack={liveKit.videoTracks[attempt.id]} speakerOn={liveKit.speakerAttemptId === attempt.id} onToggleSpeaker={() => void liveKit.toggleSpeaker(attempt.id)} onOpen={() => { setReturnFocus(document.activeElement as HTMLElement); setSelectedId(attempt.id); void loadEvents(attempt.id); }} />)}</div>
       {!visible.length ? <p className="mt-8 text-center text-muted">No candidates match this filter.</p> : null}
       {selected ? <CandidatePanel examId={exam.id} attempt={selected} status={statusFor(selected)} threshold={exam.flag_threshold} progress={progressLabel(exam, selected, progressById.get(selected.id))} videoTrack={liveKit.videoTracks[selected.id]} speakerOn={liveKit.speakerAttemptId === selected.id} events={events} eventsLoading={eventsLoading} onToggleSpeaker={() => void liveKit.toggleSpeaker(selected.id)} onEventsChanged={() => { void loadEvents(selected.id); void loadFull(); }} onClose={() => { setSelectedId(undefined); setEvents([]); }} returnFocus={returnFocus} /> : null}
-      {toast ? <p role="status" className="fixed bottom-5 right-5 z-40 max-w-sm border border-alert bg-surface p-4 shadow-lg">{toast}</p> : null}
     </section>
   );
 }
