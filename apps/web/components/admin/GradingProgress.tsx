@@ -2,13 +2,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 
 type Progress = { runs: Array<{ id: string; status: string; pause_reason?: string | null }>; queue: Record<string, number>; keys: Array<{ label: string; status: string; cooldown_until: string | null; used: number | null; limit: number | null }>; logs: Array<{ id: number; event: string; detail: string | null; at: string }>; not_graded: number };
 
 export function GradingProgress({ examId, examStatus, attempts }: { examId: string; examStatus: string; attempts: Array<{ id: string; label: string }> }) {
+  const toast = useToast();
   const dialog = useRef<HTMLDialogElement>(null);
   const [data, setData] = useState<Progress>(); const [error, setError] = useState<string>();
-  const [starting, setStarting] = useState(false); const [message, setMessage] = useState<string>();
+  const [starting, setStarting] = useState(false);
   const load = useCallback(async () => {
     try { const response = await fetch(`/api/admin/grading?exam_id=${examId}`); if (!response.ok) throw new Error(); setData(await response.json() as Progress); setError(undefined); }
     catch { setError("Grading status is unavailable."); }
@@ -26,7 +28,7 @@ export function GradingProgress({ examId, examStatus, attempts }: { examId: stri
       const payload = await response.json() as { estimated_calls?: number; error?: { message?: string } };
       if (!response.ok) { setError(payload.error?.message ?? "Grading could not be started."); return; }
       dialog.current?.close();
-      setMessage(`Grading started. Estimated Gemini calls: ${payload.estimated_calls ?? 0}. Confirm current limits in AI Studio.`);
+      toast.success(`Grading started. Estimated Gemini calls: ${payload.estimated_calls ?? 0}. Confirm current limits in AI Studio.`);
       await load();
     } catch { setError("Can't reach the server. Check the connection and try again."); }
     finally { setStarting(false); }
@@ -36,7 +38,6 @@ export function GradingProgress({ examId, examStatus, attempts }: { examId: stri
   const activeRun = data?.runs.some((run) => run.status === "running" || run.status === "paused") ?? false;
   return <section className="space-y-5">
     {error ? <p role="alert" className="text-alert">{error}</p> : null}
-    {message ? <p role="status" className="border-l-4 border-ok bg-ok-tint p-3">{message}</p> : null}
     {data && examStatus === "finalized" && !activeRun ? <Button onClick={() => dialog.current?.showModal()}>Start grading</Button> : null}
     {examStatus !== "finalized" ? <p className="font-bold">End the exam first</p> : null}
     <Link className="inline-block underline" href={`/admin/exams/${examId}/questions`}>Answer keys and bulk regrade</Link>
