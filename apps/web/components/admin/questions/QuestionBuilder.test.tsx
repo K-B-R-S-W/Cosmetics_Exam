@@ -4,10 +4,21 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+const editorMock = vi.hoisted(() => ({ updateOnLoad: false }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
-vi.mock("@/components/editor/TiptapEditor", () => ({
-  TiptapEditor: ({ ariaLabel, disabled, error, value, onChange }: { ariaLabel: string; disabled?: boolean; error?: string; value: string; onChange: (value: string) => void }) => <label><textarea aria-label={ariaLabel} aria-invalid={Boolean(error)} disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} />{error ? <span>{error}</span> : null}</label>,
-}));
+vi.mock("@/components/editor/TiptapEditor", async () => {
+  const { useEffect } = await import("react");
+  return {
+    TiptapEditor: ({ ariaLabel, disabled, error, value, onChange }: { ariaLabel: string; disabled?: boolean; error?: string; value: string; onChange: (value: string) => void }) => {
+      useEffect(() => {
+        if (editorMock.updateOnLoad) onChange(value);
+        // Reproduce the editor's initial update only when the value mounts.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [value]);
+      return <label><textarea aria-label={ariaLabel} aria-invalid={Boolean(error)} disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} />{error ? <span>{error}</span> : null}</label>;
+    },
+  };
+});
 vi.mock("@/components/admin/questions/QuestionImageField", () => ({
   QuestionImageField: ({ disabled }: { disabled?: boolean }) => <button type="button" disabled={disabled}>Mock image field</button>,
 }));
@@ -31,7 +42,7 @@ function initial(status: "draft" | "live" = "draft", items: unknown[] = [questio
 }
 
 beforeEach(() => {
-  fetchMock.mockReset(); navigation.push.mockReset(); vi.stubGlobal("fetch", fetchMock);
+  fetchMock.mockReset(); navigation.push.mockReset(); editorMock.updateOnLoad = false; vi.stubGlobal("fetch", fetchMock);
   HTMLDialogElement.prototype.showModal = function showModal() { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function close() { this.removeAttribute("open"); };
 });
@@ -71,6 +82,65 @@ describe("QuestionBuilder", () => {
     expect(screen.getByText("You have unsaved changes.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Stay" }));
     expect(navigation.push).not.toHaveBeenCalled();
+  });
+
+  it("switches questions without prompting when the editor reports the loaded value", async () => {
+    const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
+    editorMock.updateOnLoad = true;
+    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    await screen.findByText("Second");
+
+    fireEvent.click(screen.getByText("Second"));
+
+    expect((screen.getByLabelText("Question text") as HTMLTextAreaElement).value).toBe("<p>Second</p>");
+    expect(screen.getByText("You have unsaved changes.").closest("dialog")?.hasAttribute("open")).toBe(false);
+  });
+
+  it("prompts when switching after a real text edit", async () => {
+    const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
+    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    fireEvent.change(await screen.findByLabelText("Question text"), { target: { value: "<p>Changed</p>" } });
+
+    fireEvent.click(screen.getByText("Second"));
+
+    expect(screen.getByText("You have unsaved changes.").closest("dialog")?.hasAttribute("open")).toBe(true);
+  });
+
+  it("does not prompt after a text edit is undone to the saved value", async () => {
+    const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
+    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    const questionText = await screen.findByLabelText("Question text");
+    fireEvent.change(questionText, { target: { value: "<p>Changed</p>" } });
+    fireEvent.change(questionText, { target: { value: question.body_html } });
+
+    fireEvent.click(screen.getByText("Second"));
+
+    expect((screen.getByLabelText("Question text") as HTMLTextAreaElement).value).toBe("<p>Second</p>");
+    expect(screen.getByText("You have unsaved changes.").closest("dialog")?.hasAttribute("open")).toBe(false);
+  });
+
+  it("prompts when switching after a marks edit", async () => {
+    const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
+    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    fireEvent.change(await screen.findByLabelText("Marks"), { target: { value: "2" } });
+
+    fireEvent.click(screen.getByText("Second"));
+
+    expect(screen.getByText("You have unsaved changes.").closest("dialog")?.hasAttribute("open")).toBe(true);
+  });
+
+  it("switches without prompting after a successful save", async () => {
+    const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
+    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    fireEvent.change(await screen.findByLabelText("Question text"), { target: { value: "<p>Saved edit</p>" } });
+    fetchMock.mockResolvedValueOnce(response({ question: { ...question, body_html: "<p>Saved edit</p>" } }));
+    fireEvent.click(screen.getByRole("button", { name: "Save question" }));
+    await screen.findByText("Question saved.");
+
+    fireEvent.click(screen.getByText("Second"));
+
+    expect((screen.getByLabelText("Question text") as HTMLTextAreaElement).value).toBe("<p>Second</p>");
+    expect(screen.getByText("You have unsaved changes.").closest("dialog")?.hasAttribute("open")).toBe(false);
   });
 
   it("restores the latest server-saved snapshot when leaving without saving", async () => {
