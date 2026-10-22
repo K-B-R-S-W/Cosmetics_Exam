@@ -33,6 +33,15 @@
   overflow-y: auto;
 }
 
+.candidate-question-sidebar {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.candidate-question-drawer {
+  overflow-y: auto;
+}
+
 .candidate-question-drawer-trigger {
   display: none;
 }
