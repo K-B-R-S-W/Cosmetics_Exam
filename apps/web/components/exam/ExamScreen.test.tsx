@@ -132,10 +132,17 @@ describe("ExamScreen", () => {
 
   it("caps and scrolls the notice row while keeping attention text and Dismiss usable", () => {
     const css = readFileSync(resolve(process.cwd(), "styles/tablet.css"), "utf8");
+<<<<<<< HEAD
     expect(css).toMatch(/\.exam-notices\s*\{[^}]*max-height:\s*40dvh;[^}]*overflow-y:\s*auto;/);
     expect(css).toMatch(/\.exam-attention-warning p\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;/);
     expect(css).toMatch(/\.exam-attention-warning button\s*\{[^}]*flex-shrink:\s*0;/);
     expect(css).not.toMatch(/\.exam-notices\s*\{[^}]*(?:padding|min-height)\s*:/);
+=======
+    expect(css).toMatch(/\.exam-notices\s*\{[^}]*max-height:\s*40dvh;[^}]*overflow-y:\s*auto;/s);
+    expect(css).toMatch(/\.exam-attention-warning p\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;/s);
+    expect(css).toMatch(/\.exam-attention-warning button\s*\{[^}]*flex-shrink:\s*0;/s);
+    expect(css).not.toMatch(/\.exam-notices\s*\{[^}]*(?:padding|min-height)\s*:/s);
+>>>>>>> 68a93f389a855dad4cac0203e8cc583ad54ea9f8
   });
 
   it("marks a fresh in-progress page load as resumed", () => {
