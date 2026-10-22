@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ExamCandidates } from "./ExamCandidates";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const fetchMock = vi.fn();
 const assignedBody = { exam: { id: "exam-1", title: "Synthetic Exam", status: "draft" }, items: [{ candidate_id: "cand-1", mer_code: "TEST-001", full_name: "Synthetic Candidate", outlet: "Training", attempt_id: "attempt-1", attempt_status: "not_started" }] };
@@ -13,9 +14,13 @@ beforeEach(() => { fetchMock.mockReset(); vi.stubGlobal("fetch", fetchMock); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("ExamCandidates", () => {
+  function renderCandidates() {
+    return render(<ToastProvider><ExamCandidates examId="exam-1" /></ToastProvider>);
+  }
+
   it("shows the already-joined blocked message after an unassign response", async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(assignedBody), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify(availableBody), { status: 200 }));
-    render(<ExamCandidates examId="exam-1" />);
+    renderCandidates();
     const checkbox = await screen.findByLabelText("Select assigned TEST-001");
     fireEvent.click(checkbox);
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ removed: [], blocked: [{ candidate_id: "cand-1", reason: "attempt_started" }] }), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify(assignedBody), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify(availableBody), { status: 200 }));
@@ -34,7 +39,7 @@ describe("ExamCandidates", () => {
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...assignedBody, items: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ items: candidates, total: 230, scan_limit: 1000, scanned_count: 230 }), { status: 200 }));
-    render(<ExamCandidates examId="exam-1" />);
+    renderCandidates();
     await screen.findByLabelText("Select available TEST-000");
     const selectAll = await screen.findByLabelText("Select all shown");
     fireEvent.click(selectAll);
@@ -50,7 +55,7 @@ describe("ExamCandidates", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...assignedBody, items: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...availableBody, items: [], total: 0, scanned_count: 0 }), { status: 200 }));
     fireEvent.click(addButton);
-    expect(await screen.findByText("228 added. 2 were already assigned.")).toBeTruthy();
+    expect(await within(screen.getByTestId("toast-container")).findByText("228 added. 2 were already assigned.")).toBeTruthy();
     const postCalls = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
     expect(postCalls.map(([, init]) => JSON.parse(String(init?.body)).candidate_ids.length)).toEqual([100, 100, 30]);
   });
@@ -65,7 +70,7 @@ describe("ExamCandidates", () => {
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...assignedBody, items: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ items: candidates, total: 230, scan_limit: 1000, scanned_count: 230 }), { status: 200 }));
-    render(<ExamCandidates examId="exam-1" />);
+    renderCandidates();
     await screen.findByLabelText("Select available TEST-000");
     fireEvent.click(await screen.findByLabelText("Select all shown"));
     const addButton = await screen.findByRole(
@@ -79,7 +84,7 @@ describe("ExamCandidates", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...assignedBody, items: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...availableBody, items: [], total: 0, scanned_count: 0 }), { status: 200 }));
     fireEvent.click(addButton);
-    expect(await screen.findByText("100 added before the error.")).toBeTruthy();
+    expect(await within(screen.getByTestId("toast-container")).findByText("100 added before the error.")).toBeTruthy();
     expect((await screen.findByRole("alert")).textContent).toContain("Second batch failed.");
     const postCalls = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
     expect(postCalls.map(([, init]) => JSON.parse(String(init?.body)).candidate_ids.length)).toEqual([100, 100]);
@@ -90,7 +95,7 @@ describe("ExamCandidates", () => {
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify(assignedBody), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...availableBody, scan_limit: 1000, scanned_count: 1000 }), { status: 200 }));
-    render(<ExamCandidates examId="exam-1" />);
+    renderCandidates();
     expect(await screen.findByText("Search to narrow the list.")).toBeTruthy();
   });
 });
