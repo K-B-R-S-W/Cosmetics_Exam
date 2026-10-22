@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider } from "@/components/ui/Toast";
 import { HealthDashboard } from "./HealthDashboard";
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("HealthDashboard", () => {
@@ -12,12 +13,12 @@ describe("HealthDashboard", () => {
       if (url.includes("/resolve")) return new Response(JSON.stringify({ resolved: true }), { status: 200 });
       return new Response(JSON.stringify({ checked_at: new Date().toISOString(), components: { supabase: { ok: true, latency_ms: 5 }, livekit: { ok: false, latency_ms: 9, room_count: null }, worker: { ok: false, status: "down", last_heartbeat_at: null, age_ms: null } }, keys: [], alerts: [alert] }), { status: 503 });
     }));
-    render(<HealthDashboard />);
+    render(<ToastProvider><HealthDashboard /></ToastProvider>);
     expect(await screen.findByText("Worker down")).toBeTruthy();
     expect(screen.getAllByText("Not responding")).toHaveLength(2);
     expect(screen.getByRole("heading", { name: "Snapshot cleanup" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
     await waitFor(() => expect(screen.getByText("No active alerts.")).toBeTruthy());
-    expect(screen.getByRole("status").textContent).toBe("Alert resolved.");
+    expect(screen.getByText("Alert resolved.")).toBeTruthy();
   });
 });

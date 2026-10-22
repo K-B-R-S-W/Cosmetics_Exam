@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { SnapshotCleanup } from "@/components/admin/SnapshotCleanup";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import type { AdminHealthBody, HealthAlert, KeyHealth } from "@/lib/admin-health";
 
 function ageText(milliseconds: number | null): string {
@@ -19,10 +20,10 @@ function keyStatus(key: KeyHealth): string {
 }
 
 export function HealthDashboard() {
+  const toast = useToast();
   const [health, setHealth] = useState<AdminHealthBody>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
-  const [toast, setToast] = useState<string>();
   const [now, setNow] = useState(() => Date.now());
   const load = useCallback(async () => {
     setLoading(true); setError(undefined);
@@ -44,11 +45,11 @@ export function HealthDashboard() {
     const response = await fetch(`/api/admin/alerts/${alert.id}/resolve`, { method: "POST", headers: { "Sec-Fetch-Site": "same-origin" } });
     if (!response.ok) { setError("The alert could not be resolved."); return; }
     setHealth((current) => current ? { ...current, alerts: current.alerts.filter(({ id }) => id !== alert.id) } : current);
-    setToast("Alert resolved.");
+    toast.success("Alert resolved.");
   }
   const checkedAge = health ? Math.max(0, now - Date.parse(health.checked_at)) : null;
   return <section className="border-t border-hairline pt-6"><div className="flex items-start justify-between gap-4"><div><p className="mb-2 text-sm text-muted">Administration</p><h2 className="text-title font-bold">Health</h2>{health ? <p className="mt-2 text-sm text-muted">Last checked {ageText(checkedAge)}</p> : null}</div><Button variant="secondary" loading={loading} onClick={() => void load()}>Check now</Button></div>
-    {error ? <p role="alert" className="mt-5 border-l-4 border-alert bg-alert-tint p-4">{error}</p> : null}{toast ? <p role="status" className="mt-5 border-l-4 border-ok bg-ok-tint p-4">{toast}</p> : null}
+    {error ? <p role="alert" className="mt-5 border-l-4 border-alert bg-alert-tint p-4">{error}</p> : null}
     {health ? <><table className="mt-6 w-full border-collapse bg-surface"><caption className="sr-only">Service health</caption><thead><tr className="border-b border-hairline text-left"><th className="p-3">Service</th><th className="p-3">Status</th><th className="p-3">Details</th></tr></thead><tbody>
       <tr className="border-b border-hairline"><th className="p-3 text-left">Supabase</th><td className="p-3 font-bold">{health.components.supabase.ok ? "OK" : "Not responding"}</td><td className="p-3">{health.components.supabase.latency_ms} ms</td></tr>
       <tr className="border-b border-hairline"><th className="p-3 text-left">LiveKit</th><td className="p-3 font-bold">{health.components.livekit.ok ? "OK" : "Not responding"}</td><td className="p-3">{health.components.livekit.latency_ms} ms{health.components.livekit.room_count === null ? "" : ` · ${health.components.livekit.room_count} rooms`}</td></tr>
