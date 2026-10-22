@@ -89,10 +89,13 @@ export function ExamForm({ examId }: { examId: string | null }) {
       const payload = { ...editablePayload(), ...(status ? { status } : {}) };
       const response = await fetch(editing ? `/api/admin/exams/${examId}` : "/api/admin/exams", { method: editing ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const body = await response.json() as { exam?: ExamItem } & ErrorBody;
-      if (!response.ok || !body.exam) { setError(body.error?.message ?? "Exam could not be saved."); return; }
+      if (!response.ok || !body.exam) { toast.error(body.error?.message ?? "Exam could not be saved."); return; }
       setDirty(false); setExam(body.exam); toast.success(status === "scheduled" ? "Exam scheduled." : status === "draft" ? "Exam moved back to draft." : "Saved.");
       if (!editing) { router.push(`/admin/exams/${body.exam.id}`); router.refresh(); }
-    } catch (saveError) { setError((saveError as Error).message === "invalid_colombo_datetime" ? "Enter a valid Colombo date and time." : "Can't reach the server. Check the connection and try again."); }
+    } catch (saveError) {
+      if ((saveError as Error).message === "invalid_colombo_datetime") setError("Enter a valid Colombo date and time.");
+      else toast.error("Can't reach the server. Check the connection and try again.");
+    }
     finally { setSaving(false); }
   }
 
@@ -101,9 +104,9 @@ export function ExamForm({ examId }: { examId: string | null }) {
     try {
       const response = await fetch(`/api/admin/exams/${examId}`, { method: "DELETE" });
       const body = await response.json() as ErrorBody;
-      if (!response.ok) { deleteDialog.current?.close(); setError(body.error?.message ?? "Exam could not be deleted."); return; }
+      if (!response.ok) { deleteDialog.current?.close(); toast.error(body.error?.message ?? "Exam could not be deleted."); return; }
       router.push("/admin/exams"); router.refresh();
-    } catch { setError("Can't reach the server. Check the connection and try again."); deleteDialog.current?.close(); }
+    } catch { toast.error("Can't reach the server. Check the connection and try again."); deleteDialog.current?.close(); }
     finally { setDeleting(false); }
   }
 
