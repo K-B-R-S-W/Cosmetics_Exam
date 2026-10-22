@@ -11,6 +11,7 @@ import { questionFieldErrors, type ApiErrorBody, type EditorQuestion, type Quest
 import { ExamTabs } from "@/components/admin/exams/ExamTabs";
 import { TiptapEditor } from "@/components/editor/TiptapEditor";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import type { ExamStatus } from "@/lib/exams";
 import { QUESTION_BODY_MAX } from "@/lib/questions";
 
@@ -56,6 +57,7 @@ function payload(question: EditorQuestion, marksInput: string) {
 
 export function QuestionBuilder({ examId }: { examId: string }) {
   const router = useRouter();
+  const toast = useToast();
   const leaveDialog = useRef<HTMLDialogElement>(null);
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const pendingAction = useRef<(() => void) | null>(null);
@@ -71,7 +73,6 @@ export function QuestionBuilder({ examId }: { examId: string }) {
   const [imageBusy, setImageBusy] = useState(false);
   const [keyLockedByGrading, setKeyLockedByGrading] = useState(false);
   const [dragId, setDragId] = useState<string>();
-  const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
   const [fieldErrors, setFieldErrors] = useState<QuestionFieldErrors>({});
 
@@ -117,16 +118,16 @@ export function QuestionBuilder({ examId }: { examId: string }) {
     pendingAction.current = action; leaveDialog.current?.showModal();
   }
   function selectQuestion(id: string) {
-    guard(() => { const next = questions.find((question) => question.id === id); setSelectedId(id); setMarksInput(next ? String(next.marks) : "1"); setKeyLockedByGrading(false); setFieldErrors({}); setMessage(undefined); setError(undefined); });
+    guard(() => { const next = questions.find((question) => question.id === id); setSelectedId(id); setMarksInput(next ? String(next.marks) : "1"); setKeyLockedByGrading(false); setFieldErrors({}); setError(undefined); });
   }
   function addQuestion(type: "mcq" | "written") {
-    guard(() => { const draft = createQuestionDraft(examId, type); setQuestions((items) => [...items, draft]); setSelectedId(draft.id); setMarksInput(""); setKeyLockedByGrading(false); setFieldErrors({}); setMessage(undefined); setError(undefined); });
+    guard(() => { const draft = createQuestionDraft(examId, type); setQuestions((items) => [...items, draft]); setSelectedId(draft.id); setMarksInput(""); setKeyLockedByGrading(false); setFieldErrors({}); setError(undefined); });
   }
   function updateSelected(change: (question: EditorQuestion) => EditorQuestion) {
     if (!selected) return;
     const updated = change(selected);
     if (questionsEqual(selected, updated)) return;
-    setQuestions((items) => items.map((question) => question.id === selectedId ? updated : question)); setFieldErrors({}); setMessage(undefined);
+    setQuestions((items) => items.map((question) => question.id === selectedId ? updated : question)); setFieldErrors({});
   }
   function discardSelectedChanges() {
     if (!selectedId) return;
@@ -137,7 +138,7 @@ export function QuestionBuilder({ examId }: { examId: string }) {
     } else {
       setQuestions((items) => items.filter((question) => question.id !== selectedId));
     }
-    setFieldErrors({}); setMessage(undefined); setError(undefined);
+    setFieldErrors({}); setError(undefined);
   }
   async function reloadExamStatus() {
     const response = await fetch(`/api/admin/exams/${examId}`, { cache: "no-store" });
@@ -147,7 +148,7 @@ export function QuestionBuilder({ examId }: { examId: string }) {
 
   async function save() {
     if (!selected) return;
-    setSaving(true); setError(undefined); setFieldErrors({}); setMessage(undefined);
+    setSaving(true); setError(undefined); setFieldErrors({});
     try {
       if (imageBusy) throw new Error("Wait for the image upload to finish.");
       const body = locked ? { question_id: selected.id, ...selected.answer_key } : payload(selected, marksInput);
@@ -182,7 +183,7 @@ export function QuestionBuilder({ examId }: { examId: string }) {
       setSavedQuestions((snapshots) => ({ ...snapshots, [saved.id]: cloneQuestion(saved) }));
       setPersistedImagePaths((paths) => ({ ...paths, [saved.id]: saved.image?.path ?? null }));
       setMarksInput(String(saved.marks));
-      setMessage(result.regrade_needed ? "Scores already exist for this question. Regrade it so the new key is used." : locked ? "Answer key saved." : "Question saved.");
+      toast.success(result.regrade_needed ? "Scores already exist for this question. Regrade it so the new key is used." : locked ? "Answer key saved." : "Question saved.");
     } catch (saveError) { setError((saveError as Error).message); }
     finally { setSaving(false); }
   }
@@ -197,7 +198,7 @@ export function QuestionBuilder({ examId }: { examId: string }) {
       if (!response.ok) throw new Error(body.error?.message ?? "The question could not be deleted.");
       const remaining = questions.filter((question) => question.id !== selected.id);
       setSavedQuestions((snapshots) => { const next = { ...snapshots }; delete next[selected.id]; return next; });
-      setQuestions(remaining); setSelectedId(remaining[0]?.id); setMarksInput(remaining[0] ? String(remaining[0].marks) : "1"); setMessage("Question deleted."); deleteDialog.current?.close();
+      setQuestions(remaining); setSelectedId(remaining[0]?.id); setMarksInput(remaining[0] ? String(remaining[0].marks) : "1"); toast.success("Question deleted."); deleteDialog.current?.close();
     } catch (deleteError) { setError((deleteError as Error).message); deleteDialog.current?.close(); }
     finally { setSaving(false); }
   }
@@ -207,7 +208,7 @@ export function QuestionBuilder({ examId }: { examId: string }) {
     try {
       const response = await fetch("/api/admin/questions/reorder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exam_id: examId, ordered_ids: next.map((question) => question.id) }) });
       const body = await response.json() as ApiErrorBody; if (!response.ok) throw new Error(body.error?.message ?? "Questions could not be reordered.");
-      setQuestions((items) => items.map((question, position) => ({ ...question, position }))); setMessage("Question order saved.");
+      setQuestions((items) => items.map((question, position) => ({ ...question, position }))); toast.success("Question order saved.");
       setSavedQuestions((snapshots) => Object.fromEntries(Object.entries(snapshots).map(([id, question]) => [id, { ...question, position: next.findIndex((item) => item.id === id) }])));
     } catch (reorderError) { setQuestions(before); setError((reorderError as Error).message); }
   }
@@ -232,7 +233,6 @@ export function QuestionBuilder({ examId }: { examId: string }) {
     <p className="mb-2 text-sm text-muted">Exams</p><h1 id="question-builder-title" className="text-title font-bold">{exam?.title ?? "Question builder"}</h1>
     <ExamTabs examId={examId} current="questions" onNavigate={(href) => guard(() => router.push(href))} />
     {locked ? <div className="mt-5 border-l-4 border-warn bg-warn-tint px-4 py-3"><p className="font-bold">Questions are locked while the exam is live. You can still edit answer keys.</p><p className="mt-1">Deleting or changing a question now would change the papers candidates already have.</p></div> : null}
-    {message ? <p role="status" className="mt-4 border-l-4 border-ok bg-ok-tint px-4 py-3">{message}</p> : null}
     {error ? <p role="alert" className="mt-4 border-l-4 border-alert bg-alert-tint px-4 py-3">{error}</p> : null}
     <div className="mt-6 grid min-w-[960px] grid-cols-[320px_minmax(0,1fr)] gap-8">
       <nav aria-label="Questions" className="border-r border-hairline pr-5">
@@ -254,7 +254,7 @@ export function QuestionBuilder({ examId }: { examId: string }) {
           <div><p className="font-bold">{selected.type === "mcq" ? "Multiple-choice question" : "Written question"}</p><p className="text-sm text-muted">The type can&apos;t be changed. To switch, delete the question and add a new one.</p></div>
           <label className="block font-bold">Question text</label><TiptapEditor ariaLabel="Question text" disabled={locked} error={fieldErrors.body_html} maxLength={QUESTION_BODY_MAX} value={selected.body_html} onChange={(body_html) => updateSelected((question) => ({ ...question, body_html }))} />
           <QuestionImageField key={selected.id} disabled={locked} image={selected.image} questionId={selected.id} persistedPath={persistedImagePaths[selected.id] ?? null} onBusyChange={setImageBusy} onChange={(image) => updateSelected((question) => ({ ...question, image }))} />
-          <div className="max-w-xs"><label className="block font-bold">Marks<input aria-invalid={Boolean(fieldErrors.marks)} aria-describedby={fieldErrors.marks ? "question-marks-error" : undefined} className="mt-2 min-h-11 w-full border border-line px-3 font-normal" type="number" min="0.01" max="999.99" step="0.25" placeholder="1" disabled={locked} value={marksInput} onChange={(event) => { setMarksInput(event.target.value); setFieldErrors({}); setMessage(undefined); }} />{fieldErrors.marks ? <span id="question-marks-error" className="mt-1 block text-sm text-alert" role="alert">{fieldErrors.marks}</span> : null}</label><p className="mt-2 text-sm text-muted">Leave empty for 1 mark. Candidates see this next to the question.</p></div>
+          <div className="max-w-xs"><label className="block font-bold">Marks<input aria-invalid={Boolean(fieldErrors.marks)} aria-describedby={fieldErrors.marks ? "question-marks-error" : undefined} className="mt-2 min-h-11 w-full border border-line px-3 font-normal" type="number" min="0.01" max="999.99" step="0.25" placeholder="1" disabled={locked} value={marksInput} onChange={(event) => { setMarksInput(event.target.value); setFieldErrors({}); }} />{fieldErrors.marks ? <span id="question-marks-error" className="mt-1 block text-sm text-alert" role="alert">{fieldErrors.marks}</span> : null}</label><p className="mt-2 text-sm text-muted">Leave empty for 1 mark. Candidates see this next to the question.</p></div>
           {selected.type === "mcq" ? <><div><h2 className="text-question font-bold">Answer key</h2><p className="text-sm text-muted">{questionKeyComplete(selected) ? "Complete" : "Missing"}</p></div><McqOptions disabled={locked} errors={fieldErrors} keyDisabled={keyLockedByGrading} options={selected.options} correctOptionId={selected.answer_key.correct_option_id} onChange={(options) => updateSelected((question) => ({ ...question, options }))} onCorrectChange={(correct_option_id) => updateSelected((question) => ({ ...question, answer_key: { ...question.answer_key, correct_option_id } }))} /></> : <AnswerKeyEditor disabled={keyLockedByGrading} errors={fieldErrors} marks={marksInput.trim() ? Number(marksInput) : 1} value={selected.answer_key} examId={selected.position === null || dirty ? undefined : examId} questionId={selected.position === null || dirty ? undefined : selected.id} onChange={(answer_key) => updateSelected((question) => ({ ...question, answer_key }))} />}
           <div className="flex gap-3 border-t border-hairline pt-5"><Button loading={saving} disabled={imageBusy || keyLockedByGrading || (!locked && Boolean(selected.image?.image_missing)) || (!dirty && selected.persisted)} onClick={() => void save()}>{locked ? "Save answer key" : "Save question"}</Button>{!locked ? <Button variant="destructive" disabled={saving} onClick={() => deleteDialog.current?.showModal()}>Delete question</Button> : null}</div>
         </div>}

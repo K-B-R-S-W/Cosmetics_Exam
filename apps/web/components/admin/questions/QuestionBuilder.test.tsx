@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
@@ -24,6 +24,7 @@ vi.mock("@/components/admin/questions/QuestionImageField", () => ({
 }));
 
 import { questionKeyComplete, QuestionBuilder } from "./QuestionBuilder";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const fetchMock = vi.fn();
 const examId = "00000000-0000-4000-8000-000000000102";
@@ -39,6 +40,9 @@ const question = {
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status }); }
 function initial(status: "draft" | "live" = "draft", items: unknown[] = [question]) {
   fetchMock.mockResolvedValueOnce(response({ exam: { id: examId, title: "Synthetic Exam", status } })).mockResolvedValueOnce(response({ items }));
+}
+function renderBuilder() {
+  return render(<ToastProvider><QuestionBuilder examId={examId} /></ToastProvider>);
 }
 
 beforeEach(() => {
@@ -56,7 +60,7 @@ describe("QuestionBuilder", () => {
 
   it("keeps client-generated question and option UUIDs when a lost save is retried", async () => {
     initial("draft", []);
-    render(<QuestionBuilder examId={examId} />);
+    renderBuilder();
     await screen.findByText("No questions yet. Add a multiple-choice or written question to start.");
     fireEvent.click(screen.getByRole("button", { name: "Add MCQ" }));
     fetchMock.mockResolvedValueOnce(response({ error: { message: "Connection lost." } }, 500));
@@ -67,7 +71,7 @@ describe("QuestionBuilder", () => {
       return response({ question: { ...submitted, position: 0, options: submitted.options.map((item: object, index: number) => ({ ...item, position: index, label: String.fromCharCode(65 + index) })) } }, 201);
     });
     fireEvent.click(screen.getByRole("button", { name: "Save question" }));
-    await screen.findByText("Question saved.");
+    await within(screen.getByTestId("toast-container")).findByText("Question saved.");
     const posts = fetchMock.mock.calls.filter(([url, init]) => init?.method === "POST" && url === "/api/admin/questions");
     const bodies = posts.map(([, init]) => JSON.parse(String(init?.body)));
     expect(bodies).toHaveLength(2);
@@ -76,7 +80,7 @@ describe("QuestionBuilder", () => {
   });
 
   it("warns before leaving a dirty draft", async () => {
-    initial("draft", []); render(<QuestionBuilder examId={examId} />);
+    initial("draft", []); renderBuilder();
     await screen.findByText(/No questions yet/); fireEvent.click(screen.getByRole("button", { name: "Add written question" }));
     fireEvent.click(screen.getByRole("link", { name: "Settings" }));
     expect(screen.getByText("You have unsaved changes.")).toBeTruthy();
@@ -87,7 +91,7 @@ describe("QuestionBuilder", () => {
   it("switches questions without prompting when the editor reports the loaded value", async () => {
     const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
     editorMock.updateOnLoad = true;
-    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    initial("draft", [question, second]); renderBuilder();
     await screen.findByText("Second");
 
     fireEvent.click(screen.getByText("Second"));
@@ -98,7 +102,7 @@ describe("QuestionBuilder", () => {
 
   it("prompts when switching after a real text edit", async () => {
     const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
-    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    initial("draft", [question, second]); renderBuilder();
     fireEvent.change(await screen.findByLabelText("Question text"), { target: { value: "<p>Changed</p>" } });
 
     fireEvent.click(screen.getByText("Second"));
@@ -108,7 +112,7 @@ describe("QuestionBuilder", () => {
 
   it("does not prompt after a text edit is undone to the saved value", async () => {
     const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
-    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    initial("draft", [question, second]); renderBuilder();
     const questionText = await screen.findByLabelText("Question text");
     fireEvent.change(questionText, { target: { value: "<p>Changed</p>" } });
     fireEvent.change(questionText, { target: { value: question.body_html } });
@@ -121,7 +125,7 @@ describe("QuestionBuilder", () => {
 
   it("prompts when switching after a marks edit", async () => {
     const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
-    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    initial("draft", [question, second]); renderBuilder();
     fireEvent.change(await screen.findByLabelText("Marks"), { target: { value: "2" } });
 
     fireEvent.click(screen.getByText("Second"));
@@ -131,11 +135,11 @@ describe("QuestionBuilder", () => {
 
   it("switches without prompting after a successful save", async () => {
     const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
-    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    initial("draft", [question, second]); renderBuilder();
     fireEvent.change(await screen.findByLabelText("Question text"), { target: { value: "<p>Saved edit</p>" } });
     fetchMock.mockResolvedValueOnce(response({ question: { ...question, body_html: "<p>Saved edit</p>" } }));
     fireEvent.click(screen.getByRole("button", { name: "Save question" }));
-    await screen.findByText("Question saved.");
+    await within(screen.getByTestId("toast-container")).findByText("Question saved.");
 
     fireEvent.click(screen.getByText("Second"));
 
@@ -145,7 +149,7 @@ describe("QuestionBuilder", () => {
 
   it("restores the latest server-saved snapshot when leaving without saving", async () => {
     const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
-    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    initial("draft", [question, second]); renderBuilder();
     const questionText = await screen.findByLabelText("Question text");
     fireEvent.change(questionText, { target: { value: "<p>Saved edit</p>" } });
     fetchMock.mockResolvedValueOnce(response({ question: { ...question, body_html: "<p>Saved edit</p>" } }));
@@ -160,7 +164,7 @@ describe("QuestionBuilder", () => {
 
   it("removes an unsaved draft on discard so it cannot block reordering", async () => {
     const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
-    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    initial("draft", [question, second]); renderBuilder();
     await screen.findByText("Synthetic question");
     fireEvent.click(screen.getByRole("button", { name: "Add written question" }));
     fireEvent.click(screen.getByText("Synthetic question"));
@@ -170,20 +174,20 @@ describe("QuestionBuilder", () => {
   });
 
   it("locks structural controls while live but saves a changed answer key", async () => {
-    initial("live"); render(<QuestionBuilder examId={examId} />);
+    initial("live"); renderBuilder();
     expect(await screen.findByText("Questions are locked while the exam is live. You can still edit answer keys.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Add MCQ" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByLabelText("Question text") as HTMLTextAreaElement).disabled).toBe(true);
     fireEvent.click(screen.getAllByRole("radio", { name: "Correct answer" })[1]!);
     fetchMock.mockResolvedValueOnce(response({ answer_key: { ...question.answer_key, correct_option_id: optionB }, regrade_needed: true }));
     fireEvent.click(screen.getByRole("button", { name: "Save answer key" }));
-    expect(await screen.findByText(/Scores already exist/)).toBeTruthy();
+    expect(await within(screen.getByTestId("toast-container")).findByText(/Scores already exist/)).toBeTruthy();
     const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
     expect(put?.[0]).toBe("/api/admin/answer-keys");
   });
 
   it("disables answer-key editing after grading_in_progress", async () => {
-    initial("live"); render(<QuestionBuilder examId={examId} />);
+    initial("live"); renderBuilder();
     await screen.findByText("Synthetic question");
     fireEvent.click(screen.getAllByRole("radio", { name: "Correct answer" })[1]!);
     fetchMock.mockResolvedValueOnce(response({ error: { code: "grading_in_progress", message: "Database detail" } }, 409));
@@ -193,7 +197,7 @@ describe("QuestionBuilder", () => {
   });
 
   it("maps API validation details to an invalid option field", async () => {
-    initial("draft"); render(<QuestionBuilder examId={examId} />);
+    initial("draft"); renderBuilder();
     await screen.findByText("Synthetic question");
     fireEvent.change(screen.getByLabelText("Option B text"), { target: { value: "<p></p>" } });
     fetchMock.mockResolvedValueOnce(response({ error: { code: "validation_failed", message: "Check the highlighted fields and try again.", details: [{ path: "options.1.text_html", message: "Enter option text." }] } }, 400));
@@ -203,7 +207,7 @@ describe("QuestionBuilder", () => {
   });
 
   it("reloads the exam and switches to locked mode after exam_locked", async () => {
-    initial("draft"); render(<QuestionBuilder examId={examId} />);
+    initial("draft"); renderBuilder();
     fireEvent.change(await screen.findByLabelText("Question text"), { target: { value: "<p>Changed</p>" } });
     fetchMock.mockResolvedValueOnce(response({ error: { code: "exam_locked", message: "This exam has started." } }, 409));
     fetchMock.mockResolvedValueOnce(response({ exam: { id: examId, title: "Synthetic Exam", status: "live" } }));
@@ -215,7 +219,7 @@ describe("QuestionBuilder", () => {
 
   it("disables all reorder controls while the key-missing filter is active", async () => {
     const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>", answer_key: { ...question.answer_key, correct_option_id: null } };
-    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    initial("draft", [question, second]); renderBuilder();
     await screen.findByText("Second");
     fireEvent.click(screen.getByRole("button", { name: "Show only: Key missing (1)" }));
     expect((screen.getByRole("button", { name: "Drag question 2" }) as HTMLButtonElement).disabled).toBe(true);
@@ -224,7 +228,7 @@ describe("QuestionBuilder", () => {
 
   it("supports keyboard move buttons and persists the complete order", async () => {
     const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
-    initial("draft", [question, second]); render(<QuestionBuilder examId={examId} />);
+    initial("draft", [question, second]); renderBuilder();
     await screen.findByText("Synthetic question");
     fetchMock.mockResolvedValueOnce(response({ updated: 2 }));
     fireEvent.click(screen.getByRole("button", { name: "Move question 2 up" }));
