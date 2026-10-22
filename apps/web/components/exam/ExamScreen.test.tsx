@@ -1,13 +1,21 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { answerInputSchema, nextInputSchema } from "@/lib/candidate-answer-schemas";
 import type { PaperBody, StateBody } from "@/lib/candidate-types";
 import { getAnswerDraftStore } from "@/lib/indexeddb";
 
-const mocks = vi.hoisted(() => ({ push: vi.fn(), context: {} as Record<string, unknown>, proctoring: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  push: vi.fn(),
+  context: {} as Record<string, unknown>,
+  proctoring: vi.fn(),
+  proctoringState: {} as Record<string, unknown>,
+  media: {} as Record<string, unknown>,
+}));
 const CONTRACT_QUESTION_ONE = "00000000-0000-4000-8000-000000000011";
 const CONTRACT_QUESTION_TWO = "00000000-0000-4000-8000-000000000012";
 const CONTRACT_OPTION_ONE = "00000000-0000-4000-8000-000000000021";
@@ -15,8 +23,9 @@ const CONTRACT_OPTION_TWO = "00000000-0000-4000-8000-000000000022";
 vi.mock("next/navigation", () => ({ useRouter: () => mocks }));
 vi.mock("@/hooks/useProctoring", () => ({ useProctoring: (options: unknown) => {
   mocks.proctoring(options);
-  return { fullscreenLost: false, flush: vi.fn().mockResolvedValue(undefined), sendInstant: vi.fn(), pendingCount: () => 0 };
+  return mocks.proctoringState;
 } }));
+vi.mock("@/components/candidate/LiveKitContext", () => ({ useCandidateLiveKit: () => mocks.media }));
 vi.mock("@/lib/time", () => ({ refineServerClock: vi.fn(), useServerClock: () => () => Date.parse("2026-10-04T10:00:00.000Z") }));
 vi.mock("@/components/candidate/CandidateContext", () => {
   class CandidatePaperError extends Error {
@@ -52,6 +61,26 @@ function json(body: unknown, status = 200) {
 beforeEach(() => {
   mocks.push.mockReset();
   mocks.proctoring.mockReset();
+  mocks.proctoringState = {
+    attentionWarning: false,
+    pasteBlocked: false,
+    dismissAttentionWarning: vi.fn(),
+    fullscreenLost: false,
+    flush: vi.fn().mockResolvedValue(undefined),
+    sendInstant: vi.fn(),
+    pendingCount: () => 0,
+  };
+  mocks.media = {
+    status: "connected",
+    stream: null,
+    mediaTracks: [],
+    previewElement: null,
+    cameraLost: false,
+    microphoneLost: false,
+    connectionLost: false,
+    acquireAndConnect: vi.fn(),
+    stop: vi.fn(),
+  };
   const value = paper();
   mocks.context = { state: state(), me: { candidate: { full_name: "Candidate", mer_code: "TEST" } }, paper: value, loadMe: vi.fn(), loadPaper: vi.fn().mockResolvedValue(value), refreshState: vi.fn().mockResolvedValue(state()), heartbeatNow: vi.fn().mockResolvedValue(state()), hasExamHandoff: vi.fn().mockReturnValue(false) };
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
@@ -65,6 +94,50 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("ExamScreen", () => {
+  it.each(["free", "sequential"] as const)("keeps %s-mode notices between the header and exam content", (mode) => {
+    const value = paper(mode);
+    mocks.context.paper = value;
+    mocks.context.loadPaper = vi.fn().mockResolvedValue(value);
+    mocks.proctoringState.attentionWarning = true;
+
+    render(<ExamScreen />);
+
+    const main = screen.getByRole("main");
+    expect(Array.from(main.children).map((element) => element.classList.contains("exam-notices")
+      ? "notices"
+      : element.tagName.toLowerCase())).toEqual(["header", "notices", "div", "footer"]);
+    expect(main.querySelector(".exam-notices")?.contains(screen.getByRole("alert"))).toBe(true);
+  });
+
+  it("keeps several simultaneous banners inside the notice container", () => {
+    mocks.proctoringState.attentionWarning = true;
+    mocks.proctoringState.pasteBlocked = true;
+    mocks.media.cameraLost = true;
+
+    render(<ExamScreen />);
+
+    const notices = screen.getByRole("main").querySelector(".exam-notices");
+    expect(notices).not.toBeNull();
+    expect(notices?.contains(screen.getByText(/Camera disconnected/))).toBe(true);
+    expect(notices?.contains(screen.getByRole("alert"))).toBe(true);
+    expect(notices?.contains(screen.getByText("Pasting is turned off during this exam."))).toBe(true);
+  });
+
+  it("leaves the notice container empty when there are no notices", () => {
+    render(<ExamScreen />);
+    const notices = screen.getByRole("main").querySelector(".exam-notices");
+    expect(notices?.childElementCount).toBe(0);
+    expect(notices?.textContent).toBe("");
+  });
+
+  it("caps and scrolls the notice row while keeping attention text and Dismiss usable", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles/tablet.css"), "utf8");
+    expect(css).toMatch(/\.exam-notices\s*\{[^}]*max-height:\s*40dvh;[^}]*overflow-y:\s*auto;/);
+    expect(css).toMatch(/\.exam-attention-warning p\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;/);
+    expect(css).toMatch(/\.exam-attention-warning button\s*\{[^}]*flex-shrink:\s*0;/);
+    expect(css).not.toMatch(/\.exam-notices\s*\{[^}]*(?:padding|min-height)\s*:/);
+  });
+
   it("marks a fresh in-progress page load as resumed", () => {
     render(<ExamScreen />);
     expect(mocks.proctoring).toHaveBeenLastCalledWith(expect.objectContaining({ resumed: true, inProgress: true }));
