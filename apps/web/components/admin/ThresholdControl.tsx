@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Field } from "@/components/ui/Field";
+import { useToast } from "@/components/ui/Toast";
 
 export function ThresholdControl({
   examId,
@@ -12,10 +13,10 @@ export function ThresholdControl({
   initialValue: number;
   disabled?: boolean;
 }) {
+  const toast = useToast();
   const [value, setValue] = useState(initialValue);
   const [saved, setSaved] = useState(initialValue);
   const [error, setError] = useState<string>();
-  const [message, setMessage] = useState<string>();
 
   async function save() {
     if (!Number.isInteger(value) || value < 1 || value > 100) {
@@ -33,7 +34,7 @@ export function ThresholdControl({
       return;
     }
     setSaved(value);
-    setMessage(`Flag threshold set to ${value}.`);
+    toast.success(`Flag threshold set to ${value}.`);
   }
 
   return (
@@ -49,7 +50,6 @@ export function ThresholdControl({
         disabled={disabled}
         onChange={(event) => {
           setValue(Number(event.target.value));
-          setMessage(undefined);
         }}
         onBlur={() => {
           if (value !== saved) void save();
@@ -61,11 +61,6 @@ export function ThresholdControl({
           }
         }}
       />
-      {message ? (
-        <p role="status" className="mt-2 text-sm text-ok">
-          {message}
-        </p>
-      ) : null}
     </div>
   );
 }
