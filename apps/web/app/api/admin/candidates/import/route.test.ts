@@ -103,6 +103,26 @@ describe("candidate import route", () => {
     );
   });
 
+  it("accepts a bare 9-digit NIC during a dry run", async () => {
+    const { POST } = await import("./route");
+
+    const response = await POST(
+      request({
+        rows: [{ ...SYNTHETIC_ROWS[0], nic: "848280356" }],
+        dry_run: true,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      dry_run: true,
+      created: 1,
+      errors: [],
+    });
+    expect(mocks.hashNic).not.toHaveBeenCalled();
+    expect(mocks.upsert).not.toHaveBeenCalled();
+  });
+
   it("rejects later normalized duplicates within a server batch", async () => {
     const { POST } = await import("./route");
     const response = await POST(

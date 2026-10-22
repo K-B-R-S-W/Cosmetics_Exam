@@ -17,13 +17,13 @@ export const NIC_HASH_POLICY = Object.freeze({
   outputLen: 32,
 });
 
-const OLD_NIC_PATTERN = /^\d{9}[VX]$/;
+const OLD_NIC_PATTERN = /^\d{9}[VX]?$/;
 const NEW_NIC_PATTERN = /^\d{12}$/;
 const INVALID_NIC_SENTINEL = "000000000000";
 
 export class InvalidNicError extends Error {
   constructor() {
-    super("NIC must be 9 digits followed by V or X, or 12 digits.");
+    super("NIC must be 9 digits, optionally followed by V or X, or 12 digits.");
     this.name = "InvalidNicError";
   }
 }

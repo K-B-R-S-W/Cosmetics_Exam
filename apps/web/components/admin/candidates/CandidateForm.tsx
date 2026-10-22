@@ -244,7 +244,7 @@ export function CandidateForm({ candidateId }: CandidateFormProps) {
           />
           <p className="mt-2 text-sm text-muted">
             {editing ? "Leave empty to keep the current ID number. " : ""}
-            Old format (9 digits then V or X) or new format (12 digits). It is stored hashed and can&apos;t be shown again.
+            Old format (9 digits; the trailing V is optional, or use X) or new format (12 digits). It is stored hashed and can&apos;t be shown again.
           </p>
         </div>
 

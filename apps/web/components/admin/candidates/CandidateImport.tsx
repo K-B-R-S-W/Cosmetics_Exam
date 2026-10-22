@@ -222,6 +222,7 @@ export function CandidateImport() {
           {fileName ? <span className="text-muted">{fileName}</span> : null}
         </div>
         <p className="mt-3 text-sm text-muted">Save from Excel as <strong>CSV UTF-8</strong> so Sinhala names stay correct.</p>
+        <p className="mt-2 text-sm text-muted">ID format: 9 digits (the trailing V is optional), 9 digits followed by X, or 12 digits.</p>
         <p className="mt-3 border-l-4 border-warn bg-warn-tint px-4 py-3">The file contains ID numbers. Delete it from your computer after importing.</p>
 
         {fileDamage.length > 0 ? (
@@ -237,7 +238,7 @@ export function CandidateImport() {
               <table className="w-full border-collapse text-left text-sm">
                 <thead><tr className="border-b border-hairline"><th className="p-2">MER code</th><th className="p-2">Full name</th><th className="p-2">Outlet</th><th className="p-2">ID number</th></tr></thead>
                 <tbody>{rows.slice(0, 10).map((row, index) => (
-                  <tr key={index} className="border-b border-hairline last:border-0"><td className="p-2">{row.mer_code}</td><td className="p-2">{row.full_name}</td><td className="p-2">{row.outlet}</td><td className="p-2">{maskNicForPreview(row.nic)}</td></tr>
+                  <tr key={index} className="border-b border-hairline last:border-0"><td className="p-2">{row.mer_code}</td><td className="p-2">{row.full_name}</td><td className="p-2">{row.outlet}</td><td className="p-2"><span>{maskNicForPreview(row.nic)}</span>{/^\d{9}$/.test(row.nic.trim()) ? <span className="mt-1 block text-muted">ID read as old format, V added</span> : null}</td></tr>
                 ))}</tbody>
               </table>
             </div>

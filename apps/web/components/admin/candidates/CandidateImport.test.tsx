@@ -78,6 +78,16 @@ afterEach(() => {
 });
 
 describe("CandidateImport", () => {
+  it("masks a bare 9-digit ID and explains that V will be added", async () => {
+    mocks.rows = [{ ...syntheticRows(1)[0], nic: "848280356" }];
+    render(<CandidateImport />);
+    chooseCsv();
+
+    expect(await screen.findByText("ID read as old format, V added")).toBeTruthy();
+    expect(screen.queryByText("848280356")).toBeNull();
+    expect(screen.getByText(/trailing V is optional/i)).toBeTruthy();
+  });
+
   it("masks preview IDs, imports 230 rows in 50-row batches, and clears raw state", async () => {
     mocks.rows = syntheticRows(230);
     fetchMock.mockImplementation(

@@ -29,11 +29,17 @@ describe("normalizeNic", () => {
     expect(normalizeNic(input)).toBe(expected);
   });
 
+  it("treats a 9-digit NIC as the equivalent old format with V", () => {
+    expect(normalizeNic("848280356")).toBe(normalizeNic("848280356V"));
+    expect(normalizeNic("848280356")).toBe("198482800356");
+  });
+
   it.each([
     "",
     "12345678V",
     "1234567890V",
-    "123456789",
+    "12345678",
+    "1234567890",
     "123456789Q",
     "12345678901",
     "1234567890123",
@@ -84,6 +90,22 @@ describe("NIC hashing", () => {
 
     await expect(verifyNic("190000000000", encodedHash)).resolves.toBe(true);
     await expect(verifyNic("999999999999", encodedHash)).resolves.toBe(false);
+  });
+
+  it("verifies hashes between the 9-digit and V-suffixed old formats", async () => {
+    const hashFromV = await hashNic("848280356V");
+    const hashFromDigits = await hashNic("848280356");
+
+    await expect(verifyNic("848280356", hashFromV)).resolves.toBe(true);
+    await expect(verifyNic("848280356V", hashFromDigits)).resolves.toBe(true);
+  });
+
+  it("verifies a pinned existing hash and locks its Argon2 policy", async () => {
+    const existingHash =
+      "$argon2id$v=19$m=19456,t=2,p=1$AAECAwQFBgcICQoLDA0ODw$ziCjNECY64KtcEHTvQ9Pu9UJlfn62b5lfUt/s7T+py0";
+
+    expect(parseOptions(existingHash)).toMatchObject(NIC_HASH_POLICY);
+    await expect(verifyNic("848280356V", existingHash)).resolves.toBe(true);
   });
 
   it("returns false for malformed input after doing a verification", async () => {
