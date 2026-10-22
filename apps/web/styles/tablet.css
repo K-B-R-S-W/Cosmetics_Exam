@@ -10,12 +10,31 @@
 
 .exam-shell {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   height: 100dvh;
   min-height: 100dvh;
   overflow: hidden;
   overscroll-behavior: none;
   width: 100%;
+}
+
+.exam-notices {
+  max-height: 40dvh;
+  overflow-y: auto;
+}
+
+.exam-attention-warning {
+  flex-wrap: wrap;
+}
+
+.exam-attention-warning p {
+  flex: 1 1 20rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.exam-attention-warning button {
+  flex-shrink: 0;
 }
 
 .exam-strip,

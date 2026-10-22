@@ -398,16 +398,18 @@ export function ExamScreen() {
         <p aria-live="off" className="shrink-0 text-sm">{loadedPaper?.navigation_mode === "sequential" && visibleQuestion ? `Question ${visibleQuestion.position + 1} of ${loadedPaper.total_questions}` : `${loadedPaper?.total_questions ?? state.exam.question_count} questions · ${answeredCount} answered`}</p>
         <div className="flex shrink-0 items-center gap-4"><SaveIndicator state={autosave.currentState} /><Timer deadline={state.attempt.deadline} onExpired={() => { setTerminalNotice(null); setExpiredDeadline(state.attempt.deadline ?? "closed"); }} /></div>
       </header>
-      {moveNotice ? <Notice>{moveNotice}</Notice> : null}
-      {actionError && !dialog ? <Notice warning>{actionError}</Notice> : null}
-      <CameraBanner cameraLost={media.cameraLost} microphoneLost={media.microphoneLost} connectionLost={media.connectionLost} />
-      {proctoring.attentionWarning ? (
-        <div className="mx-5 mt-4 flex items-center justify-between gap-4 border-l-4 border-warn bg-warn-tint p-4" role="alert">
-          <p>You left the exam page. This was recorded and the exam team can see it. Please stay on this page.</p>
-          <Button variant="quiet" onClick={proctoring.dismissAttentionWarning}>Dismiss</Button>
-        </div>
-      ) : null}
-      {proctoring.pasteBlocked ? <p className="mx-5 mt-3 text-sm text-warn" role="status">Pasting is turned off during this exam.</p> : null}
+      <div className="exam-notices">
+        {moveNotice ? <Notice>{moveNotice}</Notice> : null}
+        {actionError && !dialog ? <Notice warning>{actionError}</Notice> : null}
+        <CameraBanner cameraLost={media.cameraLost} microphoneLost={media.microphoneLost} connectionLost={media.connectionLost} />
+        {proctoring.attentionWarning ? (
+          <div className="exam-attention-warning mx-5 mt-4 flex items-center justify-between gap-4 border-l-4 border-warn bg-warn-tint p-4" role="alert">
+            <p>You left the exam page. This was recorded and the exam team can see it. Please stay on this page.</p>
+            <Button variant="quiet" onClick={proctoring.dismissAttentionWarning}>Dismiss</Button>
+          </div>
+        ) : null}
+        {proctoring.pasteBlocked ? <p className="mx-5 mt-3 text-sm text-warn" role="status">Pasting is turned off during this exam.</p> : null}
+      </div>
       {locked ? (
         <section className="m-auto max-w-md p-6 text-center"><h1 tabIndex={-1} className="text-title font-bold">{state.exam.force_ended ? "The exam has ended" : "Time is up"}</h1><p className="mt-4 text-muted">{terminalNotice ?? (actionError || "Keep this page open while your answers are submitted.")}</p></section>
       ) : loading || !loadedPaper || !visibleQuestion ? (
