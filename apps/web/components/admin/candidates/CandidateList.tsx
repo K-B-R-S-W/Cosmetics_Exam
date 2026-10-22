@@ -13,7 +13,7 @@ interface CandidateListResponse {
 }
 
 interface ErrorResponse {
-  error?: { message?: string };
+  error?: { code?: string; message?: string };
 }
 
 const PAGE_SIZE = 50;
@@ -31,6 +31,10 @@ export function CandidateList() {
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
   const [unlockingId, setUnlockingId] = useState<string>();
+  const [removingId, setRemovingId] = useState<string>();
+  const [removeCandidate, setRemoveCandidate] = useState<CandidateItem>();
+  const [removeBlockedMessage, setRemoveBlockedMessage] = useState<string>();
+  const removeDialog = useRef<HTMLDialogElement>(null);
   const examOptionsLoaded = useRef(false);
 
   const loadCandidates = useCallback(async (signal?: AbortSignal) => {
@@ -111,6 +115,81 @@ export function CandidateList() {
       setError((unlockError as Error).message);
     } finally {
       setUnlockingId(undefined);
+    }
+  }
+
+  function openRemove(candidate: CandidateItem) {
+    setRemoveCandidate(candidate);
+    setRemoveBlockedMessage(undefined);
+    removeDialog.current?.showModal();
+  }
+
+  async function remove() {
+    if (!removeCandidate) return;
+    setRemovingId(removeCandidate.id);
+    setError(undefined);
+    setMessage(undefined);
+
+    try {
+      const response = await fetch(`/api/admin/candidates/${removeCandidate.id}`, {
+        method: "DELETE",
+      });
+      const body = (await response.json()) as { deleted?: boolean } & ErrorResponse;
+      if (!response.ok) {
+        if (response.status === 409 && body.error?.code === "has_attempts") {
+          setRemoveBlockedMessage(
+            body.error.message ??
+              "This candidate has exam attempts and cannot be removed.",
+          );
+          return;
+        }
+        throw new Error(body.error?.message ?? "The candidate could not be removed.");
+      }
+
+      setItems((current) => current.filter((candidate) => candidate.id !== removeCandidate.id));
+      setTotal((current) => Math.max(0, current - 1));
+      setMessage(`${removeCandidate.mer_code} removed.`);
+      removeDialog.current?.close();
+      setRemoveCandidate(undefined);
+    } catch (removeError) {
+      setError((removeError as Error).message);
+    } finally {
+      setRemovingId(undefined);
+    }
+  }
+
+  async function markInactive() {
+    if (!removeCandidate) return;
+    setRemovingId(removeCandidate.id);
+    setError(undefined);
+    setMessage(undefined);
+
+    try {
+      const response = await fetch(`/api/admin/candidates/${removeCandidate.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: false }),
+      });
+      const body = (await response.json()) as { candidate?: CandidateItem } & ErrorResponse;
+      if (!response.ok) {
+        throw new Error(body.error?.message ?? "The candidate could not be marked inactive.");
+      }
+
+      setItems((current) =>
+        current.map((candidate) =>
+          candidate.id === removeCandidate.id
+            ? { ...candidate, active: false }
+            : candidate,
+        ),
+      );
+      setMessage(`${removeCandidate.mer_code} marked inactive.`);
+      removeDialog.current?.close();
+      setRemoveCandidate(undefined);
+      setRemoveBlockedMessage(undefined);
+    } catch (inactiveError) {
+      setError((inactiveError as Error).message);
+    } finally {
+      setRemovingId(undefined);
     }
   }
 
@@ -218,6 +297,7 @@ export function CandidateList() {
                 <td className="px-3 py-2">
                   <div className="flex justify-end gap-2">
                     <Link href={`/admin/candidates/${candidate.id}`} className="inline-flex min-h-11 items-center rounded-control border border-line px-4 font-bold text-ink hover:bg-selected">Edit</Link>
+                    <Button variant="destructive" onClick={() => openRemove(candidate)}>Remove</Button>
                     <Button
                       variant="quiet"
                       loading={unlockingId === candidate.id}
@@ -240,6 +320,23 @@ export function CandidateList() {
           <Button variant="secondary" disabled={page >= pageCount || loading} onClick={() => setPage((value) => value + 1)}>Next</Button>
         </div>
       ) : null}
+
+      <dialog ref={removeDialog} className="m-auto w-full max-w-md border border-line bg-surface p-6 shadow-dialog backdrop:bg-ink/40">
+        <h2 className="text-question font-bold">Remove {removeCandidate?.mer_code}?</h2>
+        {removeBlockedMessage ? (
+          <p className="mt-3 border-l-4 border-warn bg-warn-tint px-4 py-3">{removeBlockedMessage}</p>
+        ) : (
+          <p className="mt-3">This permanently removes the candidate if they have not taken part in an exam.</p>
+        )}
+        <div className="mt-6 flex justify-end gap-3">
+          {removeBlockedMessage ? (
+            <Button loading={removingId === removeCandidate?.id} onClick={() => void markInactive()}>Mark inactive</Button>
+          ) : (
+            <Button variant="destructive" loading={removingId === removeCandidate?.id} onClick={() => void remove()}>Remove candidate</Button>
+          )}
+          <Button variant="secondary" onClick={() => removeDialog.current?.close()}>Cancel</Button>
+        </div>
+      </dialog>
     </section>
   );
 }
