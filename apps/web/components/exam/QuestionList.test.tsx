@@ -2,6 +2,8 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { QuestionList } from "./QuestionList";
 
 afterEach(cleanup);
@@ -12,6 +14,28 @@ const questions = [
 ];
 
 describe("QuestionList", () => {
+  it("gives the desktop sidebar and mobile drawer their own vertical scrolling", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles/tablet.css"), "utf8");
+
+    expect(css).toMatch(/\.candidate-question-sidebar\s*{[\s\S]*?min-height:\s*0[\s\S]*?overflow-y:\s*auto/);
+    expect(css).toMatch(/\.candidate-question-drawer\s*{[\s\S]*?overflow-y:\s*auto/);
+  });
+
+  it("scrolls the active question into view when it changes", () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const view = render(<QuestionList questions={questions} answers={{}} activeIndex={0} onSelect={vi.fn()} drawerOpen={false} onDrawerOpen={vi.fn()} />);
+    scrollIntoView.mockClear();
+
+    view.rerender(<QuestionList questions={questions} answers={{}} activeIndex={1} onSelect={vi.fn()} drawerOpen={false} onDrawerOpen={vi.fn()} />);
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
   it("uses word statuses and marks the current question", () => {
     render(<QuestionList questions={questions} answers={{ q1: { answer_text: "Answer", selected_option_id: null, flagged: true }, q2: { answer_text: null, selected_option_id: null, flagged: false } }} activeIndex={0} onSelect={vi.fn()} drawerOpen={false} onDrawerOpen={vi.fn()} />);
     expect(screen.getByText("Answered, flagged")).toBeTruthy();

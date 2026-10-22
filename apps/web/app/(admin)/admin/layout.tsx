@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { AdminHeader } from "@/components/admin/AdminHeader";
 import { AdminNav } from "@/components/admin/AdminNav";
+import { ToastProvider } from "@/components/ui/Toast";
 import { AdminAuthError, requireAdmin } from "@/lib/auth";
 import type { HealthAlert } from "@/lib/admin-health";
 import { createServiceRoleClient } from "@/lib/supabase/server";
@@ -32,10 +33,12 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   }
 
   return (
-    <div className="admin-shell grid min-h-dvh grid-cols-[12.5rem_minmax(0,1fr)] grid-rows-[3.5rem_minmax(0,1fr)] bg-paper">
-      <AdminHeader admin={admin} initialAlerts={initialAlerts} />
-      <AdminNav role={admin.role} />
-      <main className="min-w-0 overflow-auto p-8">{children}</main>
-    </div>
+    <ToastProvider>
+      <div className="admin-shell grid min-h-dvh grid-cols-[12.5rem_minmax(0,1fr)] grid-rows-[3.5rem_minmax(0,1fr)] bg-paper">
+        <AdminHeader admin={admin} initialAlerts={initialAlerts} />
+        <AdminNav role={admin.role} />
+        <main className="min-w-0 overflow-auto p-8">{children}</main>
+      </div>
+    </ToastProvider>
   );
 }

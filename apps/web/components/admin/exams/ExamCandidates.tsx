@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import { ExamTabs } from "@/components/admin/exams/ExamTabs";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import {
   AVAILABLE_CANDIDATE_SCAN_LIMIT,
   candidateIdBatches,
@@ -42,6 +43,7 @@ function attemptLabel(status: AssignedCandidateItem["attempt_status"]): string {
 }
 
 export function ExamCandidates({ examId }: { examId: string }) {
+  const toast = useToast();
   const [exam, setExam] = useState<ExamHeader>();
   const [assigned, setAssigned] = useState<AssignedCandidateItem[]>([]);
   const [available, setAvailable] = useState<AvailableCandidateItem[]>([]);
@@ -54,7 +56,6 @@ export function ExamCandidates({ examId }: { examId: string }) {
   const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
-  const [message, setMessage] = useState<string>();
   const [blockedMessage, setBlockedMessage] = useState<string>();
   const [error, setError] = useState<string>();
 
@@ -117,7 +118,6 @@ export function ExamCandidates({ examId }: { examId: string }) {
   async function addSelected() {
     setWorking(true);
     setError(undefined);
-    setMessage(undefined);
     let added = 0;
     let alreadyAssigned = 0;
     try {
@@ -137,12 +137,12 @@ export function ExamCandidates({ examId }: { examId: string }) {
         added += body.added ?? 0;
         alreadyAssigned += body.already_assigned ?? 0;
       }
-      setMessage(`${added} added.${alreadyAssigned ? ` ${alreadyAssigned} were already assigned.` : ""}`);
+      toast.success(`${added} added.${alreadyAssigned ? ` ${alreadyAssigned} were already assigned.` : ""}`);
       await load();
     } catch (actionError) {
       if (added > 0 || alreadyAssigned > 0) {
         await load();
-        setMessage(
+        toast.success(
           `${added} added before the error.${alreadyAssigned ? ` ${alreadyAssigned} were already assigned.` : ""}`,
         );
       }
@@ -155,7 +155,6 @@ export function ExamCandidates({ examId }: { examId: string }) {
   async function removeSelected() {
     setWorking(true);
     setError(undefined);
-    setMessage(undefined);
     setBlockedMessage(undefined);
     const selected = [...selectedAssigned];
     const removed: string[] = [];
@@ -177,7 +176,7 @@ export function ExamCandidates({ examId }: { examId: string }) {
         removed.push(...(body.removed ?? []));
         blocked.push(...(body.blocked ?? []));
       }
-      setMessage(`${removed.length} removed.`);
+      toast.success(`${removed.length} removed.`);
       if (blocked.length) {
         const blockedNames = blocked
           .map(({ candidate_id }) => assigned.find((item) => item.candidate_id === candidate_id)?.full_name)
@@ -190,7 +189,7 @@ export function ExamCandidates({ examId }: { examId: string }) {
     } catch (actionError) {
       if (removed.length > 0 || blocked.length > 0) {
         await load();
-        setMessage(`${removed.length} removed before the error.`);
+        toast.success(`${removed.length} removed before the error.`);
         if (blocked.length) {
           setBlockedMessage(
             `${blocked.length} could not be removed because they have already joined the exam.`,
@@ -217,7 +216,6 @@ export function ExamCandidates({ examId }: { examId: string }) {
     <p className="mt-5 font-bold">{assigned.length} assigned</p>
     {exam?.status === "live" ? <p className="mt-4 border-l-4 border-warn bg-warn-tint px-4 py-3">This exam is live. New candidates can sign in and get the same end time as everyone else.</p> : null}
     {locked ? <p className="mt-4 border-l-4 border-warn bg-warn-tint px-4 py-3">The exam has ended, so candidates can no longer be added or removed.</p> : null}
-    {message ? <p role="status" className="mt-4 border-l-4 border-ok bg-ok-tint px-4 py-3">{message}</p> : null}
     {blockedMessage ? <p className="mt-4 border-l-4 border-warn bg-warn-tint px-4 py-3">{blockedMessage}</p> : null}
     {error ? <p role="alert" className="mt-4 border-l-4 border-alert bg-alert-tint px-4 py-3">{error}</p> : null}
 

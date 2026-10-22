@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/Button";
 import type { CandidateQuestion } from "@/lib/candidate-types";
@@ -20,7 +20,12 @@ function Items({ questions, answers, activeIndex, onSelect }: {
   activeIndex: number;
   onSelect(index: number): void;
 }) {
-  return <>{questions.map((question, index) => <button key={question.id} type="button" className={`flex min-h-11 w-full items-center justify-between border-l-2 px-3 py-2 text-left ${index === activeIndex ? "border-ink bg-selected" : "border-transparent"}`} aria-current={index === activeIndex ? "step" : undefined} onClick={() => onSelect(index)}><span>Question {index + 1}</span><span className="text-sm text-muted">{answerStatus(question, answers[question.id])}</span></button>)}</>;
+  const activeItem = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    activeItem.current?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex]);
+
+  return <>{questions.map((question, index) => <button ref={index === activeIndex ? activeItem : undefined} key={question.id} type="button" className={`flex min-h-11 w-full items-center justify-between border-l-2 px-3 py-2 text-left ${index === activeIndex ? "border-ink bg-selected" : "border-transparent"}`} aria-current={index === activeIndex ? "step" : undefined} onClick={() => onSelect(index)}><span>Question {index + 1}</span><span className="text-sm text-muted">{answerStatus(question, answers[question.id])}</span></button>)}</>;
 }
 
 export function QuestionList({ questions, answers, activeIndex, onSelect, drawerOpen, onDrawerOpen }: {
@@ -56,7 +61,7 @@ export function QuestionList({ questions, answers, activeIndex, onSelect, drawer
       <nav aria-label="Questions" className="candidate-question-sidebar w-60 shrink-0 border-r border-hairline bg-surface p-3">
         <Items questions={questions} answers={answers} activeIndex={activeIndex} onSelect={onSelect} />
       </nav>
-      {drawerOpen ? <div className="fixed inset-0 z-20 bg-paper p-5" role="dialog" aria-modal="true" aria-label="Questions"><div className="mb-4 flex items-center justify-between"><h2 className="text-title font-bold">Questions</h2><Button variant="secondary" onClick={() => { onDrawerOpen(false); requestAnimationFrame(focusTrigger); }}>Close</Button></div><Items questions={questions} answers={answers} activeIndex={activeIndex} onSelect={selectFromDrawer} /></div> : null}
+      {drawerOpen ? <div className="candidate-question-drawer fixed inset-0 z-20 bg-paper p-5" role="dialog" aria-modal="true" aria-label="Questions"><div className="mb-4 flex items-center justify-between"><h2 className="text-title font-bold">Questions</h2><Button variant="secondary" onClick={() => { onDrawerOpen(false); requestAnimationFrame(focusTrigger); }}>Close</Button></div><Items questions={questions} answers={answers} activeIndex={activeIndex} onSelect={selectFromDrawer} /></div> : null}
     </>
   );
 }

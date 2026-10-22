@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ExamForm } from "./ExamForm";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
@@ -20,9 +21,13 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("ExamForm", () => {
+  function renderForm() {
+    return render(<ToastProvider><ExamForm examId={EXAM.id} /></ToastProvider>);
+  }
+
   it("shows Section 2C readiness and converts Colombo time on save", async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ exam: EXAM, warnings: [] }), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify({ exam: { ...EXAM, title: "Updated" } }), { status: 200 }));
-    render(<ExamForm examId={EXAM.id} />);
+    renderForm();
     expect(await screen.findByText("No questions yet.")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Updated" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -30,11 +35,14 @@ describe("ExamForm", () => {
     const body = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
     expect(body.scheduled_start_at).toBe("2099-10-05T04:00:00.000Z");
     expect(body).not.toHaveProperty("questions_per_paper");
+    expect(
+      await within(screen.getByTestId("toast-container")).findByText("Saved."),
+    ).toBeTruthy();
   });
 
   it("locks the threshold on a finalized exam", async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ exam: { ...EXAM, status: "finalized" }, warnings: [] }), { status: 200 }));
-    render(<ExamForm examId={EXAM.id} />);
+    renderForm();
     expect(await screen.findByLabelText("Flag threshold")).toHaveProperty("disabled", true);
     expect(screen.getByLabelText("Title")).toHaveProperty("disabled", false);
   });
