@@ -155,7 +155,7 @@ export function CandidateImport() {
       });
       setStep("check");
     } catch (checkError) {
-      setError((checkError as Error).message);
+      toast.error((checkError as Error).message);
     } finally {
       setChecking(false);
     }
@@ -187,7 +187,7 @@ export function CandidateImport() {
       setSummary(undefined);
       setFileName("");
     } catch {
-      setError(`The import stopped after ${processed} rows. Nothing after that was saved. Fix the problem and run the file again with "Skip" selected.`);
+      toast.error(`The import stopped after ${processed} rows. Nothing after that was saved. Fix the problem and run the file again with "Skip" selected.`);
     } finally {
       setImporting(false);
     }
