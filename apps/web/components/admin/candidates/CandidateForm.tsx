@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
+import { useToast } from "@/components/ui/Toast";
 import {
   CANDIDATE_NAME_MAX_LENGTH,
   CANDIDATE_OUTLET_MAX_LENGTH,
@@ -28,6 +29,7 @@ interface ErrorBody {
 
 export function CandidateForm({ candidateId }: CandidateFormProps) {
   const router = useRouter();
+  const toast = useToast();
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const editing = candidateId !== null;
   const [candidate, setCandidate] = useState<CandidateItem>();
@@ -109,14 +111,15 @@ export function CandidateForm({ candidateId }: CandidateFormProps) {
       );
       const body = (await response.json()) as ErrorBody;
       if (!response.ok) {
-        applyError(body, "Candidate could not be saved.");
+        if (body.error?.details?.length) applyError(body, "Candidate could not be saved.");
+        else toast.error(body.error?.message ?? "Candidate could not be saved.");
         return;
       }
 
       router.push("/admin/candidates");
       router.refresh();
     } catch {
-      setError("Can't reach the server. Check the connection and try again.");
+      toast.error("Can't reach the server. Check the connection and try again.");
     } finally {
       setSaving(false);
     }
@@ -134,13 +137,13 @@ export function CandidateForm({ candidateId }: CandidateFormProps) {
       });
       const body = (await response.json()) as ErrorBody;
       if (!response.ok) {
-        applyError(body, "Candidate could not be deactivated.");
+        toast.error(body.error?.message ?? "Candidate could not be deactivated.");
         return;
       }
       router.push("/admin/candidates");
       router.refresh();
     } catch {
-      setError("Can't reach the server. Check the connection and try again.");
+      toast.error("Can't reach the server. Check the connection and try again.");
     } finally {
       setSaving(false);
     }
@@ -157,13 +160,13 @@ export function CandidateForm({ candidateId }: CandidateFormProps) {
       const body = (await response.json()) as ErrorBody;
       if (!response.ok) {
         deleteDialog.current?.close();
-        applyError(body, "Candidate could not be deleted.");
+        toast.error(body.error?.message ?? "Candidate could not be deleted.");
         return;
       }
       router.push("/admin/candidates");
       router.refresh();
     } catch {
-      setError("Can't reach the server. Check the connection and try again.");
+      toast.error("Can't reach the server. Check the connection and try again.");
       deleteDialog.current?.close();
     } finally {
       setDeleting(false);
