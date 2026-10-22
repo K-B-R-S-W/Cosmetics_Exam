@@ -8,6 +8,7 @@ vi.mock("@/hooks/useAdminLiveKit", () => ({ useAdminLiveKit: () => ({ videoTrack
 vi.mock("@/hooks/useViolationRealtime", () => ({ useViolationRealtime: (input: { onFlagged(id: string): void; onViolationChanged(id: string | null): void }) => { mocks.realtimeInput = input; return { liveUpdatesPaused: mocks.paused }; } }));
 vi.mock("@/components/admin/ThresholdControl", () => ({ ThresholdControl: () => <label>Flag at<input aria-label="Flag at" value="10" readOnly /></label> }));
 import { LiveGrid } from "./LiveGrid";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const exam = { id: "00000000-0000-4000-8000-000000000001", title: "Synthetic live exam", status: "live", navigation_mode: "free", scheduled_start_at: null, started_at: new Date().toISOString(), ends_at: new Date(Date.now() + 600_000).toISOString(), flag_threshold: 10 };
 const attempt = (id: string, mer: string, status: "not_started" | "in_progress", violations = 0) => ({ id, status, current_position: 0, extra_minutes: 0, last_seen_at: status === "in_progress" ? new Date().toISOString() : null, violation_count: violations, submitted_at: null, candidate: { id: `candidate-${id}`, mer_code: mer, full_name: `Candidate ${mer}`, outlet: null } });
@@ -24,8 +25,12 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("LiveGrid", () => {
+  function renderGrid() {
+    return render(<ToastProvider><LiveGrid /></ToastProvider>);
+  }
+
   it("keeps normalized MER order and filters without reordering", async () => {
-    render(<LiveGrid />);
+    renderGrid();
     const candidateButtons = await screen.findAllByRole("button", { name: /Candidate MER-/ });
     expect(candidateButtons[0]!.getAttribute("aria-label")).toContain("MER-2");
     expect(candidateButtons[1]!.getAttribute("aria-label")).toContain("MER-10");
@@ -35,7 +40,7 @@ describe("LiveGrid", () => {
   });
 
   it("opens the 440px candidate panel and announces a threshold crossing", async () => {
-    render(<LiveGrid />);
+    renderGrid();
     const tile = await screen.findByRole("button", { name: /MER-2 Candidate MER-2/ });
     fireEvent.click(tile);
     expect(await screen.findByRole("complementary", { name: "Candidate MER-2" })).toBeTruthy();
@@ -50,21 +55,21 @@ describe("LiveGrid", () => {
     mocks.dynamicServerTime = false;
     const skewedExam = { ...exam, ends_at: new Date(serverNow + 600_000).toISOString() };
     mocks.response = { server_time: new Date(serverNow).toISOString(), exams: [skewedExam], exam: skewedExam, attempts: [{ ...attempt("one", "MER-2", "in_progress"), last_seen_at: new Date(serverNow - 30_000).toISOString() }], progress: [] };
-    render(<LiveGrid />);
+    renderGrid();
     expect(await screen.findByRole("button", { name: /MER-2 Candidate MER-2, Offline/ })).toBeTruthy();
     expect(screen.getByText("Time left 10:00")).toBeTruthy();
   });
 
   it("does not derive Camera off while the admin LiveKit room is down", async () => {
     mocks.connectionLost = true;
-    render(<LiveGrid />);
+    renderGrid();
     expect(await screen.findByRole("button", { name: /MER-2 Candidate MER-2, In exam/ })).toBeTruthy();
     expect(screen.getByText("Video is not available. Status, progress and violations still update.")).toBeTruthy();
   });
 
   it("restarts the ten-second camera-off window after a LiveKit reconnect", async () => {
     vi.useFakeTimers();
-    const view = render(<LiveGrid />);
+    const view = renderGrid();
     await act(() => vi.advanceTimersByTimeAsync(0));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(() => vi.advanceTimersByTimeAsync(0));
@@ -73,12 +78,12 @@ describe("LiveGrid", () => {
     expect(screen.getByRole("button", { name: /MER-2 Candidate MER-2, Camera off/ })).toBeTruthy();
 
     mocks.connectionLost = true;
-    view.rerender(<LiveGrid />);
+    view.rerender(<ToastProvider><LiveGrid /></ToastProvider>);
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(screen.getByRole("button", { name: /MER-2 Candidate MER-2, In exam/ })).toBeTruthy();
 
     mocks.connectionLost = false;
-    view.rerender(<LiveGrid />);
+    view.rerender(<ToastProvider><LiveGrid /></ToastProvider>);
     await act(() => vi.advanceTimersByTimeAsync(9_000));
     expect(screen.getByRole("button", { name: /MER-2 Candidate MER-2, In exam/ })).toBeTruthy();
     await act(() => vi.advanceTimersByTimeAsync(2_000));
@@ -86,7 +91,7 @@ describe("LiveGrid", () => {
   });
 
   it("reloads an open candidate timeline for that candidate's Realtime violation change", async () => {
-    render(<LiveGrid />);
+    renderGrid();
     fireEvent.click(await screen.findByRole("button", { name: /MER-2 Candidate MER-2/ }));
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/admin/live/one/events", { cache: "no-store" }));
     const before = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/events")).length;
@@ -116,7 +121,7 @@ describe("LiveGrid", () => {
       return Promise.resolve(new Response(JSON.stringify({ ...response, server_time: new Date(Date.now()).toISOString() }), { status: 200 }));
     });
 
-    render(<LiveGrid />);
+    renderGrid();
     fireEvent.click(await screen.findByRole("button", { name: /MER-2 Candidate MER-2/ }));
     expect(await screen.findByText("FOCUS LOST")).toBeTruthy();
 
