@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import type { CandidateItem, ExamOption } from "@/lib/candidates";
 
 interface CandidateListResponse {
@@ -19,6 +20,7 @@ interface ErrorResponse {
 const PAGE_SIZE = 50;
 
 export function CandidateList() {
+  const toast = useToast();
   const [items, setItems] = useState<CandidateItem[]>([]);
   const [total, setTotal] = useState(0);
   const [examOptions, setExamOptions] = useState<ExamOption[]>([]);
@@ -28,7 +30,6 @@ export function CandidateList() {
   const [examId, setExamId] = useState("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
   const [unlockingId, setUnlockingId] = useState<string>();
   const [removingId, setRemovingId] = useState<string>();
@@ -94,7 +95,6 @@ export function CandidateList() {
   async function unlock(candidate: CandidateItem) {
     setUnlockingId(candidate.id);
     setError(undefined);
-    setMessage(undefined);
 
     try {
       const response = await fetch(
@@ -106,7 +106,7 @@ export function CandidateList() {
         throw new Error(body.error?.message ?? "Login could not be unlocked.");
       }
 
-      setMessage(
+      toast.success(
         body.cleared
           ? `Cleared ${body.cleared} failed login attempt${body.cleared === 1 ? "" : "s"} for ${candidate.mer_code}.`
           : "There were no failed attempts to clear.",
@@ -128,7 +128,6 @@ export function CandidateList() {
     if (!removeCandidate) return;
     setRemovingId(removeCandidate.id);
     setError(undefined);
-    setMessage(undefined);
 
     try {
       const response = await fetch(`/api/admin/candidates/${removeCandidate.id}`, {
@@ -148,7 +147,7 @@ export function CandidateList() {
 
       setItems((current) => current.filter((candidate) => candidate.id !== removeCandidate.id));
       setTotal((current) => Math.max(0, current - 1));
-      setMessage(`${removeCandidate.mer_code} removed.`);
+      toast.success(`${removeCandidate.mer_code} removed.`);
       removeDialog.current?.close();
       setRemoveCandidate(undefined);
     } catch (removeError) {
@@ -162,7 +161,6 @@ export function CandidateList() {
     if (!removeCandidate) return;
     setRemovingId(removeCandidate.id);
     setError(undefined);
-    setMessage(undefined);
 
     try {
       const response = await fetch(`/api/admin/candidates/${removeCandidate.id}`, {
@@ -182,7 +180,7 @@ export function CandidateList() {
             : candidate,
         ),
       );
-      setMessage(`${removeCandidate.mer_code} marked inactive.`);
+      toast.success(`${removeCandidate.mer_code} marked inactive.`);
       removeDialog.current?.close();
       setRemoveCandidate(undefined);
       setRemoveBlockedMessage(undefined);
@@ -261,7 +259,6 @@ export function CandidateList() {
         </label>
       </form>
 
-      {message ? <p role="status" className="mt-5 border-l-4 border-ok bg-ok-tint px-4 py-3">{message}</p> : null}
       {error ? <p role="alert" className="mt-5 border-l-4 border-alert bg-alert-tint px-4 py-3">{error}</p> : null}
 
       <div className="mt-6 overflow-x-auto border-y border-hairline bg-surface">

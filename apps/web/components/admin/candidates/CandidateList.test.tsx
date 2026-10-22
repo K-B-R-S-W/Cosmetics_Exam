@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CandidateList } from "./CandidateList";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const fetchMock = vi.fn();
 const candidate = {
@@ -36,9 +37,13 @@ afterEach(() => {
 });
 
 describe("CandidateList", () => {
+  function renderList() {
+    return render(<ToastProvider><CandidateList /></ToastProvider>);
+  }
+
   async function renderCandidate() {
     fetchMock.mockResolvedValueOnce(jsonResponse({ items: [candidate], total: 1, exam_options: [] }));
-    render(<CandidateList />);
+    renderList();
     await screen.findByText(candidate.full_name);
   }
 
@@ -93,7 +98,7 @@ describe("CandidateList", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Mark inactive" }));
 
-    await screen.findByText("TEST-001 marked inactive.");
+    await within(screen.getByTestId("toast-container")).findByText("TEST-001 marked inactive.");
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
       method: "PATCH",
       body: JSON.stringify({ active: false }),
@@ -135,7 +140,7 @@ describe("CandidateList", () => {
       )
       .mockResolvedValueOnce(jsonResponse({ cleared: 2 }));
 
-    render(<CandidateList />);
+    renderList();
 
     expect(await screen.findByText("නිර්මාණ පරීක්ෂක")).toBeTruthy();
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
@@ -145,7 +150,7 @@ describe("CandidateList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Unlock login" }));
     expect(
-      await screen.findByText("Cleared 2 failed login attempts for TEST-001."),
+      await within(screen.getByTestId("toast-container")).findByText("Cleared 2 failed login attempts for TEST-001."),
     ).toBeTruthy();
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
 
