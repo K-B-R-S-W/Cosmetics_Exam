@@ -36,6 +36,12 @@ afterEach(() => {
 });
 
 describe("CandidateForm", () => {
+  it("explains that the trailing V is optional for 9-digit IDs", () => {
+    render(<CandidateForm candidateId={null} />);
+
+    expect(screen.getByText(/trailing V is optional/i)).toBeTruthy();
+  });
+
   it("omits a blank ID when editing so the old hash is retained", async () => {
     fetchMock
       .mockResolvedValueOnce(

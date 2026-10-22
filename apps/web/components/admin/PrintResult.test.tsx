@@ -32,6 +32,56 @@ it("keeps model answers out of the DOM until the default-off checkbox is selecte
   expect(screen.getByText("b. Right")).toBeTruthy();
 });
 
+it("prints a shuffled attempt in ascending original question order", () => {
+  const shuffled = [
+    { ...items[0], question_id: "q3", admin_number: 3, paper_number: 1 },
+    { ...items[0], question_id: "q1", admin_number: 1, paper_number: 3 },
+    { ...items[0], question_id: "q2", admin_number: 2, paper_number: 2 },
+  ];
+  const { container } = render(<PrintResult attemptId="attempt" candidate={{ mer_code: "MER-1", full_name: "Candidate", outlet: null }} print={print} items={shuffled} />);
+
+  expect(
+    [...container.querySelectorAll(".print-question h2")].map(
+      (heading) => heading.textContent,
+    ),
+  ).toEqual([
+    "Question 1 (candidate saw this as Q3)",
+    "Question 2 (candidate saw this as Q2)",
+    "Question 3 (candidate saw this as Q1)",
+  ]);
+});
+
+it("pairs every original question heading with its candidate paper number", () => {
+  const { container } = render(<PrintResult attemptId="attempt" candidate={{ mer_code: "MER-1", full_name: "Candidate", outlet: null }} print={print} items={items} />);
+
+  expect(
+    [...container.querySelectorAll(".print-question h2")].map(
+      (heading) => heading.textContent,
+    ),
+  ).toEqual([
+    "Question 3 (candidate saw this as Q1)",
+    "Question 7 (candidate saw this as Q2)",
+  ]);
+});
+
+it("does not invent headings for questions missing from a short attempt", () => {
+  const shortAttempt = [
+    { ...items[0], question_id: "q5", admin_number: 5, paper_number: 2 },
+    { ...items[1], question_id: "q2", admin_number: 2, paper_number: 1 },
+  ];
+  const { container } = render(<PrintResult attemptId="attempt" candidate={{ mer_code: "MER-1", full_name: "Candidate", outlet: null }} print={print} items={shortAttempt} />);
+
+  expect(
+    [...container.querySelectorAll(".print-question h2")].map(
+      (heading) => heading.textContent,
+    ),
+  ).toEqual([
+    "Question 2 (candidate saw this as Q1)",
+    "Question 5 (candidate saw this as Q2)",
+  ]);
+  expect(container.querySelectorAll(".print-question")).toHaveLength(2);
+});
+
 it("prints through the browser and links back to the review", () => {
   const printWindow = vi.spyOn(window, "print").mockImplementation(() => undefined);
   render(<PrintResult attemptId="attempt" candidate={{ mer_code: "MER-1", full_name: "Candidate", outlet: null }} print={{ ...print, is_final: true }} items={items} />);
