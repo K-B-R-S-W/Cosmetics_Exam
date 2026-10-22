@@ -46,6 +46,9 @@ export function PrintResult({ attemptId, candidate, print, items }: { attemptId:
   const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
   const documentTitle = `${candidate.mer_code} - ${candidate.full_name} - ${print.exam_title}`;
   const printedAt = formatPrintTimestamp(new Date());
+  const orderedItems = [...items].sort(
+    (left, right) => left.admin_number - right.admin_number,
+  );
   return <article className="print-result bg-surface text-ink">
     <style data-print-page>{`@page candidate-result { @top-left { content: "${cssString(printedAt)}"; font-size: 9pt; white-space: nowrap; } @top-right { content: "${cssString(documentTitle)}"; font-size: 9pt; text-align: right; max-width: 110mm; white-space: normal; overflow-wrap: anywhere; } @bottom-left { content: "${cssString(`${candidate.full_name} · ${candidate.mer_code}`)}"; font-size: 9pt; } }`}</style>
     <div className="print-controls mb-6 flex flex-wrap items-center gap-3 border-b border-line pb-4">
@@ -61,11 +64,11 @@ export function PrintResult({ attemptId, candidate, print, items }: { attemptId:
       <p className="mt-3 font-bold">Total {print.earned_marks ?? "—"} / {print.max_marks ?? "—"} ({print.total_percent === null ? "—" : print.total_percent.toFixed(1)}%)</p>
       <p className="font-bold">{print.is_final ? "Final" : "Not final"}</p>
     </header>
-    <div className="space-y-5">{items.map((item) => {
+    <div className="space-y-5">{orderedItems.map((item) => {
       const imageFailed = failedImages.has(item.question_id) || item.image?.image_missing;
       const verdict = !item.selected_option ? "No answer" : item.selected_correct ? "Correct" : "Incorrect";
       return <section className="print-question border border-ink p-4" key={item.question_id}>
-        <h2 className="text-question font-bold">Question {item.paper_number} <span className="text-sm font-normal">(question {item.admin_number} in the exam)</span></h2>
+        <h2 className="text-question font-bold">Question {item.admin_number} <span className="text-sm font-normal">(candidate saw this as Q{item.paper_number})</span></h2>
         <p className="mt-2 font-bold" lang={langFor(item.question)}>{item.question}</p>
         {item.image ? imageFailed || !item.image.url ? <p className="mt-3 font-bold">Image unavailable</p> :
           // Signed private images have no stable host or stored dimensions; preserve the source file for printing.
