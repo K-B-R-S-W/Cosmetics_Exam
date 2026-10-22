@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import {
   pairViolationEvents,
   type ViolationEvent,
@@ -15,6 +16,7 @@ export function ViolationTimeline({
   events: ViolationEvent[];
   onChanged?: () => void;
 }) {
+  const toast = useToast();
   const items = useMemo(() => pairViolationEvents(events), [events]);
   const [reviewing, setReviewing] = useState<string>();
   const [note, setNote] = useState("");
@@ -42,19 +44,23 @@ export function ViolationTimeline({
       setError("Add a review note.");
       return;
     }
-    const response = await fetch(`/api/admin/events/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dismissed, note: note.trim() }),
-    });
-    if (!response.ok) {
-      setError("The incident could not be updated.");
-      return;
+    try {
+      const response = await fetch(`/api/admin/events/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dismissed, note: note.trim() }),
+      });
+      if (!response.ok) {
+        toast.error("The incident could not be updated.");
+        return;
+      }
+      setReviewing(undefined);
+      setNote("");
+      setError(undefined);
+      onChanged?.();
+    } catch {
+      toast.error("The incident could not be updated.");
     }
-    setReviewing(undefined);
-    setNote("");
-    setError(undefined);
-    onChanged?.();
   }
 
   return (
