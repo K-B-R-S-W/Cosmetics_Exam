@@ -17,6 +17,8 @@ it("excludes absent candidates from the final-result denominator and gives Absen
   expect(screen.getAllByText("Absent").length).toBeGreaterThan(1);
   expect(screen.getByText("Did not take the exam").closest("a")).toBeNull();
   expect(screen.getByText("2 results are not final yet.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Paper" })).toBeNull();
+  expect(screen.getByRole("link", { name: "Export CSV" })).toBeTruthy();
 });
 
 it("filters every category and sorts by a column header", () => {
@@ -34,4 +36,19 @@ it("filters every category and sorts by a column header", () => {
 it("hides the not-final notice when every taken result is final", () => {
   render(<ResultsSummary exam={{ id: "exam-1", title: "Exam", flag_threshold: 10 }} rows={[{ ...rows[0], is_final: true, needs_review_count: 0 }]} />);
   expect(screen.queryByText(/results are not final yet/)).toBeNull();
+});
+
+it("shows formatted score bars, status chips, threshold badges and a sticky header", () => {
+  render(<ResultsSummary exam={{ id: "exam-1", title: "Exam", flag_threshold: 10 }} rows={rows} />);
+  expect(screen.getByRole("progressbar", { name: "MER-2 score" }).getAttribute("value")).toBe("50");
+  expect(screen.getByLabelText("MER-2, 10 violations, flagged")).toBeTruthy();
+  expect(screen.getAllByText("50.0%").length).toBeGreaterThan(0);
+  expect(screen.getByText("Submitted").className).toContain("rounded-full");
+  expect(document.querySelector("thead")?.className).toContain("sticky");
+});
+
+it("renders more than twenty result rows without changing the summary table", () => {
+  const manyRows = Array.from({ length: 21 }, (_, index) => ({ ...rows[0], attempt_id: `attempt-${index}`, mer_code: `MER-${index + 1}` }));
+  render(<ResultsSummary exam={{ id: "exam-1", title: "Exam", flag_threshold: 10 }} rows={manyRows} />);
+  expect(screen.getAllByTestId("summary-row")).toHaveLength(21);
 });
