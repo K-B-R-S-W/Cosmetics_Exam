@@ -5,6 +5,7 @@ import Papa from "papaparse";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import {
   candidateImportBatches,
   findCandidateCsvDamage,
@@ -38,6 +39,7 @@ interface CheckSummary {
 const REQUIRED_COLUMNS = ["mer_code", "full_name", "outlet", "nic"];
 
 export function CandidateImport() {
+  const toast = useToast();
   const [step, setStep] = useState<Step>("choose");
   const [rows, setRows] = useState<CandidateImportRow[]>([]);
   const [fileName, setFileName] = useState("");
@@ -177,6 +179,9 @@ export function CandidateImport() {
         setProgress(processed);
       }
       setFinished(totals);
+      if (summary.errors.length === 0) {
+        toast.success("Candidate import completed.");
+      }
       setStep("import");
       setRows([]);
       setSummary(undefined);

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CandidateImport } from "./CandidateImport";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const mocks = vi.hoisted(() => ({
   parse: vi.fn(),
@@ -37,6 +38,10 @@ function chooseCsv(): void {
   fireEvent.change(screen.getByLabelText("Choose CSV"), {
     target: { files: [file] },
   });
+}
+
+function renderImport() {
+  return render(<ToastProvider><CandidateImport /></ToastProvider>);
 }
 
 function parsedRequest(call: unknown[]): {
@@ -80,7 +85,7 @@ afterEach(() => {
 describe("CandidateImport", () => {
   it("masks a bare 9-digit ID and explains that V will be added", async () => {
     mocks.rows = [{ ...syntheticRows(1)[0], nic: "848280356" }];
-    render(<CandidateImport />);
+    renderImport();
     chooseCsv();
 
     expect(await screen.findByText("ID read as old format, V added")).toBeTruthy();
@@ -105,7 +110,7 @@ describe("CandidateImport", () => {
         });
       },
     );
-    render(<CandidateImport />);
+    renderImport();
     chooseCsv();
 
     expect(await screen.findByText("230 rows")).toBeTruthy();
@@ -122,6 +127,11 @@ describe("CandidateImport", () => {
 
     fireEvent.click(importButton);
     expect(await screen.findByText("Done.")).toBeTruthy();
+    expect(
+      await within(screen.getByTestId("toast-container")).findByText(
+        "Candidate import completed.",
+      ),
+    ).toBeTruthy();
     expect(fetchMock).toHaveBeenCalledTimes(10);
     const imports = fetchMock.mock.calls.slice(5).map(parsedRequest);
     expect(imports.map((call) => call.rows.length)).toEqual([50, 50, 50, 50, 30]);
@@ -143,7 +153,7 @@ describe("CandidateImport", () => {
         errors: [],
       });
     });
-    render(<CandidateImport />);
+    renderImport();
     chooseCsv();
 
     fireEvent.click(await screen.findByRole("button", { name: "Check file" }));
@@ -180,7 +190,7 @@ describe("CandidateImport", () => {
         errors: [],
       });
     });
-    render(<CandidateImport />);
+    renderImport();
     chooseCsv();
     fireEvent.click(await screen.findByRole("button", { name: "Check file" }));
     fireEvent.click(
@@ -198,7 +208,7 @@ describe("CandidateImport", () => {
       { ...syntheticRows(1)[0], mer_code: "TEST-002", outlet: "Bad \uFFFD text" },
       { ...syntheticRows(1)[0], mer_code: "TEST-003", nic: "1.9E+11" },
     ];
-    render(<CandidateImport />);
+    renderImport();
     chooseCsv();
 
     expect(await screen.findByText(/This file may be damaged/)).toBeTruthy();
