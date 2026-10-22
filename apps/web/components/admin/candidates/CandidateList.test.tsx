@@ -113,8 +113,31 @@ describe("CandidateList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Remove candidate" }));
 
-    expect((await screen.findByRole("alert")).textContent).toContain("Synthetic network failure");
+    expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic network failure")).toBeTruthy();
+    expect(screen.queryByText("Synthetic network failure", { selector: "section > p[role='alert']" })).toBeNull();
     expect(screen.getByText(candidate.full_name)).toBeTruthy();
+  });
+
+  it("shows unlock failures as persistent toasts", async () => {
+    await renderCandidate();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "Synthetic unlock failure." } }, 500));
+    fireEvent.click(screen.getByRole("button", { name: "Unlock login" }));
+
+    expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic unlock failure.")).toBeTruthy();
+    expect(screen.queryByText("Synthetic unlock failure.", { selector: "section > p[role='alert']" })).toBeNull();
+  });
+
+  it("shows mark-inactive failures as persistent toasts", async () => {
+    await renderCandidate();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ error: { code: "has_attempts", message: "Mark them inactive instead." } }, 409))
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "Synthetic inactive failure." } }, 500));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove candidate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Mark inactive" }));
+
+    expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic inactive failure.")).toBeTruthy();
+    expect(screen.getByText("Mark them inactive instead.")).toBeTruthy();
   });
 
   it("loads exam options only on the first request and unlocks a candidate", async () => {
