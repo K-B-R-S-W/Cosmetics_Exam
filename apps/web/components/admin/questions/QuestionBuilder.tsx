@@ -184,7 +184,7 @@ export function QuestionBuilder({ examId }: { examId: string }) {
       setPersistedImagePaths((paths) => ({ ...paths, [saved.id]: saved.image?.path ?? null }));
       setMarksInput(String(saved.marks));
       toast.success(result.regrade_needed ? "Scores already exist for this question. Regrade it so the new key is used." : locked ? "Answer key saved." : "Question saved.");
-    } catch (saveError) { setError((saveError as Error).message); }
+    } catch (saveError) { toast.error((saveError as Error).message); }
     finally { setSaving(false); }
   }
 
@@ -199,7 +199,7 @@ export function QuestionBuilder({ examId }: { examId: string }) {
       const remaining = questions.filter((question) => question.id !== selected.id);
       setSavedQuestions((snapshots) => { const next = { ...snapshots }; delete next[selected.id]; return next; });
       setQuestions(remaining); setSelectedId(remaining[0]?.id); setMarksInput(remaining[0] ? String(remaining[0].marks) : "1"); toast.success("Question deleted."); deleteDialog.current?.close();
-    } catch (deleteError) { setError((deleteError as Error).message); deleteDialog.current?.close(); }
+    } catch (deleteError) { toast.error((deleteError as Error).message); deleteDialog.current?.close(); }
     finally { setSaving(false); }
   }
 
@@ -210,7 +210,7 @@ export function QuestionBuilder({ examId }: { examId: string }) {
       const body = await response.json() as ApiErrorBody; if (!response.ok) throw new Error(body.error?.message ?? "Questions could not be reordered.");
       setQuestions((items) => items.map((question, position) => ({ ...question, position }))); toast.success("Question order saved.");
       setSavedQuestions((snapshots) => Object.fromEntries(Object.entries(snapshots).map(([id, question]) => [id, { ...question, position: next.findIndex((item) => item.id === id) }])));
-    } catch (reorderError) { setQuestions(before); setError((reorderError as Error).message); }
+    } catch (reorderError) { setQuestions(before); toast.error((reorderError as Error).message); }
   }
   async function reorder(id: string, direction: -1 | 1) {
     if (locked || dirty || keyMissingOnly || questions.some((question) => !question.persisted)) return;

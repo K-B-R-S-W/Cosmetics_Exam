@@ -198,8 +198,35 @@ describe("CandidateImport", () => {
     );
 
     expect(
-      await screen.findByText(/The import stopped after 50 rows/),
+      await within(screen.getByTestId("toast-container")).findByText(/The import stopped after 50 rows/),
     ).toBeTruthy();
+    expect(screen.queryByText(/The import stopped after 50 rows/, { selector: "section > p[role='alert']" })).toBeNull();
+  });
+
+  it("shows Check-file server failures as persistent toasts", async () => {
+    mocks.rows = syntheticRows(1);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "Synthetic check failure." } }, 503));
+    renderImport();
+    chooseCsv();
+    fireEvent.click(await screen.findByRole("button", { name: "Check file" }));
+
+    expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic check failure.")).toBeTruthy();
+    expect(screen.queryByText("Synthetic check failure.", { selector: "section > p[role='alert']" })).toBeNull();
+  });
+
+  it("keeps missing-column CSV errors inline", async () => {
+    mocks.parse.mockImplementationOnce((_file: unknown, config: unknown) => {
+      (config as { complete(result: { data: never[]; errors: never[]; meta: { fields: string[] } }): void }).complete({
+        data: [],
+        errors: [],
+        meta: { fields: ["mer_code", "full_name"] },
+      });
+    });
+    renderImport();
+    chooseCsv();
+
+    expect(await screen.findByText("Missing CSV columns: outlet, nic.")).toBeTruthy();
+    expect(within(screen.getByTestId("toast-container")).queryByText(/Missing CSV columns/)).toBeNull();
   });
 
   it("blocks checking when likely file damage is present", async () => {

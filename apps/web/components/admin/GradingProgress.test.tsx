@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/Toast";
 import { GradingProgress } from "./GradingProgress";
@@ -51,4 +51,23 @@ it("uses the existing full-grade body and reports the authoritative estimate aft
   expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/admin/exams/exam/grade", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chunk_size: 10, mcq_only: false }),
   });
+});
+
+it("keeps grading status load failures inline", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 500 })));
+  renderProgress(<GradingProgress examId="exam" examStatus="finalized" attempts={[]} />);
+  expect(await screen.findByText("Grading status is unavailable.")).toBeTruthy();
+  expect(within(screen.getByTestId("toast-container")).queryByText("Grading status is unavailable.")).toBeNull();
+});
+
+it("shows start-grading failures as persistent toasts", async () => {
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ runs: [], queue: {}, keys: [], logs: [], not_graded: 0 })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Synthetic grading failure." } }), { status: 500 }));
+  vi.stubGlobal("fetch", fetchMock);
+  renderProgress(<GradingProgress examId="exam" examStatus="finalized" attempts={[]} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Start grading" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Start grading" })[1]!);
+  expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic grading failure.")).toBeTruthy();
+  expect(screen.queryByText("Synthetic grading failure.", { selector: "section > p[role='alert']" })).toBeNull();
 });

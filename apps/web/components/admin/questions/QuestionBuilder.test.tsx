@@ -65,7 +65,7 @@ describe("QuestionBuilder", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add MCQ" }));
     fetchMock.mockResolvedValueOnce(response({ error: { message: "Connection lost." } }, 500));
     fireEvent.click(screen.getByRole("button", { name: "Save question" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("Connection lost.");
+    expect(await within(screen.getByTestId("toast-container")).findByText("Connection lost.")).toBeTruthy();
     fetchMock.mockImplementationOnce(async (_url, init) => {
       const submitted = JSON.parse(String(init?.body));
       return response({ question: { ...submitted, position: 0, options: submitted.options.map((item: object, index: number) => ({ ...item, position: index, label: String.fromCharCode(65 + index) })) } }, 201);
@@ -192,7 +192,7 @@ describe("QuestionBuilder", () => {
     fireEvent.click(screen.getAllByRole("radio", { name: "Correct answer" })[1]!);
     fetchMock.mockResolvedValueOnce(response({ error: { code: "grading_in_progress", message: "Database detail" } }, 409));
     fireEvent.click(screen.getByRole("button", { name: "Save answer key" }));
-    expect(await screen.findByText(/Answer keys are locked while grading is running/)).toBeTruthy();
+    expect(await within(screen.getByTestId("toast-container")).findByText(/Answer keys are locked while grading is running/)).toBeTruthy();
     expect((screen.getAllByRole("radio", { name: "Correct answer" })[0] as HTMLInputElement).disabled).toBe(true);
   });
 
@@ -204,6 +204,7 @@ describe("QuestionBuilder", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save question" }));
     expect(await screen.findByText("Option B needs text.")).toBeTruthy();
     expect(screen.getByLabelText("Option B text").getAttribute("aria-invalid")).toBe("true");
+    expect(within(screen.getByTestId("toast-container")).queryByText("Check the highlighted fields and try again.")).toBeNull();
   });
 
   it("reloads the exam and switches to locked mode after exam_locked", async () => {
@@ -213,6 +214,7 @@ describe("QuestionBuilder", () => {
     fetchMock.mockResolvedValueOnce(response({ exam: { id: examId, title: "Synthetic Exam", status: "live" } }));
     fireEvent.click(screen.getByRole("button", { name: "Save question" }));
     expect(await screen.findByText("Questions are locked while the exam is live. You can still edit answer keys.")).toBeTruthy();
+    expect(await within(screen.getByTestId("toast-container")).findByText("This exam has started.")).toBeTruthy();
     expect((screen.getByLabelText("Question text") as HTMLTextAreaElement).disabled).toBe(true);
     expect((screen.getByLabelText("Question text") as HTMLTextAreaElement).value).toBe("<p>Synthetic question</p>");
   });
@@ -235,5 +237,30 @@ describe("QuestionBuilder", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     const reorderCall = fetchMock.mock.calls[2]!;
     expect(JSON.parse(String(reorderCall[1]?.body)).ordered_ids).toEqual([second.id, question.id]);
+  });
+
+  it("shows delete failures as persistent toasts", async () => {
+    initial("draft"); renderBuilder();
+    await screen.findByText("Synthetic question");
+    fetchMock.mockResolvedValueOnce(response({ error: { message: "Synthetic delete failure." } }, 500));
+    fireEvent.click(screen.getByRole("button", { name: "Delete question" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete question" }));
+
+    expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic delete failure.")).toBeTruthy();
+  });
+
+  it("restores question order and toasts when reordering fails", async () => {
+    const second = { ...question, id: "00000000-0000-4000-8000-000000000105", position: 1, body_html: "<p>Second</p>" };
+    initial("draft", [question, second]); renderBuilder();
+    await screen.findByText("Second");
+    fetchMock.mockResolvedValueOnce(response({ error: { message: "Synthetic reorder failure." } }, 500));
+    fireEvent.click(screen.getByRole("button", { name: "Move question 2 up" }));
+
+    expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic reorder failure.")).toBeTruthy();
+    const rows = screen.getByRole("navigation", { name: "Questions" }).querySelectorAll("ol > li");
+    expect(Array.from(rows).map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Synthetic question"),
+      expect.stringContaining("Second"),
+    ]);
   });
 });

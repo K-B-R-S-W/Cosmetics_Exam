@@ -17,6 +17,8 @@ beforeEach(() => {
   router.push.mockReset();
   router.refresh.mockReset();
   vi.stubGlobal("fetch", fetchMock);
+  HTMLDialogElement.prototype.showModal = function showModal() { this.setAttribute("open", ""); };
+  HTMLDialogElement.prototype.close = function close() { this.removeAttribute("open"); };
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -45,5 +47,39 @@ describe("ExamForm", () => {
     renderForm();
     expect(await screen.findByLabelText("Flag threshold")).toHaveProperty("disabled", true);
     expect(screen.getByLabelText("Title")).toHaveProperty("disabled", false);
+  });
+
+  it("shows save request failures as persistent toasts", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ exam: EXAM, warnings: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Synthetic save failure." } }), { status: 500 }));
+    renderForm();
+    await screen.findByText("No questions yet.");
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Updated" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic save failure.")).toBeTruthy();
+    expect(screen.queryByText("Synthetic save failure.", { selector: "section > p[role='alert']" })).toBeNull();
+  });
+
+  it("keeps initial load failures inline", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Synthetic load failure." } }), { status: 500 }));
+    renderForm();
+
+    expect(await screen.findByText("Synthetic load failure.", { selector: "section > p[role='alert']" })).toBeTruthy();
+    expect(within(screen.getByTestId("toast-container")).queryByText("Synthetic load failure.")).toBeNull();
+  });
+
+  it("shows delete request failures as persistent toasts", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ exam: EXAM, warnings: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Synthetic delete failure." } }), { status: 409 }));
+    renderForm();
+    await screen.findByText("No questions yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Delete exam" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete exam" }));
+
+    expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic delete failure.")).toBeTruthy();
+    expect(screen.queryByText("Synthetic delete failure.", { selector: "section > p[role='alert']" })).toBeNull();
   });
 });

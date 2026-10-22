@@ -146,7 +146,7 @@ export function ExamCandidates({ examId }: { examId: string }) {
           `${added} added before the error.${alreadyAssigned ? ` ${alreadyAssigned} were already assigned.` : ""}`,
         );
       }
-      setError((actionError as Error).message);
+      toast.error((actionError as Error).message);
     } finally {
       setWorking(false);
     }
@@ -196,7 +196,7 @@ export function ExamCandidates({ examId }: { examId: string }) {
           );
         }
       }
-      setError((actionError as Error).message);
+      toast.error((actionError as Error).message);
     } finally {
       setWorking(false);
     }

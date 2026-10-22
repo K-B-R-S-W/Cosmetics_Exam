@@ -42,10 +42,14 @@ export function HealthDashboard() {
     return () => { window.clearTimeout(initial); window.clearInterval(refresh); window.clearInterval(clock); };
   }, [load]);
   async function resolve(alert: HealthAlert) {
-    const response = await fetch(`/api/admin/alerts/${alert.id}/resolve`, { method: "POST", headers: { "Sec-Fetch-Site": "same-origin" } });
-    if (!response.ok) { setError("The alert could not be resolved."); return; }
-    setHealth((current) => current ? { ...current, alerts: current.alerts.filter(({ id }) => id !== alert.id) } : current);
-    toast.success("Alert resolved.");
+    try {
+      const response = await fetch(`/api/admin/alerts/${alert.id}/resolve`, { method: "POST", headers: { "Sec-Fetch-Site": "same-origin" } });
+      if (!response.ok) { toast.error("The alert could not be resolved."); return; }
+      setHealth((current) => current ? { ...current, alerts: current.alerts.filter(({ id }) => id !== alert.id) } : current);
+      toast.success("Alert resolved.");
+    } catch {
+      toast.error("The alert could not be resolved.");
+    }
   }
   const checkedAge = health ? Math.max(0, now - Date.parse(health.checked_at)) : null;
   return <section className="border-t border-hairline pt-6"><div className="flex items-start justify-between gap-4"><div><p className="mb-2 text-sm text-muted">Administration</p><h2 className="text-title font-bold">Health</h2>{health ? <p className="mt-2 text-sm text-muted">Last checked {ageText(checkedAge)}</p> : null}</div><Button variant="secondary" loading={loading} onClick={() => void load()}>Check now</Button></div>

@@ -29,6 +29,7 @@ const MAX_VISIBLE_TOASTS = 4;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
+  const itemsRef = useRef<ToastItem[]>([]);
   const nextId = useRef(0);
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
 
@@ -36,13 +37,38 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     const timer = timers.current.get(id);
     if (timer) clearTimeout(timer);
     timers.current.delete(id);
-    setItems((current) => current.filter((item) => item.id !== id));
+    const nextItems = itemsRef.current.filter((item) => item.id !== id);
+    itemsRef.current = nextItems;
+    setItems(nextItems);
   }, []);
 
   const add = useCallback((kind: ToastKind, message: string) => {
+    const duplicate = itemsRef.current.find((item) => item.kind === kind && item.message === message);
+    if (duplicate) {
+      if (kind === "success") {
+        const timer = timers.current.get(duplicate.id);
+        if (timer) clearTimeout(timer);
+        timers.current.set(
+          duplicate.id,
+          setTimeout(() => dismiss(duplicate.id), SUCCESS_DURATION_MS),
+        );
+      }
+      return;
+    }
+
     nextId.current += 1;
     const item = { id: nextId.current, kind, message };
-    setItems((current) => [...current, item].slice(-MAX_VISIBLE_TOASTS));
+    const nextItems = [...itemsRef.current, item].slice(-MAX_VISIBLE_TOASTS);
+    const visibleIds = new Set(nextItems.map((visibleItem) => visibleItem.id));
+    for (const existing of itemsRef.current) {
+      if (!visibleIds.has(existing.id)) {
+        const timer = timers.current.get(existing.id);
+        if (timer) clearTimeout(timer);
+        timers.current.delete(existing.id);
+      }
+    }
+    itemsRef.current = nextItems;
+    setItems(nextItems);
     if (kind === "success") {
       timers.current.set(
         item.id,
@@ -65,7 +91,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     >
       {children}
       <div
-        className="pointer-events-none fixed right-5 top-5 z-50 flex w-[min(24rem,calc(100vw-2.5rem))] flex-col gap-3"
+        className="pointer-events-none fixed right-5 top-[4.5rem] z-50 flex w-[min(24rem,calc(100vw-2.5rem))] flex-col gap-3"
         data-testid="toast-container"
       >
         {items.map((item) => (

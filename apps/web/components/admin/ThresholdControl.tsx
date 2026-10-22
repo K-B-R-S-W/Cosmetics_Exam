@@ -24,17 +24,21 @@ export function ThresholdControl({
       return;
     }
     setError(undefined);
-    const response = await fetch(`/api/admin/exams/${examId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ flag_threshold: value }),
-    });
-    if (!response.ok) {
-      setError("The flag threshold could not be saved.");
-      return;
+    try {
+      const response = await fetch(`/api/admin/exams/${examId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flag_threshold: value }),
+      });
+      if (!response.ok) {
+        toast.error("The flag threshold could not be saved.");
+        return;
+      }
+      setSaved(value);
+      toast.success(`Flag threshold set to ${value}.`);
+    } catch {
+      toast.error("The flag threshold could not be saved.");
     }
-    setSaved(value);
-    toast.success(`Flag threshold set to ${value}.`);
   }
 
   return (

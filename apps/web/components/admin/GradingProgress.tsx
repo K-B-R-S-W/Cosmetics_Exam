@@ -26,11 +26,11 @@ export function GradingProgress({ examId, examStatus, attempts }: { examId: stri
     try {
       const response = await fetch(`/api/admin/exams/${examId}/grade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chunk_size: 10, mcq_only: false }) });
       const payload = await response.json() as { estimated_calls?: number; error?: { message?: string } };
-      if (!response.ok) { setError(payload.error?.message ?? "Grading could not be started."); return; }
+      if (!response.ok) { toast.error(payload.error?.message ?? "Grading could not be started."); return; }
       dialog.current?.close();
       toast.success(`Grading started. Estimated Gemini calls: ${payload.estimated_calls ?? 0}. Confirm current limits in AI Studio.`);
       await load();
-    } catch { setError("Can't reach the server. Check the connection and try again."); }
+    } catch { toast.error("Can't reach the server. Check the connection and try again."); }
     finally { setStarting(false); }
   }
   const total = data ? Object.values(data.queue).reduce((sum, value) => sum + value, 0) : 0;

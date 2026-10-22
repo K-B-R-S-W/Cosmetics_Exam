@@ -52,6 +52,33 @@ describe("ToastProvider", () => {
     expect(screen.queryByText("Save failed")).toBeNull();
   });
 
+  it("restarts a visible duplicate success timer without adding or reordering it", () => {
+    vi.useFakeTimers();
+    render(<ToastProvider><Harness /></ToastProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Success" }));
+    act(() => vi.advanceTimersByTime(3_999));
+    fireEvent.click(screen.getByRole("button", { name: /^Error$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Success" }));
+
+    const container = screen.getByTestId("toast-container");
+    expect(screen.getAllByText("Saved successfully")).toHaveLength(1);
+    expect(Array.from(container.querySelectorAll("p")).map((item) => item.textContent)).toEqual([
+      "Saved successfully",
+      "Save failed",
+    ]);
+    act(() => vi.advanceTimersByTime(3_999));
+    expect(screen.getByText("Saved successfully")).toBeTruthy();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByText("Saved successfully")).toBeNull();
+  });
+
+  it("does not add a duplicate visible error", () => {
+    render(<ToastProvider><Harness /></ToastProvider>);
+    fireEvent.click(screen.getByRole("button", { name: /^Error$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Error$/ }));
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
   it("shows at most the four newest notifications", () => {
     render(<ToastProvider><Harness /></ToastProvider>);
     for (const number of [1, 2, 3, 4, 5]) {
@@ -68,12 +95,12 @@ describe("ToastProvider", () => {
     ]);
   });
 
-  it("positions the notification container at the top right", () => {
+  it("positions the notification container below the admin header at the right", () => {
     render(<ToastProvider><Harness /></ToastProvider>);
 
     const container = screen.getByTestId("toast-container");
     expect(container.className).toContain("fixed");
     expect(container.className).toContain("right-5");
-    expect(container.className).toContain("top-5");
+    expect(container.className).toContain("top-[4.5rem]");
   });
 });

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { EditorQuestion, ApiErrorBody } from "@/components/admin/questions/question-types";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import { QUESTION_IMAGE_MAX_BYTES } from "@/lib/questions";
 
 type EditorImage = EditorQuestion["image"];
@@ -18,6 +19,7 @@ interface QuestionImageFieldProps {
 }
 
 export function QuestionImageField({ disabled = false, image, onBusyChange, onChange, persistedPath, questionId }: QuestionImageFieldProps) {
+  const toast = useToast();
   const input = useRef<HTMLInputElement>(null);
   const [enabled, setEnabled] = useState(Boolean(image));
   const [altText, setAltText] = useState(image?.alt_text ?? "");
@@ -31,11 +33,15 @@ export function QuestionImageField({ disabled = false, image, onBusyChange, onCh
   function setWorking(next: boolean) { setBusy(next); onBusyChange?.(next); }
   async function deleteOrphan(path: string) {
     if (path === persistedPath) return;
-    await fetch("/api/admin/question-images", {
+    const response = await fetch("/api/admin/question-images", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, question_id: questionId }),
     });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as ApiErrorBody;
+      throw new Error(body.error?.message ?? "The image could not be removed. Try again.");
+    }
   }
   function choose(next: File | undefined) {
     if (localUrl) URL.revokeObjectURL(localUrl);
@@ -55,7 +61,7 @@ export function QuestionImageField({ disabled = false, image, onBusyChange, onCh
       if (!response.ok || !body.image) throw new Error(body.error?.message ?? "The image could not be uploaded.");
       if (image?.path && image.path !== persistedPath && image.path !== body.image.path) await deleteOrphan(image.path);
       onChange(body.image); setFile(undefined);
-    } catch (uploadError) { setError((uploadError as Error).message); }
+    } catch (uploadError) { toast.error((uploadError as Error).message); }
     finally { setWorking(false); }
   }
   async function remove() {
@@ -63,7 +69,7 @@ export function QuestionImageField({ disabled = false, image, onBusyChange, onCh
     try {
       if (image?.path) await deleteOrphan(image.path);
       onChange(null); choose(undefined); setEnabled(false); setAltText("");
-    } catch { setError("The image could not be removed. Try again."); }
+    } catch { toast.error("The image could not be removed. Try again."); }
     finally { setWorking(false); }
   }
 

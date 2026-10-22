@@ -112,7 +112,7 @@ export function CandidateList() {
           : "There were no failed attempts to clear.",
       );
     } catch (unlockError) {
-      setError((unlockError as Error).message);
+      toast.error((unlockError as Error).message);
     } finally {
       setUnlockingId(undefined);
     }
@@ -151,7 +151,7 @@ export function CandidateList() {
       removeDialog.current?.close();
       setRemoveCandidate(undefined);
     } catch (removeError) {
-      setError((removeError as Error).message);
+      toast.error((removeError as Error).message);
     } finally {
       setRemovingId(undefined);
     }
@@ -185,7 +185,7 @@ export function CandidateList() {
       setRemoveCandidate(undefined);
       setRemoveBlockedMessage(undefined);
     } catch (inactiveError) {
-      setError((inactiveError as Error).message);
+      toast.error((inactiveError as Error).message);
     } finally {
       setRemovingId(undefined);
     }
