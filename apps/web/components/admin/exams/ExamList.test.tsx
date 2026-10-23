@@ -64,6 +64,7 @@ describe("ExamList", () => {
     render(<ExamList />);
     fireEvent.click(await screen.findByRole("button", { name: "Delete exam" }));
     const firstDialog = await screen.findByRole("dialog");
+    expect(firstDialog.classList.contains("text-left")).toBe(true);
     expect(within(firstDialog).getByText("Are you sure you want to delete this exam and its results too? This cannot be undone.")).toBeTruthy();
     expect(within(firstDialog).getByText("4")).toBeTruthy();
     expect(within(firstDialog).getByText("1")).toBeTruthy();
