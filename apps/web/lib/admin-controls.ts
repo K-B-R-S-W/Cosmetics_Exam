@@ -20,6 +20,7 @@ export const adminActionNames = [
   "question_delete", "question_reorder", "answer_key_save", "start", "extend", "force_end",
   "force_submit", "kick", "broadcast", "grade_start", "grade_resume", "override", "regrade",
   "regrade_question", "alert_resolve", "snapshot_purge", "event_dismiss", "event_restore",
+  "admin_create", "admin_disable", "admin_enable", "admin_role_change", "admin_password_reset",
 ] as const;
 export type AdminActionName = typeof adminActionNames[number];
 

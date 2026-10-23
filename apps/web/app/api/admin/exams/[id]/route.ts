@@ -11,6 +11,7 @@ import {
 } from "@/lib/exams";
 import { assertSameOrigin } from "@/lib/origin";
 import { logger } from "@/lib/logger";
+import { questionKeyComplete } from "@/lib/question-key";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
 const ROUTE = "/api/admin/exams/[id]";
@@ -44,13 +45,22 @@ export async function GET(_request: Request, context: RouteContext): Promise<Res
     const client = createServiceRoleClient();
     const [exam, questionResult] = await Promise.all([
       loadExam(client, id),
-      client.from("questions").select("id, answer_keys(question_id)").eq("exam_id", id),
+      client.from("questions").select("id,type,mcq_options(id),answer_keys(correct_option_id,model_answer)").eq("exam_id", id),
     ]);
     if (questionResult.error) throw databaseUnavailable();
     const missingKeyIds = (questionResult.data ?? [])
       .filter((question) => {
-        const key = (question as { answer_keys?: unknown }).answer_keys;
-        return key === null || (Array.isArray(key) && key.length === 0);
+        const row = question as {
+          type: "mcq" | "written";
+          mcq_options: Array<{ id: string }> | null;
+          answer_keys: { correct_option_id: string | null; model_answer: string | null } | Array<{ correct_option_id: string | null; model_answer: string | null }> | null;
+        };
+        const key = Array.isArray(row.answer_keys) ? row.answer_keys[0] : row.answer_keys;
+        return !questionKeyComplete({
+          type: row.type,
+          options: row.mcq_options ?? [],
+          answer_key: key ?? { correct_option_id: null, model_answer: null },
+        });
       })
       .map((question) => question.id);
     const warnings = missingKeyIds.length

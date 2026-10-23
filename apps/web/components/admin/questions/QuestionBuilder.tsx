@@ -13,7 +13,10 @@ import { TiptapEditor } from "@/components/editor/TiptapEditor";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/ui/Toast";
 import type { ExamStatus } from "@/lib/exams";
+import { questionKeyComplete } from "@/lib/question-key";
 import { QUESTION_BODY_MAX } from "@/lib/questions";
+
+export { questionKeyComplete } from "@/lib/question-key";
 
 interface ExamHeader { id: string; title: string; status: ExamStatus }
 
@@ -25,12 +28,6 @@ export function createQuestionDraft(examId: string, type: "mcq" | "written"): Ed
     id: crypto.randomUUID(), exam_id: examId, position: null, type, body_html: "<p></p>", marks: 1, image: null, options,
     answer_key: { correct_option_id: null, model_answer: null, grading_notes: null, calibration: [] }, persisted: false,
   };
-}
-
-export function questionKeyComplete(question: EditorQuestion): boolean {
-  return question.type === "mcq"
-    ? Boolean(question.answer_key.correct_option_id && question.options.some((option) => option.id === question.answer_key.correct_option_id))
-    : Boolean(question.answer_key.model_answer?.trim());
 }
 
 function cloneQuestion(question: EditorQuestion): EditorQuestion {
@@ -237,7 +234,7 @@ export function QuestionBuilder({ examId }: { examId: string }) {
     <div className="mt-6 grid min-w-[960px] grid-cols-[320px_minmax(0,1fr)] gap-8">
       <nav aria-label="Questions" className="border-r border-hairline pr-5">
         <p className="font-bold">{questions.length} questions · {questions.filter((question) => question.type === "mcq").length} MCQ · {questions.filter((question) => question.type === "written").length} written</p>
-        <div className="mt-3 flex gap-2"><Button variant="secondary" disabled={locked} onClick={() => addQuestion("mcq")}>Add MCQ</Button><Button variant="secondary" disabled={locked} onClick={() => addQuestion("written")}>Add written question</Button></div>
+        <div className="mt-3 flex flex-wrap gap-2"><Button variant="secondary" disabled={locked} onClick={() => addQuestion("mcq")}>Add MCQ</Button><Button variant="secondary" disabled={locked} onClick={() => addQuestion("written")}>Add written question</Button><Button variant="secondary" disabled={locked} onClick={() => guard(() => router.push(`/admin/exams/${examId}/questions/import`))}>Import questions</Button></div>
         <button type="button" className={`mt-3 min-h-11 border px-3 ${keyMissingOnly ? "border-ink bg-selected" : "border-line bg-surface"}`} aria-pressed={keyMissingOnly} onClick={() => setKeyMissingOnly((value) => !value)}>Show only: Key missing ({missingCount})</button>
         {filtered.length === 0 ? <p className="mt-5 text-muted">{questions.length ? "No questions match this filter." : "No questions yet. Add a multiple-choice or written question to start."}</p> : <ol className="mt-4 space-y-2">
           {filtered.map((question) => { const index = questions.findIndex((item) => item.id === question.id); return <li key={question.id} className={`border ${selectedId === question.id ? "border-2 border-ink bg-selected" : "border-line bg-surface"}`} onDragOver={(event) => event.preventDefault()} onDrop={() => dropOn(question.id)}>

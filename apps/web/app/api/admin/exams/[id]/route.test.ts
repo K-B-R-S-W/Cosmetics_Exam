@@ -16,6 +16,7 @@ vi.mock("@/lib/supabase/server", () => ({ createServiceRoleClient: () => ({ from
 
 const exam = { id: "00000000-0000-4000-8000-000000000010", title: "Exam", instructions: null, scheduled_start_at: "2026-10-05T04:00:00Z", started_at: null, ends_at: null, force_ended_at: null, duration_min: 45, status: "draft", navigation_mode: "free", shuffle: false, flag_threshold: 10, is_practice: false, created_at: "2026-10-04T00:00:00Z", questions: [{ count: 0 }], exam_candidates: [{ count: 1 }] };
 function loadQuery(data: Record<string, unknown> = exam) { return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data, error: null }) }) }) }; }
+function questionsQuery(data: Array<Record<string, unknown>>) { return { select: () => ({ eq: async () => ({ data, error: null }) }) }; }
 function updateQuery(data: Record<string, unknown> | null) {
   const chain = {
     eq: vi.fn(() => chain),
@@ -140,6 +141,41 @@ describe("exam detail route", () => {
     const response = await PATCH(new Request(`http://localhost/api/admin/exams/${exam.id}`, { method: "PATCH", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ title: "Renamed" }) }), { params: Promise.resolve({ id: exam.id }) });
     expect(response.status).toBe(200);
     expect(updateResult.update).toHaveBeenCalledWith({ title: "Renamed" });
+  });
+
+  it("does not warn when MCQ and written keys are complete", async () => {
+    mocks.from
+      .mockImplementationOnce(() => loadQuery())
+      .mockImplementationOnce(() => questionsQuery([
+        { id: "mcq", type: "mcq", mcq_options: [{ id: "correct" }], answer_keys: { correct_option_id: "correct", model_answer: null } },
+        { id: "written", type: "written", mcq_options: [], answer_keys: { correct_option_id: null, model_answer: " Model answer " } },
+      ]));
+    const { GET } = await import("./route");
+    const response = await GET(new Request(`http://localhost/api/admin/exams/${exam.id}`), context);
+    expect(response.status).toBe(200);
+    expect((await response.json()).warnings).toEqual([]);
+  });
+
+  it("warns for an MCQ with no valid correct option", async () => {
+    mocks.from
+      .mockImplementationOnce(() => loadQuery())
+      .mockImplementationOnce(() => questionsQuery([
+        { id: "mcq-missing", type: "mcq", mcq_options: [{ id: "option-a" }], answer_keys: { correct_option_id: "not-an-option", model_answer: null } },
+      ]));
+    const { GET } = await import("./route");
+    const response = await GET(new Request(`http://localhost/api/admin/exams/${exam.id}`), context);
+    expect((await response.json()).warnings).toEqual([{ code: "missing_answer_key", question_ids: ["mcq-missing"] }]);
+  });
+
+  it("warns for a written question with a blank model answer", async () => {
+    mocks.from
+      .mockImplementationOnce(() => loadQuery())
+      .mockImplementationOnce(() => questionsQuery([
+        { id: "written-blank", type: "written", mcq_options: [], answer_keys: [{ correct_option_id: null, model_answer: "   " }] },
+      ]));
+    const { GET } = await import("./route");
+    const response = await GET(new Request(`http://localhost/api/admin/exams/${exam.id}`), context);
+    expect((await response.json()).warnings).toEqual([{ code: "missing_answer_key", question_ids: ["written-blank"] }]);
   });
 
   it.each(["draft", "scheduled", "finalized"] as const)("conditionally deletes an allowed %s exam", async (status) => {

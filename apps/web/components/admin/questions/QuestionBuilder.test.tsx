@@ -58,6 +58,15 @@ describe("QuestionBuilder", () => {
     expect(questionKeyComplete({ ...question, persisted: true, answer_key: { ...question.answer_key, correct_option_id: examId } })).toBe(false);
   });
 
+  it("opens question import for an editable exam and disables it for a live exam", async () => {
+    initial("draft"); renderBuilder();
+    fireEvent.click(await screen.findByRole("button", { name: "Import questions" }));
+    expect(navigation.push).toHaveBeenCalledWith(`/admin/exams/${examId}/questions/import`);
+    cleanup(); fetchMock.mockReset(); navigation.push.mockReset();
+    initial("live"); renderBuilder();
+    expect(await screen.findByRole("button", { name: "Import questions" })).toHaveProperty("disabled", true);
+  });
+
   it("keeps client-generated question and option UUIDs when a lost save is retried", async () => {
     initial("draft", []);
     renderBuilder();
