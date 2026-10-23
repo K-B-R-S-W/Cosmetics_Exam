@@ -64,6 +64,16 @@ function issue(row: number, code: string, message: string): QuestionImportIssue 
   return { row, code, message };
 }
 
+function normalizedCorrect(value: string): string {
+  return value.trim().replace(/^["']+|["']+$/g, "").trim();
+}
+
+function listsMultipleAnswers(value: string): boolean {
+  if (/[,/&]|\band\b/i.test(value)) return true;
+  const letters = value.match(/[a-j]/gi) ?? [];
+  return letters.length > 1 && /^[a-j\s]+$/i.test(value);
+}
+
 function parseRow(row: QuestionImportRow, examId: string): PreparedQuestionImport | QuestionImportIssue {
   const question = row.question.trim();
   if (!question) return issue(row.source_row, "missing_question", "Question text is required.");
@@ -81,7 +91,8 @@ function parseRow(row: QuestionImportRow, examId: string): PreparedQuestionImpor
   if (type === "mcq") {
     if (optionEntries.length < 2) return issue(row.source_row, "too_few_options", "MCQ questions need at least two options.");
     if (optionEntries.some((item) => item.text.length > OPTION_TEXT_MAX)) return issue(row.source_row, "option_too_long", `Options cannot exceed ${OPTION_TEXT_MAX} characters.`);
-    const correct = row.correct.trim();
+    const correct = normalizedCorrect(row.correct);
+    if (listsMultipleAnswers(correct)) return issue(row.source_row, "multiple_correct_answers", "Only one correct answer is supported; this row lists several.");
     const matching = /^[a-j]$/i.test(correct)
       ? optionEntries.find((item) => item.letter === correct.toUpperCase())
       : optionEntries.find((item) => item.text === correct);

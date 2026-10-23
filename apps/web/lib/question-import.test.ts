@@ -37,6 +37,28 @@ describe("question import contracts", () => {
     expect(result.issues).toEqual([expect.objectContaining({ row: 4, code: "invalid_correct" })]);
   });
 
+  it("rejects multiple correct answers with a friendly row-level message", () => {
+    const result = prepareQuestionImport([
+      row(2, { option_a: "One", option_b: "Two", correct: "A,B" }),
+      row(3, { question: "Second", option_a: "One", option_b: "Two", option_d: "Four", correct: "A,B,D" }),
+    ], examId, []);
+
+    expect(result.issues).toEqual([
+      { row: 2, code: "multiple_correct_answers", message: "Only one correct answer is supported; this row lists several." },
+      { row: 3, code: "multiple_correct_answers", message: "Only one correct answer is supported; this row lists several." },
+    ]);
+  });
+
+  it("trims whitespace and stray quotes around a single correct answer", () => {
+    const result = prepareQuestionImport([
+      row(2, { option_a: "One", option_b: "Two", correct: '  "B"  ' }),
+      row(3, { question: "By text", option_a: "One", option_b: "Two", correct: " 'Two' " }),
+    ], examId, []);
+
+    expect(result.issues).toEqual([]);
+    expect(result.ready).toHaveLength(2);
+  });
+
   it("requires a non-blank model answer for every written row", () => {
     const result = prepareQuestionImport([row(2, { type: "written", model_answer: "   " })], examId, []);
     expect(result.issues[0]).toMatchObject({ code: "missing_model_answer" });

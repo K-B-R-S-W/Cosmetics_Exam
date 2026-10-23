@@ -22,6 +22,7 @@ export function QuestionImport({ examId }: { examId: string }) {
   const [fileName, setFileName] = useState("");
   const [error, setError] = useState<string>();
   const [preview, setPreview] = useState<Preview>();
+  const [parseIssues, setParseIssues] = useState<QuestionImportIssue[]>([]);
   const [forceRows, setForceRows] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -34,7 +35,7 @@ export function QuestionImport({ examId }: { examId: string }) {
 
   function choose(file: File | undefined) {
     if (!file) return;
-    setFileName(file.name); setRows([]); setPreview(undefined); setForceRows(new Set()); setFinished(undefined); setError(undefined);
+    setFileName(file.name); setRows([]); setPreview(undefined); setParseIssues([]); setForceRows(new Set()); setFinished(undefined); setError(undefined);
     Papa.parse<Record<string, string>>(file, {
       header: true, skipEmptyLines: "greedy",
       transformHeader: (header) => header.replace(/^\uFEFF/, "").trim().toLowerCase(),
@@ -42,8 +43,18 @@ export function QuestionImport({ examId }: { examId: string }) {
         const fields = result.meta.fields ?? [];
         const missing = QUESTION_IMPORT_COLUMNS.filter((column) => !fields.includes(column));
         if (missing.length) { setError(`Missing CSV columns: ${missing.join(", ")}.`); return; }
-        if (result.errors.length) { setError(result.errors[0]?.message ?? "The CSV could not be read."); return; }
+        const fatal = result.errors.find((item) => (item.code !== "TooManyFields" && item.code !== "TooFewFields") || item.row === undefined);
+        if (fatal) { setError(fatal.message || "The CSV could not be read."); return; }
         if (result.data.length > QUESTION_IMPORT_LIMIT) { setError(`Import no more than ${QUESTION_IMPORT_LIMIT} rows at a time.`); return; }
+        setParseIssues(result.errors.map((item) => {
+          const parsed = item.message.match(/parsed (\d+)/i)?.[1] ?? "an unexpected number of";
+          const row = (item.row ?? 0) + 2;
+          return {
+            row,
+            code: "invalid_column_count",
+            message: `Row ${row} has ${parsed} columns instead of ${QUESTION_IMPORT_COLUMNS.length}. Check for a comma inside a cell that is not wrapped in quotes, or a space before an opening quote.`,
+          };
+        }));
         setRows(result.data.map((raw, index) => Object.assign(
           { source_row: index + 2 },
           Object.fromEntries(QUESTION_IMPORT_COLUMNS.map((column) => [column, raw[column] ?? ""])),
@@ -66,8 +77,10 @@ export function QuestionImport({ examId }: { examId: string }) {
   async function check() {
     setBusy(true); setError(undefined); setFinished(undefined);
     try {
-      const result = await send(rows, true);
-      setPreview({ ready: result.ready ?? [], issues: result.issues ?? [] });
+      const invalidRows = new Set(parseIssues.map((item) => item.row));
+      const validRows = rows.filter((row) => !invalidRows.has(row.source_row));
+      const result = validRows.length ? await send(validRows, true) : { ready: [], issues: [] };
+      setPreview({ ready: result.ready ?? [], issues: [...parseIssues, ...(result.issues ?? [])] });
     } catch (checkError) { toast.error((checkError as Error).message); }
     finally { setBusy(false); }
   }
