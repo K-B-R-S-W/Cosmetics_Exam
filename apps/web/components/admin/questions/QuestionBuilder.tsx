@@ -13,7 +13,10 @@ import { TiptapEditor } from "@/components/editor/TiptapEditor";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/ui/Toast";
 import type { ExamStatus } from "@/lib/exams";
+import { questionKeyComplete } from "@/lib/question-key";
 import { QUESTION_BODY_MAX } from "@/lib/questions";
+
+export { questionKeyComplete } from "@/lib/question-key";
 
 interface ExamHeader { id: string; title: string; status: ExamStatus }
 
@@ -25,12 +28,6 @@ export function createQuestionDraft(examId: string, type: "mcq" | "written"): Ed
     id: crypto.randomUUID(), exam_id: examId, position: null, type, body_html: "<p></p>", marks: 1, image: null, options,
     answer_key: { correct_option_id: null, model_answer: null, grading_notes: null, calibration: [] }, persisted: false,
   };
-}
-
-export function questionKeyComplete(question: EditorQuestion): boolean {
-  return question.type === "mcq"
-    ? Boolean(question.answer_key.correct_option_id && question.options.some((option) => option.id === question.answer_key.correct_option_id))
-    : Boolean(question.answer_key.model_answer?.trim());
 }
 
 function cloneQuestion(question: EditorQuestion): EditorQuestion {
