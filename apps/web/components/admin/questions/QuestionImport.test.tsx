@@ -65,6 +65,23 @@ describe("QuestionImport", () => {
     expect(await within(screen.getByTestId("toast-container")).findByText("Question import completed.")).toBeTruthy();
   });
 
+  it("shows a 60-character question snippet beside a flagged row", async () => {
+    const question = "This question text is deliberately longer than sixty characters so the preview truncates it.";
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      dry_run: true,
+      ready: [],
+      issues: [{ row: 2, code: "duplicate_question", message: "Duplicate question.", can_force: true }],
+    }), { status: 200 }));
+    render(<ToastProvider><QuestionImport examId={examId} /></ToastProvider>);
+    fireEvent.change(screen.getByLabelText("Choose CSV"), { target: { files: [new File([csv(question)], "questions.csv", { type: "text/csv" })] } });
+    await screen.findByText("1 rows loaded.");
+    fireEvent.click(screen.getByRole("button", { name: "Check file" }));
+
+    expect(await screen.findByText(`Question: ${question.slice(0, 60)}`)).toBeTruthy();
+    expect(screen.queryByText(`Question: ${question}`)).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Import anyway" })).toBeTruthy();
+  });
+
   it("keeps previewing valid rows when one spreadsheet row has too many columns", async () => {
     const multipleIssues = Array.from({ length: 7 }, (_, index) => ({
       row: index + 14,
