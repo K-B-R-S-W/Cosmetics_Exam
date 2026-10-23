@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { DeleteExamButton } from "@/components/admin/exams/DeleteExamButton";
 import { useToast } from "@/components/ui/Toast";
 import { examStatusLabel, formatColomboDateTime, type ExamItem } from "@/lib/exams";
 
@@ -68,7 +69,7 @@ export function ExamList() {
               return <tr key={exam.id} className="border-b border-hairline last:border-0">
                 <td className="px-3 py-3 font-bold"><Link className="underline" href={`/admin/exams/${exam.id}`}>{exam.title}</Link>{exam.is_practice ? <span className="ml-2 border border-line px-2 py-1 text-xs">Practice</span> : null}</td>
                 <td className="px-3 py-3">{examStatusLabel(exam.status)}</td><td className="px-3 py-3">{formatColomboDateTime(exam.scheduled_start_at)}</td><td className="px-3 py-3">{exam.duration_min} min</td><td className="px-3 py-3">{exam.question_count}</td><td className="px-3 py-3">{exam.assigned_count}</td>
-                <td className="px-3 py-2 text-right"><div className="flex justify-end gap-2"><button type="button" disabled={Boolean(duplicating)} onClick={() => void duplicate(exam)} className="min-h-11 rounded-control border border-line px-4 font-bold disabled:opacity-50">{duplicating === exam.id ? "Duplicating…" : "Duplicate"}</button><Link href={href} className="inline-flex min-h-11 items-center rounded-control border border-line px-4 font-bold">{action}</Link></div></td>
+                <td className="px-3 py-2 text-right"><div className="flex justify-end gap-2"><DeleteExamButton examId={exam.id} status={exam.status} onDeleted={() => { setItems((current) => current.filter((item) => item.id !== exam.id)); router.refresh(); }} /><button type="button" disabled={Boolean(duplicating)} onClick={() => void duplicate(exam)} className="min-h-11 rounded-control border border-line px-4 font-bold disabled:opacity-50">{duplicating === exam.id ? "Duplicating…" : "Duplicate"}</button><Link href={href} className="inline-flex min-h-11 items-center rounded-control border border-line px-4 font-bold">{action}</Link></div></td>
               </tr>;
             })}
           </tbody>

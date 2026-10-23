@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { DeleteExamButton } from "@/components/admin/exams/DeleteExamButton";
 import { ExamTabs } from "@/components/admin/exams/ExamTabs";
 import { AdminExamControls } from "@/components/admin/AdminExamControls";
 import { Button } from "@/components/ui/Button";
@@ -27,7 +28,6 @@ interface ErrorBody { error?: { code?: string; message?: string; details?: { mis
 export function ExamForm({ examId }: { examId: string | null }) {
   const router = useRouter();
   const toast = useToast();
-  const deleteDialog = useRef<HTMLDialogElement>(null);
   const leaveDialog = useRef<HTMLDialogElement>(null);
   const editing = examId !== null;
   const [exam, setExam] = useState<ExamItem>();
@@ -42,7 +42,6 @@ export function ExamForm({ examId }: { examId: string | null }) {
   const [practice, setPractice] = useState(false);
   const [loading, setLoading] = useState(editing);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [renderedAt] = useState(() => Date.now());
   const [dirty, setDirty] = useState(false);
   const [pendingHref, setPendingHref] = useState<string>();
@@ -99,17 +98,6 @@ export function ExamForm({ examId }: { examId: string | null }) {
     finally { setSaving(false); }
   }
 
-  async function removeExam() {
-    if (!examId) return; setDeleting(true); setError(undefined);
-    try {
-      const response = await fetch(`/api/admin/exams/${examId}`, { method: "DELETE" });
-      const body = await response.json() as ErrorBody;
-      if (!response.ok) { deleteDialog.current?.close(); toast.error(body.error?.message ?? "Exam could not be deleted."); return; }
-      router.push("/admin/exams"); router.refresh();
-    } catch { toast.error("Can't reach the server. Check the connection and try again."); deleteDialog.current?.close(); }
-    finally { setDeleting(false); }
-  }
-
   if (loading) return <p className="border-t border-hairline pt-6 text-muted">Loading exam…</p>;
   const missingKeys = warnings.find((warning) => warning.code === "missing_answer_key")?.question_ids.length ?? 0;
   const startTimeReady = Boolean(
@@ -132,9 +120,8 @@ export function ExamForm({ examId }: { examId: string | null }) {
       <label className="flex min-h-11 items-center gap-3 font-bold"><input type="checkbox" checked={shuffle} disabled={saving || locked} onChange={(event) => mark(setShuffle, event.target.checked)} /> Shuffle question and multiple-choice option order for each candidate</label>
       <div><Field id="flag-threshold" label="Flag threshold" type="number" min={FLAG_THRESHOLD_MIN} max={FLAG_THRESHOLD_MAX} value={threshold} disabled={saving || thresholdLocked} onChange={(event) => mark(setThreshold, Number(event.target.value))} /><p className="mt-2 text-sm text-muted">A candidate turns red at this number and amber at half of it.</p></div>
       <label className="flex min-h-11 items-center gap-3 font-bold"><input type="checkbox" checked={practice} disabled={saving || locked} onChange={(event) => mark(setPractice, event.target.checked)} /> This is a rehearsal exam.</label>
-      <div className="flex flex-wrap gap-3 pt-2"><Button type="submit" loading={saving} disabled={!dirty && editing}>Save</Button><Button variant="secondary" onClick={() => requestNavigation("/admin/exams")}>Cancel</Button>{exam?.status === "draft" ? <Button variant="secondary" loading={saving} onClick={() => void save(undefined, "scheduled")}>Schedule exam</Button> : null}{exam?.status === "scheduled" ? <Button variant="secondary" loading={saving} onClick={() => void save(undefined, "draft")}>Move back to draft</Button> : null}{exam?.status === "draft" ? <Button className="ml-auto" variant="destructive" onClick={() => deleteDialog.current?.showModal()}>Delete exam</Button> : null}</div>
+      <div className="flex flex-wrap gap-3 pt-2"><Button type="submit" loading={saving} disabled={!dirty && editing}>Save</Button><Button variant="secondary" onClick={() => requestNavigation("/admin/exams")}>Cancel</Button>{exam?.status === "draft" ? <Button variant="secondary" loading={saving} onClick={() => void save(undefined, "scheduled")}>Schedule exam</Button> : null}{exam?.status === "scheduled" ? <Button variant="secondary" loading={saving} onClick={() => void save(undefined, "draft")}>Move back to draft</Button> : null}{examId && exam ? <DeleteExamButton className="ml-auto" examId={examId} status={exam.status} onDeleted={() => { router.push("/admin/exams"); router.refresh(); }} /> : null}</div>
     </form>
-    <dialog ref={deleteDialog} className="m-auto w-full max-w-md border border-line bg-surface p-6 shadow-dialog backdrop:bg-ink/40"><h2 className="text-question font-bold">Delete this exam?</h2><p className="mt-3">“{title}” and its {exam?.question_count ?? 0} questions will be deleted. This cannot be undone.</p><div className="mt-6 flex justify-end gap-3"><Button variant="destructive" loading={deleting} onClick={() => void removeExam()}>Delete exam</Button><Button variant="secondary" autoFocus onClick={() => deleteDialog.current?.close()}>Keep exam</Button></div></dialog>
     <dialog ref={leaveDialog} className="m-auto w-full max-w-md border border-line bg-surface p-6 shadow-dialog backdrop:bg-ink/40"><h2 className="text-question font-bold">You have unsaved changes.</h2><div className="mt-6 flex justify-end gap-3"><Button variant="destructive" onClick={() => { leaveDialog.current?.close(); setDirty(false); if (pendingHref) router.push(pendingHref); }}>Leave without saving</Button><Button variant="secondary" autoFocus onClick={() => { leaveDialog.current?.close(); setPendingHref(undefined); }}>Stay</Button></div></dialog>
   </section>;
 }
