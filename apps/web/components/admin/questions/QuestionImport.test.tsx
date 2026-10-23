@@ -14,6 +14,19 @@ function csv(question = "සිංහල ප්‍රශ්නය") {
   return `\uFEFF${QUESTION_IMPORT_COLUMNS.join(",")}\r\n${values.join(",")}\r\n`;
 }
 
+function mixedCsv() {
+  const row = (values: string[]) => values.map((value) => /[",]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value).join(",");
+  const valid = Array.from({ length: 12 }, (_, index) => row([
+    "written", index === 0 ? "සිංහල ප්‍රශ්නය" : `Valid question ${index + 1}`,
+    "", "", "", "", "", "", "", "", "", "", "", "1", index === 0 ? "සිංහල පිළිතුර" : `Model ${index + 1}`, "",
+  ]));
+  const multiple = ["A,B", "A,B,D", "A & B", "A/B", "A and B", "AB", ' "A,B,C" '].map((correct, index) => row([
+    "mcq", `Multiple ${index + 1}`, "One", "Two", "Three", "Four", "", "", "", "", "", "", correct, "1", "", "",
+  ]));
+  const malformed = row(["mcq", "Malformed", "One", "Two", "", "", "", "", "", "", "", "", "A", "1", "", "", "extra", "extra"]);
+  return `\uFEFF${QUESTION_IMPORT_COLUMNS.join(",")}\r\n${[...valid, ...multiple, malformed].join("\r\n")}\r\n`;
+}
+
 beforeEach(() => { fetchMock.mockReset(); vi.stubGlobal("fetch", fetchMock); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -50,5 +63,71 @@ describe("QuestionImport", () => {
     const confirmed = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
     expect(confirmed.force_rows).toEqual([2]);
     expect(await within(screen.getByTestId("toast-container")).findByText("Question import completed.")).toBeTruthy();
+  });
+
+  it("shows a 60-character question snippet beside a flagged row", async () => {
+    const question = "This question text is deliberately longer than sixty characters so the preview truncates it.";
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      dry_run: true,
+      ready: [],
+      issues: [{ row: 2, code: "duplicate_question", message: "Duplicate question.", can_force: true }],
+    }), { status: 200 }));
+    render(<ToastProvider><QuestionImport examId={examId} /></ToastProvider>);
+    fireEvent.change(screen.getByLabelText("Choose CSV"), { target: { files: [new File([csv(question)], "questions.csv", { type: "text/csv" })] } });
+    await screen.findByText("1 rows loaded.");
+    fireEvent.click(screen.getByRole("button", { name: "Check file" }));
+
+    expect(await screen.findByText(`Question: ${question.slice(0, 60)}`)).toBeTruthy();
+    expect(screen.queryByText(`Question: ${question}`)).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Import anyway" })).toBeTruthy();
+  });
+
+  it("keeps previewing valid rows when one spreadsheet row has too many columns", async () => {
+    const multipleIssues = Array.from({ length: 7 }, (_, index) => ({
+      row: index + 14,
+      code: "multiple_correct_answers",
+      message: "Only one correct answer is supported; this row lists several.",
+    }));
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      dry_run: true,
+      ready: Array.from({ length: 12 }, (_, index) => index + 2),
+      issues: multipleIssues,
+    }), { status: 200 }));
+    render(<ToastProvider><QuestionImport examId={examId} /></ToastProvider>);
+    fireEvent.change(screen.getByLabelText("Choose CSV"), { target: { files: [new File([mixedCsv()], "questions.csv", { type: "text/csv" })] } });
+
+    expect(await screen.findByText("20 rows loaded.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Check file" }));
+    expect(await screen.findByText("12 ready, 8 need attention. Nothing has been saved.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Import 12 questions" })).toBeTruthy();
+    expect(screen.getByText("Row 21 has 18 columns instead of 16. Check for a comma inside a cell that is not wrapped in quotes, or a space before an opening quote.")).toBeTruthy();
+    const sent = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(sent.dry_run).toBe(true);
+    expect(sent.rows).toHaveLength(19);
+    expect(sent.rows.some((item: { source_row: number }) => item.source_row === 21)).toBe(false);
+    expect(sent.rows[0].question).toBe("සිංහල ප්‍රශ්නය");
+    expect(sent.rows[0].model_answer).toBe("සිංහල පිළිතුර");
+  });
+
+  it("keeps a missing required header as a fatal file error", async () => {
+    const missingHeader = csv().replace("model_answer,", "");
+    render(<ToastProvider><QuestionImport examId={examId} /></ToastProvider>);
+    fireEvent.change(screen.getByLabelText("Choose CSV"), { target: { files: [new File([missingHeader], "questions.csv", { type: "text/csv" })] } });
+
+    expect((await screen.findByRole("alert")).textContent).toBe("Missing CSV columns: model_answer.");
+    expect(screen.queryByRole("button", { name: "Check file" })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a too-short row without sending that invalid row", async () => {
+    const tooShort = csv().replace(/,\r\n$/, "\r\n");
+    render(<ToastProvider><QuestionImport examId={examId} /></ToastProvider>);
+    fireEvent.change(screen.getByLabelText("Choose CSV"), { target: { files: [new File([tooShort], "questions.csv", { type: "text/csv" })] } });
+
+    expect(await screen.findByText("1 rows loaded.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Check file" }));
+    expect(await screen.findByText("0 ready, 1 need attention. Nothing has been saved.")).toBeTruthy();
+    expect(screen.getByText("Row 2 has 15 columns instead of 16. Check for a comma inside a cell that is not wrapped in quotes, or a space before an opening quote.")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

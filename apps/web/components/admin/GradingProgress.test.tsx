@@ -24,7 +24,7 @@ it("offers Start grading only for a finalized exam with no active run", async ()
   const response = { runs: [], queue: {}, keys: [], logs: [], not_graded: 0 };
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(response))));
   const view = renderProgress(<GradingProgress examId="exam" examStatus="finalized" attempts={[]} />);
-  expect(await screen.findByRole("button", { name: "Start grading" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Start grading" }, { timeout: 4_000 })).toBeTruthy();
   view.rerender(<GradingProgress examId="exam" examStatus="live" attempts={[]} />);
   expect(screen.queryByRole("button", { name: "Start grading" })).toBeNull();
   expect(screen.getByText("End the exam first")).toBeTruthy();

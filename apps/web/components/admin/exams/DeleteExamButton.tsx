@@ -62,7 +62,7 @@ export function DeleteExamButton({ examId, status, onDeleted, className }: {
 
   return <>
     <Button className={className} variant="destructive" loading={loading} onClick={() => void openDialog()}>Delete exam</Button>
-    <dialog ref={dialog} className="m-auto w-full max-w-md border border-line bg-surface p-6 shadow-dialog backdrop:bg-ink/40">
+    <dialog ref={dialog} className="m-auto w-full max-w-md border border-line bg-surface p-6 text-left text-ink shadow-dialog backdrop:bg-ink/40">
       <h2 className="text-question font-bold">Delete this exam?</h2>
       <p className="mt-3">Are you sure you want to delete this exam and its results too? This cannot be undone.</p>
       {preview?.exam ? <p className="mt-3 font-bold">{preview.exam.title}</p> : null}

@@ -37,6 +37,61 @@ describe("question import contracts", () => {
     expect(result.issues).toEqual([expect.objectContaining({ row: 4, code: "invalid_correct" })]);
   });
 
+  it("rejects multiple correct answers with a friendly row-level message", () => {
+    const result = prepareQuestionImport([
+      row(2, { option_a: "One", option_b: "Two", correct: "A,B" }),
+      row(3, { question: "Second", option_a: "One", option_b: "Two", option_d: "Four", correct: "A,B,D" }),
+    ], examId, []);
+
+    expect(result.issues).toEqual([
+      { row: 2, code: "multiple_correct_answers", message: "Only one correct answer is supported; this row lists several." },
+      { row: 3, code: "multiple_correct_answers", message: "Only one correct answer is supported; this row lists several." },
+    ]);
+  });
+
+  it("accepts exact option text that resembles a multiple-answer list", () => {
+    const values = ["Salt, pepper", "R&D", "Input/Output", "Research and development", "Dad", "Bee"];
+    const result = prepareQuestionImport(values.map((value, index) => row(index + 2, {
+      question: `Exact text ${index}`,
+      option_a: value,
+      option_b: "Another option",
+      correct: value,
+    })), examId, []);
+
+    expect(result.issues).toEqual([]);
+    expect(result.ready).toHaveLength(values.length);
+  });
+
+  it("trims whitespace and stray quotes around a single correct answer", () => {
+    const result = prepareQuestionImport([
+      row(2, { option_a: "One", option_b: "Two", correct: '  "B"  ' }),
+      row(3, { question: "By text", option_a: "One", option_b: "Two", correct: " 'Two' " }),
+    ], examId, []);
+
+    expect(result.issues).toEqual([]);
+    expect(result.ready).toHaveLength(2);
+  });
+
+  it("uses the invalid-correct message when a non-list value matches no option", () => {
+    const result = prepareQuestionImport([row(2, { option_a: "One", option_b: "Two", correct: "Unknown" })], examId, []);
+
+    expect(result.issues).toEqual([{
+      row: 2,
+      code: "invalid_correct",
+      message: "Correct must be a filled option letter or the exact option text.",
+    }]);
+  });
+
+  it("reports identical matching option text as ambiguous", () => {
+    const result = prepareQuestionImport([row(2, { option_a: "Same", option_b: "Same", correct: "Same" })], examId, []);
+
+    expect(result.issues).toEqual([{
+      row: 2,
+      code: "ambiguous_correct",
+      message: "Correct matches more than one option. Use the option letter instead.",
+    }]);
+  });
+
   it("requires a non-blank model answer for every written row", () => {
     const result = prepareQuestionImport([row(2, { type: "written", model_answer: "   " })], examId, []);
     expect(result.issues[0]).toMatchObject({ code: "missing_model_answer" });
