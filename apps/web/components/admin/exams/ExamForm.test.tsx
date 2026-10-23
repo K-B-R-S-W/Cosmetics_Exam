@@ -73,11 +73,12 @@ describe("ExamForm", () => {
   it("shows delete request failures as persistent toasts", async () => {
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify({ exam: EXAM, warnings: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ exam: { id: EXAM.id, title: EXAM.title, status: EXAM.status }, counts: { questions: 0, assigned_candidates: 1, attempts: 0, results: 0 } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "Synthetic delete failure." } }), { status: 409 }));
     renderForm();
     await screen.findByText("No questions yet.");
     fireEvent.click(screen.getByRole("button", { name: "Delete exam" }));
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete exam" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete exam and results" }));
 
     expect(await within(screen.getByTestId("toast-container")).findByText("Synthetic delete failure.")).toBeTruthy();
     expect(screen.queryByText("Synthetic delete failure.", { selector: "section > p[role='alert']" })).toBeNull();

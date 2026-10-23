@@ -52,14 +52,14 @@ describe("GET /api/admin/results/export", () => {
     expect(response.headers.get("content-disposition")).toMatch(/^attachment; filename="results-final-exam-2026-\d{4}-\d{2}-\d{2}\.csv"$/);
     expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
     const withoutBom = csv;
-    expect(withoutBom.startsWith("mer_code,full_name,outlet,attempt_status,submit_reason,violations_counted,violations_logged,questions_received,mcq_marks,written_marks,total_marks,total_percent,needs_review_count,unscored_count\r\n")).toBe(true);
+    expect(withoutBom.startsWith("mer_code,full_name,outlet,attempt_status,submit_reason,violations_counted,violations_logged,questions_received,mcq_marks,written_marks,total_marks,total_percent,needs_review_count,unscored_count,rank\r\n")).toBe(true);
     expect(withoutBom).toContain("'=cmd|' /C calc'!A0");
     expect(withoutBom).toContain("'@SUM(1)");
     expect(withoutBom).toContain("'-1+1");
     expect(withoutBom).toContain('"සිංහල, ""Name""\nLine"');
-    expect(withoutBom).toContain(",3;7,2,3,5,50,0,0\r\n");
+    expect(withoutBom).toContain(",3;7,2,3,5,50,0,0,1\r\n");
     const absent = withoutBom.split("\r\n").find((line) => line.startsWith("'-1+1,"));
-    expect(absent).toContain(",finalized,,0,0,,,,,,0,0");
+    expect(absent).toContain(",finalized,,0,0,,,,,,0,0,");
     expect(withoutBom.split("\r\n").filter(Boolean)).toHaveLength(3);
   });
 });

@@ -52,3 +52,25 @@ it("renders more than twenty result rows without changing the summary table", ()
   render(<ResultsSummary exam={{ id: "exam-1", title: "Exam", flag_threshold: 10 }} rows={manyRows} />);
   expect(screen.getAllByTestId("summary-row")).toHaveLength(21);
 });
+
+it("shows ranks, leaves absent and non-final rows unranked, and sorts by rank", () => {
+  const rankedRows = [
+    { ...rows[0], attempt_id: "high", mer_code: "MER-H", total_percent: 90, is_final: true, needs_review_count: 0 },
+    { ...rows[0], attempt_id: "tie-a", mer_code: "MER-T1", total_percent: 75, is_final: true, needs_review_count: 0 },
+    { ...rows[0], attempt_id: "tie-b", mer_code: "MER-T2", total_percent: 75, is_final: true, needs_review_count: 0 },
+    rows[1],
+    rows[2],
+  ];
+  render(<ResultsSummary exam={{ id: "exam-1", title: "Exam", flag_threshold: 10 }} rows={rankedRows} />);
+
+  expect(screen.getByRole("button", { name: "Rank" })).toBeTruthy();
+  const rendered = screen.getAllByTestId("summary-row");
+  expect(rendered.find((item) => item.textContent?.includes("MER-H"))?.firstElementChild?.textContent).toBe("1");
+  expect(rendered.find((item) => item.textContent?.includes("MER-T1"))?.firstElementChild?.textContent).toBe("2");
+  expect(rendered.find((item) => item.textContent?.includes("MER-T2"))?.firstElementChild?.textContent).toBe("2");
+  expect(rendered.find((item) => item.textContent?.includes("Absent Person"))?.firstElementChild?.textContent).toBe("—");
+  expect(rendered.find((item) => item.textContent?.includes("Not Graded"))?.firstElementChild?.textContent).toBe("—");
+
+  fireEvent.click(screen.getByRole("button", { name: "Rank" }));
+  expect(screen.getAllByTestId("summary-row")[0]?.textContent).toContain("MER-H");
+});

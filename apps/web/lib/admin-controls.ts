@@ -16,7 +16,7 @@ export const broadcastSchema = z.object({
 
 export const adminActionNames = [
   "candidate_create", "candidate_update", "candidate_delete", "candidate_import", "candidate_unlock",
-  "exam_create", "exam_update", "exam_delete", "exam_assign", "exam_unassign", "question_save",
+  "exam_create", "exam_update", "exam_delete", "exam_duplicate", "exam_assign", "exam_unassign", "question_save",
   "question_delete", "question_reorder", "answer_key_save", "start", "extend", "force_end",
   "force_submit", "kick", "broadcast", "grade_start", "grade_resume", "override", "regrade",
   "regrade_question", "alert_resolve", "snapshot_purge", "event_dismiss", "event_restore",

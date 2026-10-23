@@ -1,14 +1,37 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { DeleteExamButton } from "@/components/admin/exams/DeleteExamButton";
+import { useToast } from "@/components/ui/Toast";
 import { examStatusLabel, formatColomboDateTime, type ExamItem } from "@/lib/exams";
 
 export function ExamList() {
+  const router = useRouter();
+  const toast = useToast();
   const [items, setItems] = useState<ExamItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
+  const [duplicating, setDuplicating] = useState<string>();
+
+  async function duplicate(exam: ExamItem) {
+    setDuplicating(exam.id);
+    try {
+      const response = await fetch(`/api/admin/exams/${exam.id}/duplicate`, { method: "POST" });
+      const body = await response.json() as { exam_id?: string; image_failures?: unknown[]; error?: { message?: string } };
+      if (!response.ok || !body.exam_id) throw new Error(body.error?.message ?? "The exam could not be duplicated.");
+      const failures = body.image_failures?.length ?? 0;
+      toast.success(failures > 0 ? `Exam duplicated. ${failures} images could not be copied.` : "Exam duplicated.");
+      router.push(`/admin/exams/${body.exam_id}`);
+      router.refresh();
+    } catch (duplicateError) {
+      toast.error((duplicateError as Error).message);
+    } finally {
+      setDuplicating(undefined);
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -46,7 +69,7 @@ export function ExamList() {
               return <tr key={exam.id} className="border-b border-hairline last:border-0">
                 <td className="px-3 py-3 font-bold"><Link className="underline" href={`/admin/exams/${exam.id}`}>{exam.title}</Link>{exam.is_practice ? <span className="ml-2 border border-line px-2 py-1 text-xs">Practice</span> : null}</td>
                 <td className="px-3 py-3">{examStatusLabel(exam.status)}</td><td className="px-3 py-3">{formatColomboDateTime(exam.scheduled_start_at)}</td><td className="px-3 py-3">{exam.duration_min} min</td><td className="px-3 py-3">{exam.question_count}</td><td className="px-3 py-3">{exam.assigned_count}</td>
-                <td className="px-3 py-2 text-right"><Link href={href} className="inline-flex min-h-11 items-center rounded-control border border-line px-4 font-bold">{action}</Link></td>
+                <td className="px-3 py-2 text-right"><div className="flex justify-end gap-2"><DeleteExamButton examId={exam.id} status={exam.status} onDeleted={() => { setItems((current) => current.filter((item) => item.id !== exam.id)); router.refresh(); }} /><button type="button" disabled={Boolean(duplicating)} onClick={() => void duplicate(exam)} className="min-h-11 rounded-control border border-line px-4 font-bold disabled:opacity-50">{duplicating === exam.id ? "Duplicating…" : "Duplicate"}</button><Link href={href} className="inline-flex min-h-11 items-center rounded-control border border-line px-4 font-bold">{action}</Link></div></td>
               </tr>;
             })}
           </tbody>

@@ -1,6 +1,7 @@
 import { ApiError, apiErrorResponse, jsonResponse, readJson } from "@/lib/api";
 import { databaseUnavailable, recordAdminAction } from "@/lib/admin-server";
 import { requireAdmin } from "@/lib/auth";
+import { loadExamDeleteCounts, loadExamStoragePaths, removeExamStorage } from "@/lib/exam-delete";
 import { EXAM_COLUMNS, examNotFound, toExamItem } from "@/lib/exam-server";
 import {
   examIdSchema,
@@ -9,6 +10,7 @@ import {
   type ExamItem,
 } from "@/lib/exams";
 import { assertSameOrigin } from "@/lib/origin";
+import { logger } from "@/lib/logger";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
 const ROUTE = "/api/admin/exams/[id]";
@@ -169,30 +171,63 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
     const id = await examId(context);
     const client = createServiceRoleClient();
     const current = await loadExam(client, id);
-    if (current.status !== "draft") {
-      throw new ApiError("exam_not_deletable", 409, "Only a draft exam can be deleted.");
+    if (current.status === "live") {
+      throw new ApiError("exam_not_deletable", 409, "A live exam cannot be deleted.");
     }
-    const { data: started, error: guardError } = await client
-      .from("attempts")
+    if (current.status === "ended") {
+      throw new ApiError("exam_not_deletable", 409, "This exam is still finalizing. Try again in a minute.");
+    }
+    if (current.status === "finalized" && admin.role !== "super_admin") {
+      throw new ApiError("forbidden", 403, "Only a super admin can delete a finalized exam.");
+    }
+
+    const [counts, storagePaths] = await Promise.all([
+      loadExamDeleteCounts(client, id),
+      loadExamStoragePaths(client, id),
+    ]);
+    const { data: activeRuns, error: guardError } = await client
+      .from("grading_runs")
       .select("id")
       .eq("exam_id", id)
-      .neq("status", "not_started")
+      .in("status", ["running", "paused"])
       .limit(1);
     if (guardError) throw databaseUnavailable();
-    if ((started?.length ?? 0) > 0) {
-      throw new ApiError("exam_not_deletable", 409, "This exam has started attempts and cannot be deleted.");
+    if ((activeRuns?.length ?? 0) > 0) {
+      throw new ApiError("exam_not_deletable", 409, "Wait for grading to finish before deleting this exam.");
     }
+    const allowedStatuses = admin.role === "super_admin"
+      ? ["draft", "scheduled", "finalized"]
+      : ["draft", "scheduled"];
     const { data, error } = await client
       .from("exams")
       .delete()
       .eq("id", id)
-      .eq("status", "draft")
+      .in("status", allowedStatuses)
       .select("id")
       .maybeSingle();
     if (error) throw databaseUnavailable();
     if (!data) throw new ApiError("exam_not_deletable", 409, "The exam changed and was not deleted.");
-    await recordAdminAction(client, admin, "exam_delete", id);
-    return jsonResponse({ deleted: true });
+
+    const warnings: string[] = [];
+    const storageFailures = await removeExamStorage(client, storagePaths);
+    if (storageFailures > 0) {
+      warnings.push(`exam deleted, ${storageFailures} files could not be removed`);
+      logger.warn("exam_delete_storage_incomplete", {
+        actorId: admin.id,
+        failureCount: storageFailures,
+      });
+    }
+    try {
+      await recordAdminAction(client, admin, "exam_delete", id, {
+        title: current.title,
+        status: current.status,
+        ...counts,
+      });
+    } catch {
+      warnings.push("Exam deleted, but its audit record could not be written. Contact support.");
+      logger.warn("exam_delete_audit_failed", { actorId: admin.id, errorCode: "audit_write_failed" });
+    }
+    return jsonResponse({ deleted: true, storage_failed: storageFailures, warnings });
   } catch (error) {
     return apiErrorResponse(error, ROUTE);
   }
