@@ -91,11 +91,19 @@ function parseRow(row: QuestionImportRow, examId: string): PreparedQuestionImpor
   if (type === "mcq") {
     if (optionEntries.length < 2) return issue(row.source_row, "too_few_options", "MCQ questions need at least two options.");
     if (optionEntries.some((item) => item.text.length > OPTION_TEXT_MAX)) return issue(row.source_row, "option_too_long", `Options cannot exceed ${OPTION_TEXT_MAX} characters.`);
+    const trimmedCorrect = row.correct.trim();
     const correct = normalizedCorrect(row.correct);
-    if (listsMultipleAnswers(correct)) return issue(row.source_row, "multiple_correct_answers", "Only one correct answer is supported; this row lists several.");
-    const matching = /^[a-j]$/i.test(correct)
-      ? optionEntries.find((item) => item.letter === correct.toUpperCase())
-      : optionEntries.find((item) => item.text === correct);
+    let matching = /^[a-j]$/i.test(trimmedCorrect)
+      ? optionEntries.find((item) => item.letter === trimmedCorrect.toUpperCase())
+      : undefined;
+    if (!matching) {
+      const textCandidates = new Set([trimmedCorrect, correct].filter(Boolean));
+      const textMatches = optionEntries.filter((item) => textCandidates.has(item.text));
+      if (textMatches.length > 1) return issue(row.source_row, "ambiguous_correct", "Correct matches more than one option. Use the option letter instead.");
+      matching = textMatches[0];
+    }
+    if (!matching && /^[a-j]$/i.test(correct)) matching = optionEntries.find((item) => item.letter === correct.toUpperCase());
+    if (!matching && listsMultipleAnswers(correct)) return issue(row.source_row, "multiple_correct_answers", "Only one correct answer is supported; this row lists several.");
     if (!correct || !matching) return issue(row.source_row, "invalid_correct", "Correct must be a filled option letter or the exact option text.");
     const options = optionEntries.map((item) => ({ id: crypto.randomUUID(), text_html: plainTextToEditorHtml(item.text) }));
     const correctIndex = optionEntries.indexOf(matching);
