@@ -12,4 +12,9 @@ describe("admin control contracts", () => {
   it("allows the duplicate-exam audit action", () => {
     expect(adminActionNames).toContain("exam_duplicate");
   });
+  it("allows every admin-management audit action", () => {
+    expect(adminActionNames).toEqual(expect.arrayContaining([
+      "admin_create", "admin_disable", "admin_enable", "admin_role_change", "admin_password_reset",
+    ]));
+  });
 });
