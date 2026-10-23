@@ -23,8 +23,8 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("ExamForm", () => {
-  function renderForm() {
-    return render(<ToastProvider><ExamForm examId={EXAM.id} /></ToastProvider>);
+  function renderForm(canDeleteFinalized = false) {
+    return render(<ToastProvider><ExamForm examId={EXAM.id} canDeleteFinalized={canDeleteFinalized} /></ToastProvider>);
   }
 
   it("shows Section 2C readiness and converts Colombo time on save", async () => {
@@ -47,6 +47,19 @@ describe("ExamForm", () => {
     renderForm();
     expect(await screen.findByLabelText("Flag threshold")).toHaveProperty("disabled", true);
     expect(screen.getByLabelText("Title")).toHaveProperty("disabled", false);
+    expect(screen.queryByRole("button", { name: "Delete exam" })).toBeNull();
+  });
+
+  it.each(["draft", "scheduled"] as const)("offers %s deletion to a normal admin", async (status) => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ exam: { ...EXAM, status }, warnings: [] }), { status: 200 }));
+    renderForm();
+    expect(await screen.findByRole("button", { name: "Delete exam" })).toBeTruthy();
+  });
+
+  it.each(["draft", "scheduled", "finalized"] as const)("offers %s deletion to a super admin", async (status) => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ exam: { ...EXAM, status }, warnings: [] }), { status: 200 }));
+    renderForm(true);
+    expect(await screen.findByRole("button", { name: "Delete exam" })).toBeTruthy();
   });
 
   it("shows save request failures as persistent toasts", async () => {

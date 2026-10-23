@@ -25,7 +25,7 @@ import {
 
 interface ErrorBody { error?: { code?: string; message?: string; details?: { missing?: string[] } | Array<{ path: string; message: string }> | null } }
 
-export function ExamForm({ examId }: { examId: string | null }) {
+export function ExamForm({ examId, canDeleteFinalized }: { examId: string | null; canDeleteFinalized: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const leaveDialog = useRef<HTMLDialogElement>(null);
@@ -120,7 +120,7 @@ export function ExamForm({ examId }: { examId: string | null }) {
       <label className="flex min-h-11 items-center gap-3 font-bold"><input type="checkbox" checked={shuffle} disabled={saving || locked} onChange={(event) => mark(setShuffle, event.target.checked)} /> Shuffle question and multiple-choice option order for each candidate</label>
       <div><Field id="flag-threshold" label="Flag threshold" type="number" min={FLAG_THRESHOLD_MIN} max={FLAG_THRESHOLD_MAX} value={threshold} disabled={saving || thresholdLocked} onChange={(event) => mark(setThreshold, Number(event.target.value))} /><p className="mt-2 text-sm text-muted">A candidate turns red at this number and amber at half of it.</p></div>
       <label className="flex min-h-11 items-center gap-3 font-bold"><input type="checkbox" checked={practice} disabled={saving || locked} onChange={(event) => mark(setPractice, event.target.checked)} /> This is a rehearsal exam.</label>
-      <div className="flex flex-wrap gap-3 pt-2"><Button type="submit" loading={saving} disabled={!dirty && editing}>Save</Button><Button variant="secondary" onClick={() => requestNavigation("/admin/exams")}>Cancel</Button>{exam?.status === "draft" ? <Button variant="secondary" loading={saving} onClick={() => void save(undefined, "scheduled")}>Schedule exam</Button> : null}{exam?.status === "scheduled" ? <Button variant="secondary" loading={saving} onClick={() => void save(undefined, "draft")}>Move back to draft</Button> : null}{examId && exam ? <DeleteExamButton className="ml-auto" examId={examId} status={exam.status} onDeleted={() => { router.push("/admin/exams"); router.refresh(); }} /> : null}</div>
+      <div className="flex flex-wrap gap-3 pt-2"><Button type="submit" loading={saving} disabled={!dirty && editing}>Save</Button><Button variant="secondary" onClick={() => requestNavigation("/admin/exams")}>Cancel</Button>{exam?.status === "draft" ? <Button variant="secondary" loading={saving} onClick={() => void save(undefined, "scheduled")}>Schedule exam</Button> : null}{exam?.status === "scheduled" ? <Button variant="secondary" loading={saving} onClick={() => void save(undefined, "draft")}>Move back to draft</Button> : null}{examId && exam && (exam.status !== "finalized" || canDeleteFinalized) ? <DeleteExamButton className="ml-auto" examId={examId} status={exam.status} onDeleted={() => { router.push("/admin/exams"); router.refresh(); }} /> : null}</div>
     </form>
     <dialog ref={leaveDialog} className="m-auto w-full max-w-md border border-line bg-surface p-6 shadow-dialog backdrop:bg-ink/40"><h2 className="text-question font-bold">You have unsaved changes.</h2><div className="mt-6 flex justify-end gap-3"><Button variant="destructive" onClick={() => { leaveDialog.current?.close(); setDirty(false); if (pendingHref) router.push(pendingHref); }}>Leave without saving</Button><Button variant="secondary" autoFocus onClick={() => { leaveDialog.current?.close(); setPendingHref(undefined); }}>Stay</Button></div></dialog>
   </section>;
